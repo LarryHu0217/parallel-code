@@ -1,6 +1,7 @@
 import { createSignal, createEffect, For, Show } from 'solid-js';
 import { Dialog } from './Dialog';
 import {
+  store,
   updateProject,
   PASTEL_HUES,
   isProjectMissing,
@@ -12,6 +13,12 @@ import { theme, sectionLabelStyle } from '../lib/theme';
 import type { Project, TerminalBookmark, GitIsolationMode } from '../store/types';
 import { SegmentedButtons } from './SegmentedButtons';
 import { ImportWorktreesDialog } from './ImportWorktreesDialog';
+import { ConfirmDialog } from './ConfirmDialog';
+import {
+  getProjectTaskCount,
+  projectRemoveConfirmLabel,
+  projectRemoveConfirmMessage,
+} from './project-remove-confirmation';
 
 interface EditProjectDialogProps {
   project: Project | null;
@@ -34,12 +41,17 @@ export function EditProjectDialog(props: EditProjectDialogProps) {
   const [bookmarks, setBookmarks] = createSignal<TerminalBookmark[]>([]);
   const [newCommand, setNewCommand] = createSignal('');
   const [showImportDialog, setShowImportDialog] = createSignal(false);
+  const [confirmRemoveProjectId, setConfirmRemoveProjectId] = createSignal<string | null>(null);
   let nameRef!: HTMLInputElement;
 
   // Sync signals when project prop changes
   createEffect(() => {
     const p = props.project;
-    if (!p) return;
+    if (!p) {
+      setConfirmRemoveProjectId(null);
+      return;
+    }
+    setConfirmRemoveProjectId(null);
     setName(p.name);
     setSelectedHue(hueFromColor(p.color));
     setBranchPrefix(sanitizeBranchPrefix(p.branchPrefix ?? 'task'));
@@ -69,6 +81,10 @@ export function EditProjectDialog(props: EditProjectDialogProps) {
   }
 
   const canSave = () => name().trim().length > 0;
+  const confirmRemoveTaskCount = () => {
+    const projectId = confirmRemoveProjectId();
+    return projectId ? getProjectTaskCount(store, projectId) : 0;
+  };
 
   function handleSave() {
     if (!canSave() || !props.project) return;
@@ -199,10 +215,7 @@ export function EditProjectDialog(props: EditProjectDialogProps) {
                 </button>
                 <button
                   type="button"
-                  onClick={async () => {
-                    await removeProjectWithTasks(project().id);
-                    props.onClose();
-                  }}
+                  onClick={() => setConfirmRemoveProjectId(project().id)}
                   style={{
                     padding: '5px 12px',
                     background: 'transparent',
@@ -572,6 +585,21 @@ export function EditProjectDialog(props: EditProjectDialogProps) {
               open={showImportDialog()}
               project={project()}
               onClose={() => setShowImportDialog(false)}
+            />
+            <ConfirmDialog
+              open={confirmRemoveProjectId() !== null}
+              title="Remove project?"
+              message={projectRemoveConfirmMessage(confirmRemoveTaskCount())}
+              confirmLabel={projectRemoveConfirmLabel(confirmRemoveTaskCount())}
+              danger
+              onConfirm={() => {
+                const projectId = confirmRemoveProjectId();
+                if (!projectId) return;
+                const onClose = props.onClose;
+                setConfirmRemoveProjectId(null);
+                void removeProjectWithTasks(projectId).then(onClose);
+              }}
+              onCancel={() => setConfirmRemoveProjectId(null)}
             />
           </>
         )}

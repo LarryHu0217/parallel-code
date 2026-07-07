@@ -41,6 +41,11 @@ import { SidebarFooter } from './SidebarFooter';
 import { IconButton } from './IconButton';
 import { UpdateButton } from './UpdateButton';
 import { StatusDot, getDotTooltip } from './StatusDot';
+import {
+  getProjectTaskCount,
+  projectRemoveConfirmLabel,
+  projectRemoveConfirmMessage,
+} from './project-remove-confirmation';
 import { theme } from '../lib/theme';
 import { sf } from '../lib/fontScale';
 import { mod } from '../lib/platform';
@@ -864,21 +869,13 @@ export function Sidebar() {
         {/* Confirm remove project dialog */}
         {(() => {
           const id = confirmRemove();
-          const taskCount = id
-            ? [...store.taskOrder, ...store.collapsedTaskOrder].filter(
-                (tid) => store.tasks[tid]?.projectId === id,
-              ).length
-            : 0;
+          const taskCount = id ? getProjectTaskCount(store, id) : 0;
           return (
             <ConfirmDialog
               open={id !== null}
               title="Remove project?"
-              message={
-                taskCount > 0
-                  ? `This project has ${taskCount} open task(s). Removing it will also close all tasks, delete their worktrees and branches.`
-                  : 'Are you sure you want to remove this project?'
-              }
-              confirmLabel={taskCount > 0 ? 'Remove all' : 'Remove'}
+              message={projectRemoveConfirmMessage(taskCount)}
+              confirmLabel={projectRemoveConfirmLabel(taskCount)}
               danger
               onConfirm={() => {
                 if (id) {
