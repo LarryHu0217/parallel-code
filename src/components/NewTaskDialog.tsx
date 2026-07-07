@@ -9,6 +9,7 @@ import {
   untrack,
 } from 'solid-js';
 import { Dialog } from './Dialog';
+import { ConfirmDialog } from './ConfirmDialog';
 import { errMessage } from '../lib/log';
 import { invoke } from '../lib/ipc';
 import { IPC } from '../../electron/ipc/channels';
@@ -54,6 +55,7 @@ import {
   MAX_COORDINATOR_CONCURRENT_TASKS,
   MIN_COORDINATOR_CONCURRENT_TASKS,
 } from '../lib/coordinator-limits';
+import { hasNewTaskDraft } from './new-task-draft';
 
 interface NewTaskDialogProps {
   open: boolean;
@@ -67,6 +69,7 @@ export function NewTaskDialog(props: NewTaskDialogProps) {
   const [selectedProjectId, setSelectedProjectId] = createSignal<string | null>(null);
   const [error, setError] = createSignal('');
   const [loading, setLoading] = createSignal(false);
+  const [showDiscardConfirm, setShowDiscardConfirm] = createSignal(false);
   const [ignoredDirs, setIgnoredDirs] = createSignal<string[]>([]);
   const [selectedDirs, setSelectedDirs] = createSignal<Set<string>>(new Set());
   const [gitIsolation, setGitIsolation] = createSignal<GitIsolationMode>('worktree');
@@ -161,6 +164,19 @@ export function NewTaskDialog(props: NewTaskDialogProps) {
     focusables[nextIdx].focus();
   }
 
+  function requestClose(): void {
+    if (hasNewTaskDraft(prompt(), name())) {
+      setShowDiscardConfirm(true);
+      return;
+    }
+    props.onClose();
+  }
+
+  function discardDraftAndClose(): void {
+    setShowDiscardConfirm(false);
+    props.onClose();
+  }
+
   // Initialize state each time the dialog opens.  Wrapped in on() so the
   // effect only re-fires on the props.open *transition*, not whenever any
   // store default mutates while the dialog is already open (e.g. the user
@@ -190,6 +206,7 @@ export function NewTaskDialog(props: NewTaskDialogProps) {
     setName('');
     setError('');
     setLoading(false);
+    setShowDiscardConfirm(false);
     setGitIsolation('worktree');
     setDockerMode(false);
     setDockerImageReady(null);
@@ -677,7 +694,7 @@ export function NewTaskDialog(props: NewTaskDialogProps) {
   return (
     <Dialog
       open={props.open}
-      onClose={props.onClose}
+      onClose={requestClose}
       width={store.availableAgents.length > 8 ? 'min(840px, calc(100vw - 48px))' : '560px'}
       labelledBy={titleId}
       panelStyle={{ padding: '0', overflow: 'hidden', gap: '0' }}
@@ -1375,7 +1392,7 @@ export function NewTaskDialog(props: NewTaskDialogProps) {
           <button
             type="button"
             class="btn-secondary"
-            onClick={() => props.onClose()}
+            onClick={requestClose}
             style={{
               padding: '9px 18px',
               background: theme.bgInput,
@@ -1414,6 +1431,16 @@ export function NewTaskDialog(props: NewTaskDialogProps) {
           </button>
         </div>
       </form>
+      <ConfirmDialog
+        open={props.open && showDiscardConfirm()}
+        title="Discard task draft?"
+        message="The prompt or task name you typed will be lost."
+        confirmLabel="Discard draft"
+        cancelLabel="Keep editing"
+        danger
+        onConfirm={discardDraftAndClose}
+        onCancel={() => setShowDiscardConfirm(false)}
+      />
     </Dialog>
   );
 }
