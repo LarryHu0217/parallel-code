@@ -328,7 +328,7 @@ export function EditProjectDialog(props: EditProjectDialogProps) {
 
             {/* Git-specific settings — hidden for non-git projects */}
             <Show when={props.project?.isGitRepo !== false}>
-              {/* Merge cleanup preference */}
+              {/* Close cleanup preference */}
               <label
                 style={{
                   display: 'flex',
@@ -345,7 +345,7 @@ export function EditProjectDialog(props: EditProjectDialogProps) {
                   onChange={(e) => setDeleteBranchOnClose(e.currentTarget.checked)}
                   style={{ cursor: 'pointer' }}
                 />
-                Always delete branch and worklog on merge
+                Always delete branch and worktree on close
               </label>
 
               {/* Default isolation mode */}
