@@ -5,6 +5,7 @@ import { invoke } from '../lib/ipc';
 import { IPC } from '../../electron/ipc/channels';
 import { createImportedTask, getProjectPath, loadAgents, store } from '../store/store';
 import { theme } from '../lib/theme';
+import { createImportWorktreesCloseHandler } from './import-worktrees-dismiss';
 import type { Project } from '../store/types';
 import type { AgentDef, ImportableWorktree } from '../ipc/types';
 
@@ -22,6 +23,7 @@ export function ImportWorktreesDialog(props: ImportWorktreesDialogProps) {
   const [loading, setLoading] = createSignal(false);
   const [importing, setImporting] = createSignal(false);
   const [error, setError] = createSignal('');
+  const requestClose = createImportWorktreesCloseHandler(importing, () => props.onClose());
 
   const trackedWorktreePaths = createMemo(() => {
     const projectId = props.project?.id;
@@ -127,7 +129,7 @@ export function ImportWorktreesDialog(props: ImportWorktreesDialogProps) {
   }
 
   return (
-    <Dialog open={props.open} onClose={props.onClose} width="560px" panelStyle={{ gap: '18px' }}>
+    <Dialog open={props.open} onClose={requestClose} width="560px" panelStyle={{ gap: '18px' }}>
       <div style={{ display: 'flex', 'flex-direction': 'column', gap: '18px' }}>
         <div>
           <h2
@@ -302,15 +304,17 @@ export function ImportWorktreesDialog(props: ImportWorktreesDialogProps) {
         <div style={{ display: 'flex', 'justify-content': 'flex-end', gap: '8px' }}>
           <button
             type="button"
-            onClick={() => props.onClose()}
+            disabled={importing()}
+            onClick={requestClose}
             style={{
               padding: '9px 18px',
               background: theme.bgInput,
               border: `1px solid ${theme.border}`,
               'border-radius': '8px',
               color: theme.fgMuted,
-              cursor: 'pointer',
+              cursor: importing() ? 'not-allowed' : 'pointer',
               'font-size': '13px',
+              opacity: importing() ? '0.4' : '1',
             }}
           >
             Cancel
