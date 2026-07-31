@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  Works with Claude Code, Codex, and Gemini · Every change isolated in its own git worktree · Free, open source, no extra platform fee
+  Works with Claude Code, Codex, Gemini, and Kimi Code · Every change isolated in its own git worktree · Free, open source, no extra platform fee
 </p>
 
 <p align="center">
@@ -45,7 +45,7 @@
 
 ## Why Parallel Code?
 
-- **Use the AI coding tools you already trust** — [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), [Gemini CLI](https://github.com/google-gemini/gemini-cli), and [Copilot CLI](https://docs.github.com/en/copilot/concepts/agents/about-copilot-cli) — all from one interface.
+- **Use the AI coding tools you already trust** — [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Kimi Code CLI](https://github.com/MoonshotAI/kimi-code), and [Copilot CLI](https://docs.github.com/en/copilot/concepts/agents/about-copilot-cli) — all from one interface.
 - **Free and open source** — no extra subscription required. MIT licensed.
 - **Keep every change isolated and reviewable** — each task gets its own git branch and worktree automatically.
 - **Run agents in parallel, not in sequence** — five agents on five features at the same time, zero conflicts.
@@ -115,7 +115,7 @@ When you're happy with the result, merge the branch back to main from the sideba
    - **macOS** — `.dmg` (universal)
    - **Linux** — `.AppImage` or `.deb`
 
-2. **Install at least one AI coding CLI:** [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Antigravity CLI](https://antigravity.google/), or [Copilot CLI](https://docs.github.com/en/copilot/concepts/agents/about-copilot-cli)
+2. **Install at least one AI coding CLI:** [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Kimi Code CLI](https://github.com/MoonshotAI/kimi-code), [Antigravity CLI](https://antigravity.google/), or [Copilot CLI](https://docs.github.com/en/copilot/concepts/agents/about-copilot-cli)
 
 3. **Open Parallel Code**, point it at a git repo, and start dispatching tasks.
 
