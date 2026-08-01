@@ -2099,6 +2099,13 @@ body.dragging-task * {
   margin: 0.6em 0;
 }
 
+/* Inline plan-review controls occupy real layout space after the selected block. */
+.plan-review-flow-slot {
+  display: flow-root;
+  width: 100%;
+  min-width: 0;
+}
+
 /* Lists — better spacing */
 .plan-markdown-dialog ul,
 .plan-markdown-dialog ol {

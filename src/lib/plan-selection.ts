@@ -41,6 +41,37 @@ export function getPlanSelection(containerEl: HTMLElement, source: string): Plan
   };
 }
 
+/** Find the block that should own an inline review card for the current selection. */
+export function getPlanSelectionFlowAnchor(containerEl: HTMLElement): HTMLElement | null {
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed || selection.rangeCount === 0) return null;
+
+  const range = selection.getRangeAt(0);
+  if (!containerEl.contains(range.commonAncestorContainer)) return null;
+
+  let element: Element | null =
+    range.endContainer.nodeType === Node.ELEMENT_NODE
+      ? (range.endContainer as Element)
+      : range.endContainer.parentElement;
+  if (!element || element.closest('[data-plan-review-flow-slot]')) return null;
+
+  const block = element.closest(BLOCK_SELECTOR);
+  if (block && block !== containerEl && containerEl.contains(block)) {
+    // A div cannot be a child of a table row, so place table comments after the table.
+    if (block.tagName === 'TR') {
+      const table = block.closest('table');
+      if (table instanceof HTMLElement && containerEl.contains(table)) return table;
+    }
+    if (block instanceof HTMLElement) return block;
+  }
+
+  // Fallback for rendered blocks such as Mermaid diagrams that are not in BLOCK_SELECTOR.
+  while (element.parentElement && element.parentElement !== containerEl) {
+    element = element.parentElement;
+  }
+  return element instanceof HTMLElement && element.parentElement === containerEl ? element : null;
+}
+
 /** Walk backwards from the selection start to find the nearest heading. */
 function findNearestHeading(container: HTMLElement, startNode: Node): string {
   let node: Node | null = startNode;
