@@ -17,8 +17,10 @@ import {
   mockFsAccess,
   mockAtomicWriteFileSync,
   mockAtomicWriteFile,
+  mockAppendGitInfoExcludeBlock,
   mockNotifyRenderer,
   mockLogInfo,
+  mockLogWarn,
   mockSpawnAgent,
   mockWriteToAgent,
   mockSubscribeToAgent,
@@ -3126,6 +3128,146 @@ describe('Coordinator sub-task MCP config isolation', () => {
       .map((c) => c[0] as string);
 
     expect(configPaths[0]).not.toBe(configPaths[1]);
+  });
+
+  it('writes isolated Kimi child configs to each worktree for auto-discovery', async () => {
+    mockCreateBackendTask
+      .mockResolvedValueOnce({ id: 'task-a', branch_name: 'task/a', worktree_path: '/tmp/a' })
+      .mockResolvedValueOnce({ id: 'task-b', branch_name: 'task/b', worktree_path: '/tmp/b' });
+    coordinator.setCoordinatorSpawnDefaults('coord-1', 'kimi', []);
+    coordinator.setMCPServerInfo(
+      'coord-1',
+      'http://localhost:3001',
+      'coordinator-tok',
+      'subtask-tok',
+      '/path/server.js',
+    );
+
+    await coordinator.createTask({ name: 'task-a', prompt: 'do a', coordinatorTaskId: 'coord-1' });
+    await coordinator.createTask({ name: 'task-b', prompt: 'do b', coordinatorTaskId: 'coord-1' });
+
+    const childWrites = mockAtomicWriteFileSync.mock.calls.filter(
+      ([configPath]) => configPath === '/tmp/a/.mcp.json' || configPath === '/tmp/b/.mcp.json',
+    );
+    expect(childWrites).toHaveLength(2);
+    const childConfigs = childWrites.map(
+      ([, raw]) =>
+        JSON.parse(raw as string) as {
+          mcpServers: {
+            'parallel-code': { args: string[]; env: Record<string, string> };
+          };
+        },
+    );
+
+    expect(childConfigs[0].mcpServers['parallel-code'].args).toContain('task-a');
+    expect(childConfigs[1].mcpServers['parallel-code'].args).toContain('task-b');
+    expect(childConfigs[0].mcpServers['parallel-code'].env['PARALLEL_CODE_MCP_TOKEN']).toBe(
+      'subtask-tok',
+    );
+    expect(
+      childConfigs[0].mcpServers['parallel-code'].env['PARALLEL_CODE_MCP_DONE_TOKEN'],
+    ).not.toBe(childConfigs[1].mcpServers['parallel-code'].env['PARALLEL_CODE_MCP_DONE_TOKEN']);
+    expect(mockAppendGitInfoExcludeBlock).toHaveBeenCalledWith(
+      '/tmp/a',
+      '.mcp.json',
+      expect.stringContaining('.mcp.json'),
+      expect.any(Function),
+    );
+    for (const [, spawnOpts] of mockSpawnAgent.mock.calls) {
+      expect(spawnOpts).toEqual(
+        expect.objectContaining({
+          command: 'kimi',
+          args: expect.not.arrayContaining(['--mcp-config']),
+        }),
+      );
+    }
+  });
+
+  it('restores a pre-existing Kimi child MCP entry when its coordinator deregisters', async () => {
+    const configPath = '/tmp/test/.mcp.json';
+    const previousParallelCode = { command: 'user-owned-server' };
+    let currentConfig = JSON.stringify({
+      mcpServers: {
+        other: { command: 'other-server' },
+        'parallel-code': previousParallelCode,
+      },
+      setting: true,
+    });
+    mockExistsSync.mockImplementation((path) => path === configPath);
+    mockReadFileSync.mockImplementation((path) =>
+      path === configPath ? currentConfig : '# existing\n',
+    );
+    mockAtomicWriteFileSync.mockImplementation((path, raw) => {
+      if (path === configPath) currentConfig = raw as string;
+    });
+    coordinator.setCoordinatorSpawnDefaults('coord-1', 'kimi', []);
+    coordinator.setMCPServerInfo(
+      'coord-1',
+      'http://localhost:3001',
+      'coordinator-tok',
+      'subtask-tok',
+      '/path/server.js',
+    );
+
+    await coordinator.createTask({ name: 'test', prompt: 'do', coordinatorTaskId: 'coord-1' });
+    coordinator.deregisterCoordinator('coord-1');
+
+    const restored = JSON.parse(currentConfig) as {
+      mcpServers: Record<string, unknown>;
+      setting: boolean;
+    };
+    expect(restored.mcpServers['parallel-code']).toEqual(previousParallelCode);
+    expect(restored.mcpServers.other).toEqual({ command: 'other-server' });
+    expect(restored.setting).toBe(true);
+  });
+
+  it('does not overwrite a Kimi child MCP entry changed after creation', async () => {
+    const configPath = '/tmp/test/.mcp.json';
+    let configExists = false;
+    let currentConfig = '';
+    mockExistsSync.mockImplementation((path) => path === configPath && configExists);
+    mockReadFileSync.mockImplementation((path) =>
+      path === configPath ? currentConfig : '# existing\n',
+    );
+    mockAtomicWriteFileSync.mockImplementation((path, raw) => {
+      if (path === configPath) {
+        configExists = true;
+        currentConfig = raw as string;
+      }
+    });
+    coordinator.setCoordinatorSpawnDefaults('coord-1', 'kimi', []);
+    coordinator.setMCPServerInfo(
+      'coord-1',
+      'http://localhost:3001',
+      'coordinator-tok',
+      'subtask-tok',
+      '/path/server.js',
+    );
+    await coordinator.createTask({ name: 'test', prompt: 'do', coordinatorTaskId: 'coord-1' });
+
+    const userEntry = { command: 'user-replacement' };
+    const changed = JSON.parse(currentConfig) as {
+      mcpServers: Record<string, unknown>;
+    };
+    changed.mcpServers['parallel-code'] = userEntry;
+    currentConfig = JSON.stringify(changed);
+    mockAtomicWriteFileSync.mockClear();
+
+    coordinator.setMCPServerInfo(
+      'coord-1',
+      'http://localhost:3002',
+      'new-coordinator-tok',
+      'new-subtask-tok',
+      '/path/server.js',
+    );
+
+    expect(mockAtomicWriteFileSync.mock.calls.some(([path]) => path === configPath)).toBe(false);
+    expect(JSON.parse(currentConfig).mcpServers['parallel-code']).toEqual(userEntry);
+    expect(mockLogWarn).toHaveBeenCalledWith(
+      'coordinator.kimi_mcp',
+      expect.stringContaining('refusing overwrite'),
+      expect.objectContaining({ taskId: 'task-1', configPath }),
+    );
   });
 });
 

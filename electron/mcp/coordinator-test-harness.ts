@@ -36,6 +36,7 @@ const mocks = vi.hoisted(() => {
   const mockFsMkdir = vi.fn();
   const mockAtomicWriteFileSync = vi.fn();
   const mockAtomicWriteFile = vi.fn();
+  const mockAppendGitInfoExcludeBlock = vi.fn();
   const mockNotifyRenderer = vi.fn();
   const mockLogInfo = vi.fn();
   const mockLogWarn = vi.fn();
@@ -67,6 +68,7 @@ const mocks = vi.hoisted(() => {
     mockFsMkdir,
     mockAtomicWriteFileSync,
     mockAtomicWriteFile,
+    mockAppendGitInfoExcludeBlock,
     mockNotifyRenderer,
     mockLogInfo,
     mockLogWarn,
@@ -109,6 +111,10 @@ vi.mock('fs/promises', () => ({
 vi.mock('./atomic.js', () => ({
   atomicWriteFileSync: mocks.mockAtomicWriteFileSync,
   atomicWriteFile: mocks.mockAtomicWriteFile,
+}));
+
+vi.mock('../ipc/git-exclude.js', () => ({
+  appendGitInfoExcludeBlock: mocks.mockAppendGitInfoExcludeBlock,
 }));
 
 vi.mock('../shared/prompt-detect.js', () => ({
@@ -226,6 +232,7 @@ export const {
   mockFsMkdir,
   mockAtomicWriteFileSync,
   mockAtomicWriteFile,
+  mockAppendGitInfoExcludeBlock,
   mockNotifyRenderer,
   mockLogInfo,
   mockLogWarn,
@@ -299,6 +306,8 @@ export function resetCoordinatorMocks(): void {
   mockAtomicWriteFileSync.mockReset();
   mockAtomicWriteFile.mockReset();
   mockAtomicWriteFile.mockResolvedValue(undefined);
+  mockAppendGitInfoExcludeBlock.mockReset();
+  mockAppendGitInfoExcludeBlock.mockReturnValue('appended');
 
   mockNotifyRenderer.mockReset();
   mockLogInfo.mockReset();

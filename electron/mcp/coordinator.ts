@@ -4,6 +4,7 @@
 
 import { randomUUID, randomBytes } from 'crypto';
 import { execFile } from 'child_process';
+import { join } from 'path';
 import { promisify } from 'util';
 import { unlinkSync, readFileSync, existsSync } from 'fs';
 import { unlink as fsUnlink } from 'fs/promises';
@@ -14,9 +15,10 @@ import {
   writeSubTaskMcpConfig,
   writeSubTaskMcpConfigSync,
 } from './config.js';
-import { buildMcpLaunchArgs } from './agent-args.js';
+import { buildMcpLaunchArgs, isKimiCommand } from './agent-args.js';
 import { validateBranchName } from './validation.js';
 import { atomicWriteFileSync } from './atomic.js';
+import { appendGitInfoExcludeBlock } from '../ipc/git-exclude.js';
 import { ReplayCache } from './replay-cache.js';
 import {
   detectPreambleFiles,
@@ -89,6 +91,38 @@ const PREAMBLE_ARTIFACT_PATHS = new Set([
   '.claude/settings.local.json',
 ]);
 const UNRESOLVED_LANDED_COMMIT = 'unresolved';
+
+type McpJsonContent = Record<string, unknown> & {
+  mcpServers?: Record<string, unknown>;
+};
+
+function readMcpJsonContent(configPath: string): McpJsonContent {
+  if (!existsSync(configPath)) return {};
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(configPath, 'utf-8'));
+  } catch {
+    throw new Error(`${configPath} contains invalid JSON`);
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(`${configPath} must contain a JSON object`);
+  }
+
+  const content = parsed as McpJsonContent;
+  const servers = content.mcpServers;
+  if (
+    servers !== undefined &&
+    (!servers || typeof servers !== 'object' || Array.isArray(servers))
+  ) {
+    throw new Error(`${configPath} mcpServers must be a JSON object`);
+  }
+  return content;
+}
+
+function mcpEntriesMatch(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
 
 function pasteDelayMs(text: string): number {
   const lines = text.split('\n').length;
@@ -608,6 +642,7 @@ export class Coordinator {
         doneToken: task.doneToken,
       });
       writeSubTaskMcpConfigSync(mcpConfigPath, mcpConfig);
+      this.writeKimiAutoDiscoveredMcpConfig(task, mcpConfig);
     }
   }
 
@@ -867,6 +902,7 @@ export class Coordinator {
     if (!this.win) throw new Error('No window set on coordinator');
 
     const agentCommand = opts.agentCommand ?? coordinatorState.spawnDefaults.command;
+    task.agentCommand = agentCommand;
     const dockerContainerName =
       this.coordinators.get(task.coordinatorTaskId)?.dockerContainerName ?? null;
 
@@ -902,6 +938,7 @@ export class Coordinator {
         await writeSubTaskMcpConfig(configPath, mcpConfig);
         subTaskMcpConfigPath = configPath;
         task.mcpConfigPath = configPath;
+        this.writeKimiAutoDiscoveredMcpConfig(task, mcpConfig);
       }
 
       const agentArgs = opts.agentArgs ?? coordinatorState.spawnDefaults.args;
@@ -1508,6 +1545,78 @@ export class Coordinator {
     this.clearAgentBuffers(task.agentId);
   }
 
+  private writeKimiAutoDiscoveredMcpConfig(
+    task: CoordinatedTask,
+    mcpConfig: ReturnType<typeof buildSubTaskMcpConfig>,
+  ): void {
+    if (!task.agentCommand || !isKimiCommand(task.agentCommand)) return;
+
+    const configPath = join(task.worktreePath, '.mcp.json');
+    const writtenParallelCode = mcpConfig.mcpServers['parallel-code'];
+    const priorState = task.autoDiscoveredMcpConfig;
+    const content = readMcpJsonContent(configPath);
+    const servers = content.mcpServers ?? {};
+
+    if (
+      priorState?.path === configPath &&
+      !mcpEntriesMatch(servers['parallel-code'], priorState.writtenParallelCode)
+    ) {
+      logWarn('coordinator.kimi_mcp', 'auto-discovered MCP config changed; refusing overwrite', {
+        taskId: task.id,
+        configPath,
+      });
+      return;
+    }
+
+    const previousParallelCode =
+      priorState?.path === configPath ? priorState.previousParallelCode : servers['parallel-code'];
+    content.mcpServers = { ...servers, 'parallel-code': writtenParallelCode };
+    atomicWriteFileSync(configPath, JSON.stringify(content, null, 2), { mode: 0o600 });
+    task.autoDiscoveredMcpConfig = {
+      path: configPath,
+      previousParallelCode,
+      writtenParallelCode,
+    };
+
+    appendGitInfoExcludeBlock(
+      task.worktreePath,
+      '.mcp.json',
+      '# Parallel Code MCP config (contains ephemeral token)\n.mcp.json\n',
+      (err) => console.warn('[MCP] Could not git-exclude child .mcp.json:', err),
+    );
+  }
+
+  private restoreTaskAutoDiscoveredMcpConfig(task: CoordinatedTask): void {
+    const state = task.autoDiscoveredMcpConfig;
+    task.autoDiscoveredMcpConfig = undefined;
+    if (!state) return;
+
+    try {
+      if (!existsSync(state.path)) return;
+      const content = readMcpJsonContent(state.path);
+      const servers = content.mcpServers ?? {};
+      if (!mcpEntriesMatch(servers['parallel-code'], state.writtenParallelCode)) return;
+
+      if (state.previousParallelCode !== undefined) {
+        servers['parallel-code'] = state.previousParallelCode;
+      } else {
+        delete servers['parallel-code'];
+      }
+
+      const hasServers = Object.keys(servers).length > 0;
+      const hasOtherKeys = Object.keys(content).some((key) => key !== 'mcpServers');
+      if (!hasServers && !hasOtherKeys) {
+        unlinkSync(state.path);
+        return;
+      }
+      if (hasServers) content.mcpServers = servers;
+      else delete content.mcpServers;
+      atomicWriteFileSync(state.path, JSON.stringify(content, null, 2), { mode: 0o600 });
+    } catch {
+      // Best effort: malformed, concurrently removed, or inaccessible files are left untouched.
+    }
+  }
+
   /** Best-effort removal of a task's per-sub-task MCP config file. */
   private unlinkMcpConfigFile(path: string | undefined): void {
     if (!path) return;
@@ -1519,6 +1628,7 @@ export class Coordinator {
   }
 
   private clearTaskMcpConfig(task: CoordinatedTask): void {
+    this.restoreTaskAutoDiscoveredMcpConfig(task);
     this.unlinkMcpConfigFile(task.mcpConfigPath);
     task.mcpConfigPath = undefined;
   }
@@ -1907,6 +2017,7 @@ export class Coordinator {
 
     const existingTask = this.tasks.get(opts.id);
     if (existingTask) {
+      existingTask.agentCommand = opts.agentCommand ?? existingTask.agentCommand;
       if (safeMcpConfigPath) existingTask.mcpConfigPath = safeMcpConfigPath;
       const mcpLaunchArgs = this.rewriteHydratedSubtaskMcpConfig(
         existingTask,
@@ -1940,6 +2051,7 @@ export class Coordinator {
       landingSummary: opts.landingSummary,
       landedMetadata: opts.landedMetadata,
       preambleFileExistedBefore: opts.preambleFileExistedBefore,
+      agentCommand: opts.agentCommand,
     };
     this.tasks.set(task.id, task);
     if (opts.landedMetadata) {
@@ -2012,6 +2124,8 @@ export class Coordinator {
     if (mcpConfigPath) {
       writeSubTaskMcpConfigSync(mcpConfigPath, mcpConfig);
     }
+    task.agentCommand = agentCommand ?? task.agentCommand ?? 'claude';
+    this.writeKimiAutoDiscoveredMcpConfig(task, mcpConfig);
     return buildMcpLaunchArgs(agentCommand ?? 'claude', mcpConfigPath, mcpConfig);
   }
 
