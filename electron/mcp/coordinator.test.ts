@@ -3551,6 +3551,36 @@ describe('Coordinator hydrateTask — restart hydration', () => {
     expect(task?.status).toBe('exited');
   });
 
+  it('hydrateTask keeps Kimi launch args empty when the existing task command is reused', async () => {
+    coordinator.setCoordinatorSpawnDefaults('coord-1', 'kimi', []);
+    coordinator.setMCPServerInfo(
+      'coord-1',
+      'http://localhost:3001',
+      'coordinator-token',
+      'subtask-token',
+      '/path/server.js',
+    );
+    const task = await coordinator.createTask({
+      name: 'kimi-task',
+      prompt: 'do',
+      coordinatorTaskId: 'coord-1',
+    });
+
+    const result = coordinator.hydrateTask({
+      id: task.id,
+      name: task.name,
+      projectId: task.projectId,
+      projectRoot: task.projectRoot,
+      branchName: task.branchName,
+      worktreePath: task.worktreePath,
+      agentId: task.agentId,
+      coordinatorTaskId: task.coordinatorTaskId,
+      mcpConfigPath: task.mcpConfigPath,
+    });
+
+    expect(result.mcpLaunchArgs).toEqual([]);
+  });
+
   it('hydrateTask restores an undelivered initial prompt for backend delivery', () => {
     coordinator.hydrateTask({
       id: 'hydrated-1',

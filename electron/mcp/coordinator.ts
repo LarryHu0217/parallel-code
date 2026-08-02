@@ -2126,7 +2126,7 @@ export class Coordinator {
     }
     task.agentCommand = agentCommand ?? task.agentCommand ?? 'claude';
     this.writeKimiAutoDiscoveredMcpConfig(task, mcpConfig);
-    return buildMcpLaunchArgs(agentCommand ?? 'claude', mcpConfigPath, mcpConfig);
+    return buildMcpLaunchArgs(task.agentCommand, mcpConfigPath, mcpConfig);
   }
 
   isRegisteredCoordinator(coordinatorTaskId: string): boolean {
