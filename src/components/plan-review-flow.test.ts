@@ -28,4 +28,12 @@ describe('plan review flow slots', () => {
     expect(selection).toContain("element.closest('[data-plan-review-flow-slot]')");
     expect(viewer).toContain('eventTarget.closest(PLAN_REVIEW_FLOW_SLOT_SELECTOR)');
   });
+
+  it('starts a fresh review session when the plan identity changes', () => {
+    expect(viewer).toContain('const reviewSession = createMemo');
+    expect(viewer).toContain('<Show keyed when={reviewSession()}>');
+    expect(viewer).toContain('planContent={session.planContent}');
+    expect(viewer).toContain('worktreePath={session.worktreePath}');
+    expect(viewer).not.toContain('<Show when={props.open}>');
+  });
 });

@@ -1,4 +1,4 @@
-import { Show, For, createSignal, createEffect, onCleanup } from 'solid-js';
+import { Show, For, createSignal, createEffect, createMemo, onCleanup } from 'solid-js';
 import { Portal } from 'solid-js/web';
 import { Dialog } from './Dialog';
 import { createDialogScroll } from '../lib/dialog-scroll';
@@ -39,6 +39,17 @@ function compilePlanReview(annotations: ReviewAnnotation[]): string {
 }
 
 export function PlanViewerDialog(props: PlanViewerDialogProps) {
+  const reviewSession = createMemo(() => {
+    if (!props.open) return undefined;
+    return {
+      planContent: props.planContent,
+      planFileName: props.planFileName,
+      taskId: props.taskId,
+      agentId: props.agentId,
+      worktreePath: props.worktreePath,
+    };
+  });
+
   return (
     <Dialog
       open={props.open}
@@ -53,20 +64,22 @@ export function PlanViewerDialog(props: PlanViewerDialogProps) {
         gap: '0',
       }}
     >
-      <Show when={props.open}>
-        <ReviewProvider
-          taskId={props.taskId}
-          agentId={props.agentId}
-          compilePrompt={compilePlanReview}
-          onSubmitted={props.onClose}
-        >
-          <PlanViewerContent
-            planContent={props.planContent}
-            planFileName={props.planFileName}
-            worktreePath={props.worktreePath}
-            onClose={props.onClose}
-          />
-        </ReviewProvider>
+      <Show keyed when={reviewSession()}>
+        {(session) => (
+          <ReviewProvider
+            taskId={session.taskId}
+            agentId={session.agentId}
+            compilePrompt={compilePlanReview}
+            onSubmitted={props.onClose}
+          >
+            <PlanViewerContent
+              planContent={session.planContent}
+              planFileName={session.planFileName}
+              worktreePath={session.worktreePath}
+              onClose={props.onClose}
+            />
+          </ReviewProvider>
+        )}
       </Show>
     </Dialog>
   );
