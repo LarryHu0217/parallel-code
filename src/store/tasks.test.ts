@@ -1328,6 +1328,21 @@ describe('MCP_TaskStateSync listener', () => {
     expect(mockTasks['task-1'].automationWriteInFlight).toBe(true);
   });
 
+  it('stores and clears the auto-discovered MCP restoration snapshot', () => {
+    const snapshot = {
+      path: '/repo/.worktrees/task-1/.mcp.json',
+      previousParallelCode: { command: 'user-owned-server' },
+      writtenParallelCodeFingerprint: 'a'.repeat(64),
+    };
+
+    taskStateSyncHandler({ taskId: 'task-1', autoDiscoveredMcpConfig: snapshot });
+    expect(mockTasks['task-1'].autoDiscoveredMcpConfig).toEqual(snapshot);
+    expect(mockSaveState).toHaveBeenCalled();
+
+    taskStateSyncHandler({ taskId: 'task-1', autoDiscoveredMcpConfig: null });
+    expect(mockTasks['task-1'].autoDiscoveredMcpConfig).toBeUndefined();
+  });
+
   it('stores landed pending-review and verification sync fields', () => {
     taskStateSyncHandler({
       taskId: 'task-1',

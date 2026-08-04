@@ -1507,6 +1507,7 @@ export function registerAllHandlers(win: BrowserWindow): void {
           landingSummary?: string;
           landedMetadata?: import('../mcp/types.js').LandedMetadata;
           mcpConfigPath?: string;
+          autoDiscoveredMcpConfig?: import('../mcp/types.js').AutoDiscoveredMcpConfigState;
           agentCommand?: string;
           preambleFileExistedBefore?: boolean;
           initialPrompt?: string;
@@ -1545,6 +1546,7 @@ export function registerAllHandlers(win: BrowserWindow): void {
           landingSummary: args.landingSummary,
           landedMetadata: args.landedMetadata,
           mcpConfigPath: args.mcpConfigPath,
+          autoDiscoveredMcpConfig: args.autoDiscoveredMcpConfig,
           agentCommand: args.agentCommand,
           preambleFileExistedBefore: args.preambleFileExistedBefore,
           initialPrompt: args.initialPrompt,

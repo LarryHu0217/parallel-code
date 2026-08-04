@@ -65,7 +65,7 @@ import {
   markTaskMcpError,
 } from './store/store';
 import { isGitHubUrl } from './lib/github-url';
-import type { PersistedWindowState } from './store/types';
+import type { PersistedWindowState, Task } from './store/types';
 import {
   initShortcuts,
   registerFromRegistry,
@@ -451,7 +451,10 @@ function App() {
       if (!projectRoot) continue;
       markTaskMcpPending(task.id);
       hydratePromises.push(
-        invoke<{ mcpLaunchArgs?: string[] }>(IPC.MCP_HydrateCoordinatedTask, {
+        invoke<{
+          mcpLaunchArgs?: string[];
+          autoDiscoveredMcpConfig?: Task['autoDiscoveredMcpConfig'] | null;
+        }>(IPC.MCP_HydrateCoordinatedTask, {
           id: task.id,
           name: task.name,
           projectId: task.projectId,
@@ -470,6 +473,7 @@ function App() {
           landingSummary: task.landingSummary,
           landedMetadata: task.landedMetadata,
           mcpConfigPath: task.mcpConfigPath,
+          autoDiscoveredMcpConfig: task.autoDiscoveredMcpConfig,
           agentCommand: store.agents[task.agentIds[0]]?.def.command ?? 'claude',
           preambleFileExistedBefore: task.preambleFileExistedBefore,
           initialPrompt: task.initialPrompt,
