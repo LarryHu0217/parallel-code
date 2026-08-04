@@ -12,23 +12,105 @@ export interface PlanSelection {
 
 const BLOCK_SELECTOR = 'p, li, h1, h2, h3, h4, h5, h6, pre, tr';
 const HEADING_SELECTOR = 'h1, h2, h3, h4, h5, h6';
+export const PLAN_REVIEW_FLOW_SLOT_SELECTOR = '[data-plan-review-flow-slot]';
+
+export interface PlanSelectionRect {
+  top: number;
+  left: number;
+  width: number;
+  height: number;
+}
+
+function getSelectionRange(containerEl: HTMLElement): Range | null {
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed || selection.rangeCount === 0) return null;
+
+  const range = selection.getRangeAt(0);
+  return containerEl.contains(range.commonAncestorContainer) ? range : null;
+}
+
+function isInPlanReviewFlowSlot(node: Node): boolean {
+  const element = node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement;
+  return Boolean(element?.closest(PLAN_REVIEW_FLOW_SLOT_SELECTOR));
+}
+
+/** Return the selected text ranges that belong to plan content, excluding inline review UI. */
+export function getPlanSelectionTextRanges(containerEl: HTMLElement): Range[] {
+  const selectedRange = getSelectionRange(containerEl);
+  if (!selectedRange) return [];
+
+  const ranges: Range[] = [];
+  const walker = document.createTreeWalker(containerEl, NodeFilter.SHOW_TEXT);
+  let node = walker.nextNode();
+  while (node) {
+    if (!isInPlanReviewFlowSlot(node) && selectedRange.intersectsNode(node)) {
+      const text = node as Text;
+      const start = node === selectedRange.startContainer ? selectedRange.startOffset : 0;
+      const end = node === selectedRange.endContainer ? selectedRange.endOffset : text.length;
+      if (start < end) {
+        const range = document.createRange();
+        range.setStart(text, start);
+        range.setEnd(text, end);
+        ranges.push(range);
+      }
+    }
+    node = walker.nextNode();
+  }
+  return ranges;
+}
+
+export function getPlanSelectionRects(
+  containerEl: HTMLElement,
+  ranges: readonly Range[],
+): PlanSelectionRect[] {
+  const containerRect = containerEl.getBoundingClientRect();
+  const rects: PlanSelectionRect[] = [];
+  for (const range of ranges) {
+    for (const rect of range.getClientRects()) {
+      rects.push({
+        top: rect.top - containerRect.top,
+        left: rect.left - containerRect.left,
+        width: rect.width,
+        height: rect.height,
+      });
+    }
+  }
+  return rects;
+}
+
+/** Keep persisted selection overlays aligned while inline cards reflow the plan. */
+export function trackPlanSelectionGeometry(
+  containerEl: HTMLElement,
+  ranges: readonly Range[],
+  onChange: (rects: PlanSelectionRect[]) => void,
+): () => void {
+  const refresh = () => onChange(getPlanSelectionRects(containerEl, ranges));
+  refresh();
+
+  if (typeof ResizeObserver === 'undefined') return () => undefined;
+  const observer = new ResizeObserver(refresh);
+  observer.observe(containerEl);
+  return () => observer.disconnect();
+}
 
 /**
  * Extract structured selection info from the current DOM selection
  * within a plan viewer container. Returns null if no valid selection.
  */
 export function getPlanSelection(containerEl: HTMLElement, source: string): PlanSelection | null {
-  const selection = window.getSelection();
-  if (!selection || selection.isCollapsed) return null;
+  const range = getSelectionRange(containerEl);
+  if (!range) return null;
 
-  const range = selection.getRangeAt(0);
-  if (!containerEl.contains(range.commonAncestorContainer)) return null;
-
-  const selectedText = selection.toString().trim();
+  const selectedText = getPlanSelectionTextRanges(containerEl)
+    .map((textRange) => textRange.toString())
+    .join('')
+    .trim();
   if (!selectedText) return null;
 
   const nearestHeading = findNearestHeading(containerEl, range.startContainer);
-  const blocks = containerEl.querySelectorAll(BLOCK_SELECTOR);
+  const blocks = Array.from(containerEl.querySelectorAll(BLOCK_SELECTOR)).filter(
+    (block) => !block.closest(PLAN_REVIEW_FLOW_SLOT_SELECTOR),
+  );
   const blockIndex = countBlocksBefore(blocks, range.startContainer);
   const endBlockIndex = countBlocksBefore(blocks, range.endContainer);
 
@@ -43,17 +125,14 @@ export function getPlanSelection(containerEl: HTMLElement, source: string): Plan
 
 /** Find the block that should own an inline review card for the current selection. */
 export function getPlanSelectionFlowAnchor(containerEl: HTMLElement): HTMLElement | null {
-  const selection = window.getSelection();
-  if (!selection || selection.isCollapsed || selection.rangeCount === 0) return null;
-
-  const range = selection.getRangeAt(0);
-  if (!containerEl.contains(range.commonAncestorContainer)) return null;
+  const range = getSelectionRange(containerEl);
+  if (!range) return null;
 
   let element: Element | null =
     range.endContainer.nodeType === Node.ELEMENT_NODE
       ? (range.endContainer as Element)
       : range.endContainer.parentElement;
-  if (!element || element.closest('[data-plan-review-flow-slot]')) return null;
+  if (!element || element.closest(PLAN_REVIEW_FLOW_SLOT_SELECTOR)) return null;
 
   const block = element.closest(BLOCK_SELECTOR);
   if (block && block !== containerEl && containerEl.contains(block)) {
@@ -119,7 +198,7 @@ function findNearestHeading(container: HTMLElement, startNode: Node): string {
 }
 
 /** Count block elements before the given node from a pre-queried list. */
-function countBlocksBefore(blocks: NodeListOf<Element>, node: Node): number {
+function countBlocksBefore(blocks: readonly Element[], node: Node): number {
   let count = 0;
   for (const block of blocks) {
     // Is this block before or containing the node?

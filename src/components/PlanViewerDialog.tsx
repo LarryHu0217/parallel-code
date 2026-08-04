@@ -9,7 +9,14 @@ import { InlineInput } from './InlineInput';
 import { AskCodeCard } from './AskCodeCard';
 import { CloseIcon } from './icons';
 import { createHighlightedMarkdown } from '../lib/marked-shiki';
-import { getPlanSelection, getPlanSelectionFlowAnchor } from '../lib/plan-selection';
+import {
+  getPlanSelection,
+  getPlanSelectionFlowAnchor,
+  getPlanSelectionTextRanges,
+  PLAN_REVIEW_FLOW_SLOT_SELECTOR,
+  trackPlanSelectionGeometry,
+  type PlanSelectionRect,
+} from '../lib/plan-selection';
 import { openFileInEditor } from '../lib/shell';
 import { theme } from '../lib/theme';
 import { sf } from '../lib/fontScale';
@@ -93,15 +100,6 @@ interface PlanViewerContentProps {
 }
 
 /** Inner content rendered inside ReviewProvider so it can call useReview(). */
-interface HighlightRect {
-  top: number;
-  left: number;
-  width: number;
-  height: number;
-}
-
-const PLAN_REVIEW_FLOW_SLOT_SELECTOR = '[data-plan-review-flow-slot]';
-
 function insertPlanReviewFlowSlot(anchor: HTMLElement): HTMLDivElement {
   const slot = document.createElement('div');
   slot.className = 'plan-review-flow-slot';
@@ -129,7 +127,8 @@ function PlanViewerContent(props: PlanViewerContentProps) {
 
   const [pendingFlowSlot, setPendingFlowSlot] = createSignal<HTMLDivElement>();
   const [flowSlots, setFlowSlots] = createSignal<Record<string, HTMLDivElement>>({});
-  const [highlightRects, setHighlightRects] = createSignal<HighlightRect[]>([]);
+  const [highlightRects, setHighlightRects] = createSignal<PlanSelectionRect[]>([]);
+  let stopHighlightTracking: (() => void) | undefined;
 
   createDialogScroll(
     () => scrollRef,
@@ -190,27 +189,13 @@ function PlanViewerContent(props: PlanViewerContentProps) {
 
   // Clear highlight overlays when pending selection is dismissed
   createEffect(() => {
-    if (!review.pendingSelection()) setHighlightRects([]);
+    if (!review.pendingSelection()) clearHighlightGeometry();
   });
 
-  /** Capture selection rects relative to contentRef. */
-  function captureSelectionGeometry(): HighlightRect[] {
-    const domSel = window.getSelection();
-    if (!domSel || domSel.rangeCount === 0 || !contentRef) return [];
-    const range = domSel.getRangeAt(0);
-    const containerRect = contentRef.getBoundingClientRect();
-    const clientRects = range.getClientRects();
-    const rects: HighlightRect[] = [];
-    for (let i = 0; i < clientRects.length; i++) {
-      const r = clientRects[i];
-      rects.push({
-        top: r.top - containerRect.top,
-        left: r.left - containerRect.left,
-        width: r.width,
-        height: r.height,
-      });
-    }
-    return rects;
+  function clearHighlightGeometry() {
+    stopHighlightTracking?.();
+    stopHighlightTracking = undefined;
+    setHighlightRects([]);
   }
 
   function handleMouseUp(event: MouseEvent) {
@@ -222,10 +207,12 @@ function PlanViewerContent(props: PlanViewerContentProps) {
 
     const sel = getPlanSelection(contentRef, props.planFileName);
     const flowAnchor = getPlanSelectionFlowAnchor(contentRef);
-    if (!sel || !flowAnchor) return;
+    const textRanges = getPlanSelectionTextRanges(contentRef);
+    if (!sel || !flowAnchor || textRanges.length === 0) return;
 
-    setHighlightRects(captureSelectionGeometry());
+    stopHighlightTracking?.();
     pendingFlowSlot()?.remove();
+    stopHighlightTracking = trackPlanSelectionGeometry(contentRef, textRanges, setHighlightRects);
     setPendingFlowSlot(insertPlanReviewFlowSlot(flowAnchor));
     // Clear native selection — overlay rects provide the visual highlight from here
     window.getSelection()?.removeAllRanges();
@@ -248,7 +235,7 @@ function PlanViewerContent(props: PlanViewerContentProps) {
     if (!id) return;
     if (slot) setFlowSlots((prev) => ({ ...prev, [id]: slot }));
     setPendingFlowSlot(undefined);
-    setHighlightRects([]);
+    clearHighlightGeometry();
   }
 
   function dismissPendingSelection() {
@@ -277,6 +264,7 @@ function PlanViewerContent(props: PlanViewerContentProps) {
   }
 
   onCleanup(() => {
+    stopHighlightTracking?.();
     pendingFlowSlot()?.remove();
     Object.values(flowSlots()).forEach((slot) => slot.remove());
   });
