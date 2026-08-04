@@ -25,7 +25,7 @@ describe('plan review flow slots', () => {
     expect(selection).toContain('export function getPlanSelectionFlowAnchor');
     expect(selection).toContain('range.endContainer.nodeType');
     expect(selection).toContain("block.tagName === 'TR'");
-    expect(selection).toContain("element.closest('[data-plan-review-flow-slot]')");
+    expect(selection).toContain('element.closest(PLAN_REVIEW_FLOW_SLOT_SELECTOR)');
     expect(viewer).toContain('eventTarget.closest(PLAN_REVIEW_FLOW_SLOT_SELECTOR)');
   });
 
