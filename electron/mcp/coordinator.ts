@@ -97,12 +97,10 @@ type McpJsonContent = Record<string, unknown> & {
   mcpServers?: Record<string, unknown>;
 };
 
-function readMcpJsonContent(configPath: string): McpJsonContent {
-  if (!existsSync(configPath)) return {};
-
+function parseMcpJsonContent(configPath: string, raw: string): McpJsonContent {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(readFileSync(configPath, 'utf-8'));
+    parsed = JSON.parse(raw);
   } catch {
     throw new Error(`${configPath} contains invalid JSON`);
   }
@@ -119,6 +117,11 @@ function readMcpJsonContent(configPath: string): McpJsonContent {
     throw new Error(`${configPath} mcpServers must be a JSON object`);
   }
   return content;
+}
+
+function readMcpJsonContent(configPath: string): McpJsonContent {
+  if (!existsSync(configPath)) return {};
+  return parseMcpJsonContent(configPath, readFileSync(configPath, 'utf-8'));
 }
 
 function mcpEntryFingerprint(value: unknown): string {
@@ -141,6 +144,7 @@ function validateAutoDiscoveredMcpConfigState(
     return undefined;
   return {
     path: state.path,
+    previousContent: typeof state.previousContent === 'string' ? state.previousContent : undefined,
     previousParallelCode: state.previousParallelCode,
     writtenParallelCodeFingerprint: state.writtenParallelCodeFingerprint,
   };
@@ -1577,7 +1581,9 @@ export class Coordinator {
     const configPath = join(task.worktreePath, '.mcp.json');
     const writtenParallelCode = mcpConfig.mcpServers['parallel-code'];
     const priorState = task.autoDiscoveredMcpConfig;
-    const content = readMcpJsonContent(configPath);
+    const existingContent = existsSync(configPath) ? readFileSync(configPath, 'utf-8') : undefined;
+    const content =
+      existingContent === undefined ? {} : parseMcpJsonContent(configPath, existingContent);
     const servers = content.mcpServers ?? {};
 
     if (
@@ -1593,10 +1599,13 @@ export class Coordinator {
 
     const previousParallelCode =
       priorState?.path === configPath ? priorState.previousParallelCode : servers['parallel-code'];
+    const previousContent =
+      priorState?.path === configPath ? priorState.previousContent : existingContent;
     content.mcpServers = { ...servers, 'parallel-code': writtenParallelCode };
     atomicWriteFileSync(configPath, JSON.stringify(content, null, 2), { mode: 0o600 });
     task.autoDiscoveredMcpConfig = {
       path: configPath,
+      previousContent,
       previousParallelCode,
       writtenParallelCodeFingerprint: mcpEntryFingerprint(writtenParallelCode),
     };
@@ -1617,18 +1626,33 @@ export class Coordinator {
     });
   }
 
-  private restoreTaskAutoDiscoveredMcpConfig(task: CoordinatedTask): boolean {
+  private restoreTaskAutoDiscoveredMcpConfig(
+    task: CoordinatedTask,
+  ): 'none' | 'restored' | 'failed' {
     const state = task.autoDiscoveredMcpConfig;
-    task.autoDiscoveredMcpConfig = undefined;
-    if (!state) return false;
-    this.syncAutoDiscoveredMcpConfig(task);
+    if (!state) return 'none';
 
     try {
-      if (!existsSync(state.path)) return true;
+      if (!existsSync(state.path)) {
+        if (state.previousContent !== undefined) {
+          atomicWriteFileSync(state.path, state.previousContent, { mode: 0o600 });
+        }
+        task.autoDiscoveredMcpConfig = undefined;
+        this.syncAutoDiscoveredMcpConfig(task);
+        return 'restored';
+      }
+
       const content = readMcpJsonContent(state.path);
       const servers = content.mcpServers ?? {};
       if (mcpEntryFingerprint(servers['parallel-code']) !== state.writtenParallelCodeFingerprint)
-        return false;
+        return 'failed';
+
+      if (state.previousContent !== undefined) {
+        atomicWriteFileSync(state.path, state.previousContent, { mode: 0o600 });
+        task.autoDiscoveredMcpConfig = undefined;
+        this.syncAutoDiscoveredMcpConfig(task);
+        return 'restored';
+      }
 
       if (state.previousParallelCode !== undefined) {
         servers['parallel-code'] = state.previousParallelCode;
@@ -1640,15 +1664,23 @@ export class Coordinator {
       const hasOtherKeys = Object.keys(content).some((key) => key !== 'mcpServers');
       if (!hasServers && !hasOtherKeys) {
         unlinkSync(state.path);
-        return true;
+        task.autoDiscoveredMcpConfig = undefined;
+        this.syncAutoDiscoveredMcpConfig(task);
+        return 'restored';
       }
       if (hasServers) content.mcpServers = servers;
       else delete content.mcpServers;
       atomicWriteFileSync(state.path, JSON.stringify(content, null, 2), { mode: 0o600 });
-      return true;
-    } catch {
-      // Best effort: malformed, concurrently removed, or inaccessible files are left untouched.
-      return false;
+      task.autoDiscoveredMcpConfig = undefined;
+      this.syncAutoDiscoveredMcpConfig(task);
+      return 'restored';
+    } catch (err) {
+      logWarn('coordinator.kimi_mcp', 'failed to restore auto-discovered MCP config', {
+        taskId: task.id,
+        configPath: state.path,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return 'failed';
     }
   }
 
@@ -1755,7 +1787,14 @@ export class Coordinator {
     task.verification = input.verification;
     task.landingSummary = input.summary;
 
-    const shouldRefreshMcpConfig = this.restoreTaskAutoDiscoveredMcpConfig(task);
+    const restoreMcpConfig = this.restoreTaskAutoDiscoveredMcpConfig(task);
+    if (restoreMcpConfig === 'failed') {
+      const reason =
+        'Unable to restore managed Kimi MCP config before self-landing; refusing to validate or merge a worktree that may contain ephemeral MCP tokens.';
+      this.escalateLanding(task, 'landing_escalated', reason);
+      throw new Error(reason);
+    }
+    const shouldRefreshMcpConfig = restoreMcpConfig === 'restored';
     try {
       await this.prepareCleanSelfLandingWorktree(task);
     } catch (err) {
@@ -1851,7 +1890,13 @@ export class Coordinator {
     const task = this.tasks.get(taskId);
     if (!task) throw new Error(`Task not found: ${taskId}`);
     this.assertTaskCanBeMerged(task);
-    const shouldRefreshMcpConfig = this.restoreTaskAutoDiscoveredMcpConfig(task);
+    const restoreMcpConfig = this.restoreTaskAutoDiscoveredMcpConfig(task);
+    if (restoreMcpConfig === 'failed') {
+      throw new Error(
+        'Unable to restore managed Kimi MCP config before merge; refusing to stage or merge a worktree that may contain ephemeral MCP tokens.',
+      );
+    }
+    const shouldRefreshMcpConfig = restoreMcpConfig === 'restored';
 
     try {
       // Strip injected preamble files before staging so they don't land in history,

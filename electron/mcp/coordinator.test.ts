@@ -1526,9 +1526,10 @@ describe('Coordinator land_self', () => {
   it('restores a tracked Kimi .mcp.json before checking and merging the worktree', async () => {
     const configPath = '/tmp/test/.mcp.json';
     const previousParallelCode = { command: 'user-owned-server' };
-    let currentConfig = JSON.stringify({
+    const originalConfig = JSON.stringify({
       mcpServers: { 'parallel-code': previousParallelCode },
     });
+    let currentConfig = originalConfig;
     mockExistsSync.mockImplementation((path) => path === configPath);
     mockReadFileSync.mockImplementation((path) =>
       path === configPath ? currentConfig : '# existing\n',
@@ -1548,12 +1549,7 @@ describe('Coordinator land_self', () => {
           return;
         }
         if (args[0] === 'status') {
-          const config = JSON.parse(currentConfig) as {
-            mcpServers: Record<string, unknown>;
-          };
-          const restored = config.mcpServers['parallel-code'];
-          const isRestored = JSON.stringify(restored) === JSON.stringify(previousParallelCode);
-          cb(null, isRestored ? '' : ' M .mcp.json\n', '');
+          cb(null, currentConfig === originalConfig ? '' : ' M .mcp.json\n', '');
           return;
         }
         if (args.join(' ') === 'rev-parse HEAD') {
@@ -1588,7 +1584,95 @@ describe('Coordinator land_self', () => {
 
     const restored = JSON.parse(currentConfig) as { mcpServers: Record<string, unknown> };
     expect(restored.mcpServers['parallel-code']).toEqual(previousParallelCode);
+    expect(currentConfig).toBe(originalConfig);
     expect(vi.mocked(mergeTask)).toHaveBeenCalled();
+  });
+
+  it('fails closed before self-landing when Kimi MCP restoration fingerprint mismatches', async () => {
+    const configPath = '/tmp/test/.mcp.json';
+    let currentConfig = JSON.stringify({
+      mcpServers: { 'parallel-code': { command: 'user-owned-server' } },
+    });
+    mockExistsSync.mockImplementation((path) => path === configPath);
+    mockReadFileSync.mockImplementation((path) =>
+      path === configPath ? currentConfig : '# existing\n',
+    );
+    mockAtomicWriteFileSync.mockImplementation((path, raw) => {
+      if (path === configPath) currentConfig = raw as string;
+    });
+    coordinator.setCoordinatorSpawnDefaults('coord-1', 'kimi', []);
+    coordinator.setMCPServerInfo(
+      'coord-1',
+      'http://localhost:3001',
+      'coordinator-token',
+      'subtask-token',
+      '/path/server.js',
+    );
+    await coordinator.createTask({ name: 'test', prompt: 'do', coordinatorTaskId: 'coord-1' });
+
+    currentConfig = JSON.stringify({
+      mcpServers: { 'parallel-code': { command: 'changed-generated-entry' } },
+    });
+    mockExecFile.mockClear();
+
+    await expect(coordinator.landSelf('task-1', { verification })).rejects.toThrow(
+      'Unable to restore managed Kimi MCP config',
+    );
+
+    expect(vi.mocked(mergeTask)).not.toHaveBeenCalled();
+    expect(mockExecFile).not.toHaveBeenCalledWith(
+      'git',
+      expect.arrayContaining(['status']),
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(coordinator.getTask('task-1')?.autoDiscoveredMcpConfig).toBeDefined();
+    expect(coordinator.getTask('task-1')?.landingState).toBe('landing_escalated');
+  });
+
+  it('fails closed before merge staging when Kimi MCP restoration fingerprint mismatches', async () => {
+    const configPath = '/tmp/test/.mcp.json';
+    let currentConfig = JSON.stringify({
+      mcpServers: { 'parallel-code': { command: 'user-owned-server' } },
+    });
+    mockExistsSync.mockImplementation((path) => path === configPath);
+    mockReadFileSync.mockImplementation((path) =>
+      path === configPath ? currentConfig : '# existing\n',
+    );
+    mockAtomicWriteFileSync.mockImplementation((path, raw) => {
+      if (path === configPath) currentConfig = raw as string;
+    });
+    coordinator.setCoordinatorSpawnDefaults('coord-1', 'kimi', []);
+    coordinator.setMCPServerInfo(
+      'coord-1',
+      'http://localhost:3001',
+      'coordinator-token',
+      'subtask-token',
+      '/path/server.js',
+    );
+    const task = await coordinator.createTask({
+      name: 'test',
+      prompt: 'do',
+      coordinatorTaskId: 'coord-1',
+    });
+    task.signalDoneAt = new Date();
+    currentConfig = JSON.stringify({
+      mcpServers: { 'parallel-code': { command: 'changed-generated-entry' } },
+    });
+    mockExecFile.mockClear();
+
+    await expect(coordinator.mergeTask('task-1')).rejects.toThrow(
+      'Unable to restore managed Kimi MCP config',
+    );
+
+    expect(mockExecFile).not.toHaveBeenCalledWith(
+      'git',
+      expect.arrayContaining(['add', '-A']),
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(vi.mocked(mergeTask)).not.toHaveBeenCalled();
+    expect(coordinator.getTask('task-1')?.autoDiscoveredMcpConfig).toBeDefined();
   });
 
   it('stages a landed notification so the coordinator hears about successful self-land', async () => {

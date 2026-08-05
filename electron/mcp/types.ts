@@ -2,6 +2,7 @@
 
 export interface AutoDiscoveredMcpConfigState {
   path: string;
+  previousContent?: string;
   previousParallelCode?: unknown;
   writtenParallelCodeFingerprint: string;
 }
