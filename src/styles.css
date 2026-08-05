@@ -2104,6 +2104,7 @@ body.dragging-task * {
   display: flow-root;
   width: 100%;
   min-width: 0;
+  font-style: normal;
 }
 
 /* Lists — better spacing */

@@ -22,6 +22,16 @@ function selectText(start: Text, end: Text): void {
   selection?.addRange(range);
 }
 
+function findTextNode(container: Node, value: string): Text {
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+  let node = walker.nextNode();
+  while (node) {
+    if (node.textContent === value) return node as Text;
+    node = walker.nextNode();
+  }
+  throw new Error(`Could not find text node: ${value}`);
+}
+
 function rect(top: number, left = 0): DOMRect {
   return {
     x: left,
@@ -53,9 +63,7 @@ describe('plan selection DOM behavior', () => {
     const selection = getPlanSelection(container, 'plan.md');
     const textRanges = getPlanSelectionTextRanges(container);
 
-    expect(selection?.selectedText).toContain('Before plan text');
-    expect(selection?.selectedText).toContain('After plan text');
-    expect(selection?.selectedText).not.toContain('Previous feedback');
+    expect(selection?.selectedText).toBe('Before plan text\nAfter plan text');
     expect(selection).toMatchObject({ startLine: 0, endLine: 1 });
     expect(textRanges.map((range) => range.toString()).join('')).not.toContain('Previous feedback');
     expect(
@@ -65,6 +73,50 @@ describe('plan selection DOM behavior', () => {
           null,
       ),
     ).toBe(true);
+  });
+
+  it('preserves rendered block breaks between selected code and prose', () => {
+    const container = document.createElement('div');
+    container.innerHTML = `
+      <pre class="shiki-block"><code>const x = 1;</code></pre>
+      <p>After step</p>
+    `;
+    document.body.append(container);
+
+    const codeText = container.querySelector('code')?.firstChild as Text;
+    const proseText = container.querySelector('p')?.firstChild as Text;
+    selectText(codeText, proseText);
+
+    expect(getPlanSelection(container, 'plan.md')?.selectedText).toBe('const x = 1;\nAfter step');
+  });
+
+  it('excludes hidden Mermaid SVG text from selected prompt text', () => {
+    const container = document.createElement('div');
+    container.innerHTML = `
+      <div class="mermaid-block mermaid-rendered" data-mermaid="graph TD"></div>
+      <p>After diagram</p>
+    `;
+    const mermaid = container.querySelector('.mermaid-block') as HTMLDivElement;
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    const style = document.createElementNS('http://www.w3.org/2000/svg', 'style');
+    style.textContent = '.node { fill: red; }';
+    const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+    const hidden = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    hidden.textContent = 'Hidden marker';
+    const visible = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    visible.textContent = 'Visible diagram label';
+    defs.append(hidden);
+    svg.append(style, defs, visible);
+    mermaid.append(svg);
+    document.body.append(container);
+
+    const hiddenText = findTextNode(container, 'Hidden marker');
+    const proseText = container.querySelector('p')?.firstChild as Text;
+    selectText(hiddenText, proseText);
+
+    expect(getPlanSelection(container, 'plan.md')?.selectedText).toBe(
+      'Visible diagram label\nAfter diagram',
+    );
   });
 
   it('recalculates retained range geometry when the plan reflows', () => {
