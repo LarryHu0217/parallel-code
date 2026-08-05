@@ -11,6 +11,7 @@ export interface PlanSelection {
 }
 
 const BLOCK_SELECTOR = 'p, li, h1, h2, h3, h4, h5, h6, pre, tr';
+const SELECTION_TEXT_BLOCK_SELECTOR = `${BLOCK_SELECTOR}, .mermaid-block`;
 const HEADING_SELECTOR = 'h1, h2, h3, h4, h5, h6';
 export const PLAN_REVIEW_FLOW_SLOT_SELECTOR = '[data-plan-review-flow-slot]';
 
@@ -32,6 +33,68 @@ function getSelectionRange(containerEl: HTMLElement): Range | null {
 function isInPlanReviewFlowSlot(node: Node): boolean {
   const element = node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement;
   return Boolean(element?.closest(PLAN_REVIEW_FLOW_SLOT_SELECTOR));
+}
+
+function isHiddenSelectionTextNode(node: Node, containerEl: HTMLElement): boolean {
+  let element = node.parentElement;
+  while (element && element !== containerEl) {
+    const tagName = element.tagName.toLowerCase();
+    if (
+      tagName === 'style' ||
+      tagName === 'script' ||
+      tagName === 'defs' ||
+      tagName === 'metadata' ||
+      tagName === 'title' ||
+      tagName === 'desc' ||
+      element.hasAttribute('hidden') ||
+      element.getAttribute('aria-hidden') === 'true'
+    ) {
+      return true;
+    }
+
+    const style = window.getComputedStyle(element);
+    if (style.display === 'none' || style.visibility === 'hidden') return true;
+    element = element.parentElement;
+  }
+  return false;
+}
+
+function getSelectedTextContent(text: Text, selectedRange: Range): string {
+  const start = text === selectedRange.startContainer ? selectedRange.startOffset : 0;
+  const end = text === selectedRange.endContainer ? selectedRange.endOffset : text.length;
+  return start < end ? text.data.slice(start, end) : '';
+}
+
+function getSelectionTextBlock(node: Node, containerEl: HTMLElement): Element | null {
+  const element = node.parentElement;
+  const block = element?.closest(SELECTION_TEXT_BLOCK_SELECTOR);
+  return block && containerEl.contains(block) ? block : null;
+}
+
+function getPlanSelectionVisibleText(containerEl: HTMLElement, selectedRange: Range): string {
+  const parts: string[] = [];
+  let lastBlock: Element | null = null;
+  const walker = document.createTreeWalker(containerEl, NodeFilter.SHOW_TEXT);
+  let node = walker.nextNode();
+  while (node) {
+    if (
+      !isInPlanReviewFlowSlot(node) &&
+      !isHiddenSelectionTextNode(node, containerEl) &&
+      selectedRange.intersectsNode(node)
+    ) {
+      const text = getSelectedTextContent(node as Text, selectedRange);
+      const block = getSelectionTextBlock(node, containerEl);
+      if (text && (text.trim() || block?.tagName === 'PRE')) {
+        if (parts.length > 0 && block && block !== lastBlock) {
+          parts.push('\n');
+        }
+        parts.push(text);
+        lastBlock = block;
+      }
+    }
+    node = walker.nextNode();
+  }
+  return parts.join('').trim();
 }
 
 /** Return the selected text ranges that belong to plan content, excluding inline review UI. */
@@ -101,10 +164,7 @@ export function getPlanSelection(containerEl: HTMLElement, source: string): Plan
   const range = getSelectionRange(containerEl);
   if (!range) return null;
 
-  const selectedText = getPlanSelectionTextRanges(containerEl)
-    .map((textRange) => textRange.toString())
-    .join('')
-    .trim();
+  const selectedText = getPlanSelectionVisibleText(containerEl, range);
   if (!selectedText) return null;
 
   const nearestHeading = findNearestHeading(containerEl, range.startContainer);

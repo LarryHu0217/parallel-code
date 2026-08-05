@@ -18,6 +18,7 @@ describe('plan review flow slots', () => {
     const rule = css.match(/\.plan-review-flow-slot\s*\{([^}]*)\}/);
     expect(rule).not.toBeNull();
     expect(rule?.[1]).toMatch(/display:\s*flow-root\s*;/);
+    expect(rule?.[1]).toMatch(/font-style:\s*normal\s*;/);
     expect(rule?.[1]).not.toMatch(/position:\s*absolute\s*;/);
   });
 
