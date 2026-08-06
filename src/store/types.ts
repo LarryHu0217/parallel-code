@@ -11,7 +11,6 @@ export type GitIsolationMode = 'worktree' | 'direct' | 'none';
 
 export interface AutoDiscoveredMcpConfigState {
   path: string;
-  previousParallelCode?: unknown;
   writtenParallelCodeFingerprint: string;
 }
 

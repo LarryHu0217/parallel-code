@@ -3,7 +3,7 @@
 // using existing backend primitives (pty, git, tasks).
 
 import { createHash, randomUUID, randomBytes } from 'crypto';
-import { execFile } from 'child_process';
+import { execFile, spawnSync } from 'child_process';
 import { dirname, join } from 'path';
 import { promisify } from 'util';
 import { mkdirSync, unlinkSync, readFileSync, existsSync } from 'fs';
@@ -92,6 +92,7 @@ const PREAMBLE_ARTIFACT_PATHS = new Set([
   '.claude/settings.local.json',
 ]);
 const UNRESOLVED_LANDED_COMMIT = 'unresolved';
+const KIMI_AUTO_DISCOVERED_MCP_PATHS = ['.kimi-code/mcp.json', '.mcp.json'] as const;
 
 type McpJsonContent = Record<string, unknown> & {
   mcpServers?: Record<string, unknown>;
@@ -135,16 +136,26 @@ function mcpEntryFingerprint(value: unknown): string {
     .digest('hex');
 }
 
+function isTrackedGitPath(worktreePath: string, relativePath: string): boolean {
+  const result = spawnSync('git', ['ls-files', '--error-unmatch', '--', relativePath], {
+    cwd: worktreePath,
+    stdio: 'ignore',
+  });
+  if (result.error) {
+    throw new Error(`Unable to verify whether ${relativePath} is tracked: ${result.error.message}`);
+  }
+  if (result.status === 0) return true;
+  if (result.status === 1) return false;
+  throw new Error(`Unable to verify whether ${relativePath} is tracked`);
+}
+
 function validateAutoDiscoveredMcpConfigState(
   value: unknown,
   worktreePath: string,
 ): AutoDiscoveredMcpConfigState | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const state = value as Record<string, unknown>;
-  const allowedPaths = [
-    join(worktreePath, '.mcp.json'),
-    join(worktreePath, '.kimi-code', 'mcp.json'),
-  ];
+  const allowedPaths = KIMI_AUTO_DISCOVERED_MCP_PATHS.map((path) => join(worktreePath, path));
   if (typeof state.path !== 'string' || !allowedPaths.includes(state.path)) return undefined;
   if (
     typeof state.writtenParallelCodeFingerprint !== 'string' ||
@@ -153,7 +164,6 @@ function validateAutoDiscoveredMcpConfigState(
     return undefined;
   return {
     path: state.path,
-    previousParallelCode: state.previousParallelCode,
     writtenParallelCodeFingerprint: state.writtenParallelCodeFingerprint,
   };
 }
@@ -1586,12 +1596,43 @@ export class Coordinator {
   ): void {
     if (!task.agentCommand || !isKimiCommand(task.agentCommand)) return;
 
-    const configPath = join(task.worktreePath, '.kimi-code', 'mcp.json');
     const writtenParallelCode = mcpConfig.mcpServers['parallel-code'];
     const priorState = task.autoDiscoveredMcpConfig;
-    const existingContent = existsSync(configPath) ? readFileSync(configPath, 'utf-8') : undefined;
-    const content =
-      existingContent === undefined ? {} : parseMcpJsonContent(configPath, existingContent);
+    const candidates = KIMI_AUTO_DISCOVERED_MCP_PATHS.map((relativePath) => {
+      const configPath = join(task.worktreePath, relativePath);
+      return {
+        relativePath,
+        configPath,
+        tracked: isTrackedGitPath(task.worktreePath, relativePath),
+        content: readMcpJsonContent(configPath),
+      };
+    });
+
+    for (const candidate of candidates) {
+      const existingParallelCode = candidate.content.mcpServers?.['parallel-code'];
+      const isManagedCandidate = priorState?.path === candidate.configPath;
+      if (existingParallelCode !== undefined && !isManagedCandidate) {
+        throw new Error(
+          `Unable to create Kimi child MCP config: ${candidate.relativePath} already defines mcpServers["parallel-code"].`,
+        );
+      }
+    }
+
+    const candidate = priorState
+      ? candidates.find(({ configPath }) => configPath === priorState.path)
+      : candidates.find(({ tracked }) => !tracked);
+    if (!candidate) {
+      throw new Error(
+        'Unable to create Kimi child MCP config: both .kimi-code/mcp.json and .mcp.json are tracked by Git.',
+      );
+    }
+    if (candidate.tracked) {
+      throw new Error(
+        `Unable to create Kimi child MCP config: ${candidate.relativePath} is tracked by Git.`,
+      );
+    }
+
+    const { configPath, content, relativePath } = candidate;
     const servers = content.mcpServers ?? {};
 
     if (
@@ -1605,22 +1646,19 @@ export class Coordinator {
       return;
     }
 
-    const previousParallelCode =
-      priorState?.path === configPath ? priorState.previousParallelCode : servers['parallel-code'];
     content.mcpServers = { ...servers, 'parallel-code': writtenParallelCode };
     mkdirSync(dirname(configPath), { recursive: true });
     atomicWriteFileSync(configPath, JSON.stringify(content, null, 2), { mode: 0o600 });
     task.autoDiscoveredMcpConfig = {
       path: configPath,
-      previousParallelCode,
       writtenParallelCodeFingerprint: mcpEntryFingerprint(writtenParallelCode),
     };
     this.syncAutoDiscoveredMcpConfig(task);
 
     appendGitInfoExcludeBlock(
       task.worktreePath,
-      '.kimi-code/mcp.json',
-      '# Parallel Code Kimi MCP config (contains ephemeral token)\n.kimi-code/mcp.json\n',
+      relativePath,
+      `# Parallel Code Kimi MCP config (contains ephemeral token)\n${relativePath}\n`,
       (err) => console.warn('[MCP] Could not git-exclude child Kimi MCP config:', err),
     );
   }
@@ -1632,15 +1670,37 @@ export class Coordinator {
     });
   }
 
+  private readManagedMcpEntryFromTaskConfig(
+    task: CoordinatedTask,
+    state: AutoDiscoveredMcpConfigState,
+  ): unknown {
+    if (!task.mcpConfigPath || !existsSync(task.mcpConfigPath)) return undefined;
+    try {
+      const entry = readMcpJsonContent(task.mcpConfigPath).mcpServers?.['parallel-code'];
+      return mcpEntryFingerprint(entry) === state.writtenParallelCodeFingerprint
+        ? entry
+        : undefined;
+    } catch (err) {
+      logWarn('coordinator.kimi_mcp', 'failed to read per-task MCP config for history check', {
+        taskId: task.id,
+        configPath: task.mcpConfigPath,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return undefined;
+    }
+  }
+
   private restoreTaskAutoDiscoveredMcpConfig(task: CoordinatedTask): RestoreMcpConfigResult {
     const state = task.autoDiscoveredMcpConfig;
     if (!state) return { status: 'none' };
 
     try {
       if (!existsSync(state.path)) {
+        const managedEntry = this.readManagedMcpEntryFromTaskConfig(task, state);
+        if (managedEntry === undefined) return { status: 'failed' };
         task.autoDiscoveredMcpConfig = undefined;
         this.syncAutoDiscoveredMcpConfig(task);
-        return { status: 'restored' };
+        return { status: 'restored', managedEntry };
       }
 
       const content = readMcpJsonContent(state.path);
@@ -1649,11 +1709,7 @@ export class Coordinator {
       if (mcpEntryFingerprint(managedEntry) !== state.writtenParallelCodeFingerprint)
         return { status: 'failed' };
 
-      if (state.previousParallelCode !== undefined) {
-        servers['parallel-code'] = state.previousParallelCode;
-      } else {
-        delete servers['parallel-code'];
-      }
+      delete servers['parallel-code'];
 
       const hasServers = Object.keys(servers).length > 0;
       const hasOtherKeys = Object.keys(content).some((key) => key !== 'mcpServers');
@@ -1693,18 +1749,21 @@ export class Coordinator {
     managedEntry: unknown,
   ): Promise<void> {
     const tokens = this.extractManagedMcpTokens(managedEntry);
-    for (const token of tokens) {
-      const result = await execAsync(
-        'git',
-        ['log', '--all', '--format=%H', '-S', token, '--', '.mcp.json', '.kimi-code/mcp.json'],
-        { cwd: task.worktreePath },
+    if (tokens.length === 0) {
+      throw new Error(
+        'Unable to verify managed Kimi MCP tokens before landing or merge; refusing to continue.',
       );
-      const matches = execStdout(result).trim();
-      if (matches) {
-        throw new Error(
-          'Managed Kimi MCP token was found in task Git history; refusing to land or merge until the token-bearing commit is removed.',
-        );
-      }
+    }
+    const result = await execAsync(
+      'git',
+      ['log', '--all', '-p', '--format=', '--', '.mcp.json', '.kimi-code/mcp.json'],
+      { cwd: task.worktreePath },
+    );
+    const history = execStdout(result);
+    if (tokens.some((token) => history.includes(token))) {
+      throw new Error(
+        'Managed Kimi MCP token was found in task Git history; refusing to land or merge until the token-bearing commit is removed.',
+      );
     }
   }
 

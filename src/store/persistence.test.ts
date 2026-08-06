@@ -246,7 +246,6 @@ describe('landing state persistence', () => {
 describe('Kimi auto-discovered MCP config persistence', () => {
   const autoDiscoveredMcpConfig = {
     path: '/repo/.worktrees/task-1/.kimi-code/mcp.json',
-    previousParallelCode: { command: 'user-owned-server' },
     writtenParallelCodeFingerprint: 'a'.repeat(64),
   };
 

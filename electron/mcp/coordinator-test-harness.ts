@@ -24,6 +24,7 @@ const enoent = () => Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
 
 const mocks = vi.hoisted(() => {
   const mockExecFile = vi.fn();
+  const mockSpawnSync = vi.fn();
   const mockWriteFileSync = vi.fn();
   const mockReadFileSync = vi.fn();
   const mockExistsSync = vi.fn();
@@ -56,6 +57,7 @@ const mocks = vi.hoisted(() => {
 
   return {
     mockExecFile,
+    mockSpawnSync,
     mockWriteFileSync,
     mockReadFileSync,
     mockExistsSync,
@@ -90,6 +92,7 @@ const mocks = vi.hoisted(() => {
 
 vi.mock('child_process', () => ({
   execFile: mocks.mockExecFile,
+  spawnSync: mocks.mockSpawnSync,
 }));
 
 vi.mock('fs', () => ({
@@ -220,6 +223,7 @@ vi.mock('../log.js', () => ({
 
 export const {
   mockExecFile,
+  mockSpawnSync,
   mockWriteFileSync,
   mockReadFileSync,
   mockExistsSync,
@@ -283,6 +287,8 @@ export function resetCoordinatorMocks(): void {
       return { on: vi.fn() };
     },
   );
+  mockSpawnSync.mockReset();
+  mockSpawnSync.mockReturnValue({ status: 1, error: undefined, stderr: Buffer.alloc(0) });
 
   mockWriteFileSync.mockReset();
   mockReadFileSync.mockReset();
