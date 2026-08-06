@@ -119,6 +119,48 @@ describe('plan selection DOM behavior', () => {
     );
   });
 
+  it('preserves native inline whitespace between selected formatted text', () => {
+    const container = document.createElement('div');
+    container.innerHTML = '<p><strong>Hello</strong> <em>world</em></p>';
+    document.body.append(container);
+
+    const strongText = container.querySelector('strong')?.firstChild as Text;
+    const emphasizedText = container.querySelector('em')?.firstChild as Text;
+    selectText(strongText, emphasizedText);
+
+    expect(getPlanSelection(container, 'plan.md')?.selectedText).toBe('Hello world');
+  });
+
+  it('preserves rendered soft and hard line breaks in selected Markdown text', () => {
+    const container = document.createElement('div');
+    container.innerHTML = '<p>Soft\nbreak<br>Hard break</p>';
+    document.body.append(container);
+
+    const firstText = container.querySelector('p')?.firstChild as Text;
+    const lastText = container.querySelector('p')?.lastChild as Text;
+    selectText(firstText, lastText);
+
+    expect(getPlanSelection(container, 'plan.md')?.selectedText).toBe('Soft break\nHard break');
+  });
+
+  it('preserves table cell and row separators in selected Markdown tables', () => {
+    const container = document.createElement('div');
+    container.innerHTML = `
+      <table>
+        <tbody>
+          <tr><td>A</td><td>B</td></tr>
+          <tr><td>C</td><td>D</td></tr>
+        </tbody>
+      </table>
+    `;
+    document.body.append(container);
+
+    const cells = container.querySelectorAll('td');
+    selectText(cells[0].firstChild as Text, cells[3].firstChild as Text);
+
+    expect(getPlanSelection(container, 'plan.md')?.selectedText).toBe('A\tB\nC\tD');
+  });
+
   it('recalculates retained range geometry when the plan reflows', () => {
     const container = document.createElement('div');
     container.innerHTML = '<p>First block</p><p>Second block</p>';
