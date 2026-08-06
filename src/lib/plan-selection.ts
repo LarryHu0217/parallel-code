@@ -59,6 +59,30 @@ function isHiddenSelectionTextNode(node: Node, containerEl: HTMLElement): boolea
   return false;
 }
 
+function isHiddenSelectionElement(element: Element, containerEl: HTMLElement): boolean {
+  let current: Element | null = element;
+  while (current && current !== containerEl) {
+    const tagName = current.tagName.toLowerCase();
+    if (
+      tagName === 'style' ||
+      tagName === 'script' ||
+      tagName === 'defs' ||
+      tagName === 'metadata' ||
+      tagName === 'title' ||
+      tagName === 'desc' ||
+      current.hasAttribute('hidden') ||
+      current.getAttribute('aria-hidden') === 'true'
+    ) {
+      return true;
+    }
+
+    const style = window.getComputedStyle(current);
+    if (style.display === 'none' || style.visibility === 'hidden') return true;
+    current = current.parentElement;
+  }
+  return false;
+}
+
 function getSelectedTextContent(text: Text, selectedRange: Range): string {
   const start = text === selectedRange.startContainer ? selectedRange.startOffset : 0;
   const end = text === selectedRange.endContainer ? selectedRange.endOffset : text.length;
@@ -74,26 +98,75 @@ function getSelectionTextBlock(node: Node, containerEl: HTMLElement): Element | 
 function getPlanSelectionVisibleText(containerEl: HTMLElement, selectedRange: Range): string {
   const parts: string[] = [];
   let lastBlock: Element | null = null;
-  const walker = document.createTreeWalker(containerEl, NodeFilter.SHOW_TEXT);
-  let node = walker.nextNode();
-  while (node) {
-    if (
-      !isInPlanReviewFlowSlot(node) &&
-      !isHiddenSelectionTextNode(node, containerEl) &&
-      selectedRange.intersectsNode(node)
-    ) {
-      const text = getSelectedTextContent(node as Text, selectedRange);
-      const block = getSelectionTextBlock(node, containerEl);
-      if (text && (text.trim() || block?.tagName === 'PRE')) {
-        if (parts.length > 0 && block && block !== lastBlock) {
-          parts.push('\n');
-        }
-        parts.push(text);
-        lastBlock = block;
-      }
-    }
-    node = walker.nextNode();
+  let lastCell: Element | null = null;
+  let lastRow: Element | null = null;
+
+  function trimTrailingHorizontalWhitespace(): void {
+    const last = parts.at(-1);
+    if (last !== undefined) parts[parts.length - 1] = last.replace(/[ \t]+$/u, '');
   }
+
+  function appendBoundary(block: Element | null, cell: Element | null, row: Element | null): void {
+    if (parts.length === 0) return;
+    if (row && lastRow && row !== lastRow) {
+      trimTrailingHorizontalWhitespace();
+      parts.push('\n');
+    } else if (cell && lastCell && cell !== lastCell && row === lastRow) {
+      trimTrailingHorizontalWhitespace();
+      parts.push('\t');
+    } else if (block && block !== lastBlock) {
+      trimTrailingHorizontalWhitespace();
+      parts.push('\n');
+    }
+  }
+
+  function appendTextForNode(node: Text): void {
+    if (
+      isInPlanReviewFlowSlot(node) ||
+      isHiddenSelectionTextNode(node, containerEl) ||
+      !selectedRange.intersectsNode(node)
+    ) {
+      return;
+    }
+
+    const rawText = getSelectedTextContent(node, selectedRange);
+    if (!rawText) return;
+
+    const parent = node.parentElement;
+    const block = getSelectionTextBlock(node, containerEl);
+    const cell = parent?.closest('td, th') ?? null;
+    const row = parent?.closest('tr') ?? null;
+    const isPreformatted = Boolean(parent?.closest('pre'));
+    const text = isPreformatted ? rawText : rawText.replace(/\s+/g, ' ');
+    if (!block && !text.trim()) return;
+    if (!text.trim() && !isPreformatted && parts.length === 0) return;
+
+    appendBoundary(block, cell, row);
+    parts.push(text);
+    lastBlock = block;
+    lastCell = cell;
+    lastRow = row;
+  }
+
+  function visit(node: Node): void {
+    if (node.nodeType === Node.TEXT_NODE) {
+      appendTextForNode(node as Text);
+      return;
+    }
+
+    if (!(node instanceof Element)) return;
+    if (isInPlanReviewFlowSlot(node) || isHiddenSelectionElement(node, containerEl)) return;
+    if (node !== containerEl && !selectedRange.intersectsNode(node)) return;
+
+    if (node.tagName === 'BR') {
+      parts.push('\n');
+      return;
+    }
+
+    for (const child of Array.from(node.childNodes)) visit(child);
+  }
+
+  visit(containerEl);
   return parts.join('').trim();
 }
 
