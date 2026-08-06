@@ -4,9 +4,9 @@
 
 import { createHash, randomUUID, randomBytes } from 'crypto';
 import { execFile } from 'child_process';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import { promisify } from 'util';
-import { unlinkSync, readFileSync, existsSync } from 'fs';
+import { mkdirSync, unlinkSync, readFileSync, existsSync } from 'fs';
 import { unlink as fsUnlink } from 'fs/promises';
 import {
   buildSubTaskMcpConfig,
@@ -97,6 +97,11 @@ type McpJsonContent = Record<string, unknown> & {
   mcpServers?: Record<string, unknown>;
 };
 
+type RestoreMcpConfigResult = {
+  status: 'none' | 'restored' | 'failed';
+  managedEntry?: unknown;
+};
+
 function parseMcpJsonContent(configPath: string, raw: string): McpJsonContent {
   let parsed: unknown;
   try {
@@ -136,7 +141,11 @@ function validateAutoDiscoveredMcpConfigState(
 ): AutoDiscoveredMcpConfigState | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const state = value as Record<string, unknown>;
-  if (state.path !== join(worktreePath, '.mcp.json')) return undefined;
+  const allowedPaths = [
+    join(worktreePath, '.mcp.json'),
+    join(worktreePath, '.kimi-code', 'mcp.json'),
+  ];
+  if (typeof state.path !== 'string' || !allowedPaths.includes(state.path)) return undefined;
   if (
     typeof state.writtenParallelCodeFingerprint !== 'string' ||
     !/^[a-f0-9]{64}$/.test(state.writtenParallelCodeFingerprint)
@@ -144,7 +153,6 @@ function validateAutoDiscoveredMcpConfigState(
     return undefined;
   return {
     path: state.path,
-    previousContent: typeof state.previousContent === 'string' ? state.previousContent : undefined,
     previousParallelCode: state.previousParallelCode,
     writtenParallelCodeFingerprint: state.writtenParallelCodeFingerprint,
   };
@@ -1578,7 +1586,7 @@ export class Coordinator {
   ): void {
     if (!task.agentCommand || !isKimiCommand(task.agentCommand)) return;
 
-    const configPath = join(task.worktreePath, '.mcp.json');
+    const configPath = join(task.worktreePath, '.kimi-code', 'mcp.json');
     const writtenParallelCode = mcpConfig.mcpServers['parallel-code'];
     const priorState = task.autoDiscoveredMcpConfig;
     const existingContent = existsSync(configPath) ? readFileSync(configPath, 'utf-8') : undefined;
@@ -1599,13 +1607,11 @@ export class Coordinator {
 
     const previousParallelCode =
       priorState?.path === configPath ? priorState.previousParallelCode : servers['parallel-code'];
-    const previousContent =
-      priorState?.path === configPath ? priorState.previousContent : existingContent;
     content.mcpServers = { ...servers, 'parallel-code': writtenParallelCode };
+    mkdirSync(dirname(configPath), { recursive: true });
     atomicWriteFileSync(configPath, JSON.stringify(content, null, 2), { mode: 0o600 });
     task.autoDiscoveredMcpConfig = {
       path: configPath,
-      previousContent,
       previousParallelCode,
       writtenParallelCodeFingerprint: mcpEntryFingerprint(writtenParallelCode),
     };
@@ -1613,9 +1619,9 @@ export class Coordinator {
 
     appendGitInfoExcludeBlock(
       task.worktreePath,
-      '.mcp.json',
-      '# Parallel Code MCP config (contains ephemeral token)\n.mcp.json\n',
-      (err) => console.warn('[MCP] Could not git-exclude child .mcp.json:', err),
+      '.kimi-code/mcp.json',
+      '# Parallel Code Kimi MCP config (contains ephemeral token)\n.kimi-code/mcp.json\n',
+      (err) => console.warn('[MCP] Could not git-exclude child Kimi MCP config:', err),
     );
   }
 
@@ -1626,33 +1632,22 @@ export class Coordinator {
     });
   }
 
-  private restoreTaskAutoDiscoveredMcpConfig(
-    task: CoordinatedTask,
-  ): 'none' | 'restored' | 'failed' {
+  private restoreTaskAutoDiscoveredMcpConfig(task: CoordinatedTask): RestoreMcpConfigResult {
     const state = task.autoDiscoveredMcpConfig;
-    if (!state) return 'none';
+    if (!state) return { status: 'none' };
 
     try {
       if (!existsSync(state.path)) {
-        if (state.previousContent !== undefined) {
-          atomicWriteFileSync(state.path, state.previousContent, { mode: 0o600 });
-        }
         task.autoDiscoveredMcpConfig = undefined;
         this.syncAutoDiscoveredMcpConfig(task);
-        return 'restored';
+        return { status: 'restored' };
       }
 
       const content = readMcpJsonContent(state.path);
       const servers = content.mcpServers ?? {};
-      if (mcpEntryFingerprint(servers['parallel-code']) !== state.writtenParallelCodeFingerprint)
-        return 'failed';
-
-      if (state.previousContent !== undefined) {
-        atomicWriteFileSync(state.path, state.previousContent, { mode: 0o600 });
-        task.autoDiscoveredMcpConfig = undefined;
-        this.syncAutoDiscoveredMcpConfig(task);
-        return 'restored';
-      }
+      const managedEntry = servers['parallel-code'];
+      if (mcpEntryFingerprint(managedEntry) !== state.writtenParallelCodeFingerprint)
+        return { status: 'failed' };
 
       if (state.previousParallelCode !== undefined) {
         servers['parallel-code'] = state.previousParallelCode;
@@ -1666,21 +1661,50 @@ export class Coordinator {
         unlinkSync(state.path);
         task.autoDiscoveredMcpConfig = undefined;
         this.syncAutoDiscoveredMcpConfig(task);
-        return 'restored';
+        return { status: 'restored', managedEntry };
       }
       if (hasServers) content.mcpServers = servers;
       else delete content.mcpServers;
       atomicWriteFileSync(state.path, JSON.stringify(content, null, 2), { mode: 0o600 });
       task.autoDiscoveredMcpConfig = undefined;
       this.syncAutoDiscoveredMcpConfig(task);
-      return 'restored';
+      return { status: 'restored', managedEntry };
     } catch (err) {
       logWarn('coordinator.kimi_mcp', 'failed to restore auto-discovered MCP config', {
         taskId: task.id,
         configPath: state.path,
         error: err instanceof Error ? err.message : String(err),
       });
-      return 'failed';
+      return { status: 'failed' };
+    }
+  }
+
+  private extractManagedMcpTokens(managedEntry: unknown): string[] {
+    if (!managedEntry || typeof managedEntry !== 'object' || Array.isArray(managedEntry)) return [];
+    const env = (managedEntry as { env?: unknown }).env;
+    if (!env || typeof env !== 'object' || Array.isArray(env)) return [];
+    return ['PARALLEL_CODE_MCP_TOKEN', 'PARALLEL_CODE_MCP_DONE_TOKEN']
+      .map((key) => (env as Record<string, unknown>)[key])
+      .filter((value): value is string => typeof value === 'string' && value.length > 0);
+  }
+
+  private async assertManagedMcpTokensAbsentFromGitHistory(
+    task: CoordinatedTask,
+    managedEntry: unknown,
+  ): Promise<void> {
+    const tokens = this.extractManagedMcpTokens(managedEntry);
+    for (const token of tokens) {
+      const result = await execAsync(
+        'git',
+        ['log', '--all', '--format=%H', '-S', token, '--', '.mcp.json', '.kimi-code/mcp.json'],
+        { cwd: task.worktreePath },
+      );
+      const matches = execStdout(result).trim();
+      if (matches) {
+        throw new Error(
+          'Managed Kimi MCP token was found in task Git history; refusing to land or merge until the token-bearing commit is removed.',
+        );
+      }
     }
   }
 
@@ -1788,13 +1812,24 @@ export class Coordinator {
     task.landingSummary = input.summary;
 
     const restoreMcpConfig = this.restoreTaskAutoDiscoveredMcpConfig(task);
-    if (restoreMcpConfig === 'failed') {
+    if (restoreMcpConfig.status === 'failed') {
       const reason =
         'Unable to restore managed Kimi MCP config before self-landing; refusing to validate or merge a worktree that may contain ephemeral MCP tokens.';
       this.escalateLanding(task, 'landing_escalated', reason);
       throw new Error(reason);
     }
-    const shouldRefreshMcpConfig = restoreMcpConfig === 'restored';
+    if (restoreMcpConfig.managedEntry !== undefined) {
+      try {
+        await this.assertManagedMcpTokensAbsentFromGitHistory(task, restoreMcpConfig.managedEntry);
+      } catch (err) {
+        if (restoreMcpConfig.status === 'restored')
+          this.refreshTaskMcpConfigAfterLandingFailure(task);
+        const reason = err instanceof Error ? err.message : String(err);
+        this.escalateLanding(task, 'landing_escalated', reason);
+        throw err;
+      }
+    }
+    const shouldRefreshMcpConfig = restoreMcpConfig.status === 'restored';
     try {
       await this.prepareCleanSelfLandingWorktree(task);
     } catch (err) {
@@ -1891,12 +1926,21 @@ export class Coordinator {
     if (!task) throw new Error(`Task not found: ${taskId}`);
     this.assertTaskCanBeMerged(task);
     const restoreMcpConfig = this.restoreTaskAutoDiscoveredMcpConfig(task);
-    if (restoreMcpConfig === 'failed') {
+    if (restoreMcpConfig.status === 'failed') {
       throw new Error(
         'Unable to restore managed Kimi MCP config before merge; refusing to stage or merge a worktree that may contain ephemeral MCP tokens.',
       );
     }
-    const shouldRefreshMcpConfig = restoreMcpConfig === 'restored';
+    if (restoreMcpConfig.managedEntry !== undefined) {
+      try {
+        await this.assertManagedMcpTokensAbsentFromGitHistory(task, restoreMcpConfig.managedEntry);
+      } catch (err) {
+        if (restoreMcpConfig.status === 'restored')
+          this.refreshTaskMcpConfigAfterLandingFailure(task);
+        throw err;
+      }
+    }
+    const shouldRefreshMcpConfig = restoreMcpConfig.status === 'restored';
 
     try {
       // Strip injected preamble files before staging so they don't land in history,

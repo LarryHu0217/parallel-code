@@ -1330,7 +1330,7 @@ describe('MCP_TaskStateSync listener', () => {
 
   it('stores and clears the auto-discovered MCP restoration snapshot', () => {
     const snapshot = {
-      path: '/repo/.worktrees/task-1/.mcp.json',
+      path: '/repo/.worktrees/task-1/.kimi-code/mcp.json',
       previousParallelCode: { command: 'user-owned-server' },
       writtenParallelCodeFingerprint: 'a'.repeat(64),
     };
