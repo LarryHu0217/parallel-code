@@ -14,6 +14,7 @@ const BLOCK_SELECTOR = 'p, li, h1, h2, h3, h4, h5, h6, pre, tr';
 const SELECTION_TEXT_BLOCK_SELECTOR = `${BLOCK_SELECTOR}, .mermaid-block`;
 const HEADING_SELECTOR = 'h1, h2, h3, h4, h5, h6';
 export const PLAN_REVIEW_FLOW_SLOT_SELECTOR = '[data-plan-review-flow-slot]';
+let renderedInnerTextSupported: boolean | null = null;
 
 export interface PlanSelectionRect {
   top: number;
@@ -96,6 +97,9 @@ function getSelectionTextBlock(node: Node, containerEl: HTMLElement): Element | 
 }
 
 function getPlanSelectionVisibleText(containerEl: HTMLElement, selectedRange: Range): string {
+  const renderedText = getPlanSelectionRenderedText(containerEl, selectedRange);
+  if (renderedText !== null) return renderedText;
+
   const parts: string[] = [];
   let lastBlock: Element | null = null;
   let lastCell: Element | null = null;
@@ -106,16 +110,21 @@ function getPlanSelectionVisibleText(containerEl: HTMLElement, selectedRange: Ra
     if (last !== undefined) parts[parts.length - 1] = last.replace(/[ \t]+$/u, '');
   }
 
+  function trimTrailingBoundaryWhitespace(): void {
+    const last = parts.at(-1);
+    if (last !== undefined) parts[parts.length - 1] = last.replace(/\s+$/u, '');
+  }
+
   function appendBoundary(block: Element | null, cell: Element | null, row: Element | null): void {
     if (parts.length === 0) return;
     if (row && lastRow && row !== lastRow) {
-      trimTrailingHorizontalWhitespace();
+      trimTrailingBoundaryWhitespace();
       parts.push('\n');
     } else if (cell && lastCell && cell !== lastCell && row === lastRow) {
       trimTrailingHorizontalWhitespace();
       parts.push('\t');
     } else if (block && block !== lastBlock) {
-      trimTrailingHorizontalWhitespace();
+      trimTrailingBoundaryWhitespace();
       parts.push('\n');
     }
   }
@@ -138,6 +147,7 @@ function getPlanSelectionVisibleText(containerEl: HTMLElement, selectedRange: Ra
     const row = parent?.closest('tr') ?? null;
     const isPreformatted = Boolean(parent?.closest('pre'));
     const text = isPreformatted ? rawText : rawText.replace(/\s+/g, ' ');
+    if (!text.trim() && !isPreformatted && row && !cell) return;
     if (!block && !text.trim()) return;
     if (!text.trim() && !isPreformatted && parts.length === 0) return;
 
@@ -168,6 +178,54 @@ function getPlanSelectionVisibleText(containerEl: HTMLElement, selectedRange: Ra
 
   visit(containerEl);
   return parts.join('').trim();
+}
+
+function getPlanSelectionRenderedText(
+  containerEl: HTMLElement,
+  selectedRange: Range,
+): string | null {
+  const host = document.createElement('div');
+  if (!('innerText' in host) || !supportsRenderedInnerText()) return null;
+
+  const fragment = selectedRange.cloneContents();
+  fragment.querySelectorAll(PLAN_REVIEW_FLOW_SLOT_SELECTOR).forEach((node) => node.remove());
+  fragment
+    .querySelectorAll('style, script, defs, metadata, title, desc, [hidden], [aria-hidden="true"]')
+    .forEach((node) => node.remove());
+
+  host.className = containerEl.className;
+  host.style.cssText = [
+    'position:absolute',
+    'left:-99999px',
+    'top:0',
+    'contain:layout style paint',
+    `width:${Math.max(containerEl.clientWidth, 1)}px`,
+  ].join(';');
+  host.append(fragment);
+
+  const parent = containerEl.parentElement ?? document.body;
+  parent.append(host);
+  try {
+    return host.innerText.replace(/[ \t]+\n/g, '\n').trim();
+  } finally {
+    host.remove();
+  }
+}
+
+function supportsRenderedInnerText(): boolean {
+  if (renderedInnerTextSupported !== null) return renderedInnerTextSupported;
+
+  const probe = document.createElement('div');
+  probe.style.cssText = 'position:absolute;left:-99999px;top:0';
+  probe.innerHTML = '<table><tbody><tr><td>A</td><td>B</td></tr></tbody></table><p>C<br>D</p>';
+  document.body.append(probe);
+  try {
+    const text = probe.innerText;
+    renderedInnerTextSupported = text.includes('A\tB') && text.includes('C\nD');
+    return renderedInnerTextSupported;
+  } finally {
+    probe.remove();
+  }
 }
 
 /** Return the selected text ranges that belong to plan content, excluding inline review UI. */
