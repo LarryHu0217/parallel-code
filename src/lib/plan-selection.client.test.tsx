@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { Marked } from 'marked';
 import {
   getPlanSelection,
   getPlanSelectionTextRanges,
@@ -30,6 +31,33 @@ function findTextNode(container: Node, value: string): Text {
     node = walker.nextNode();
   }
   throw new Error(`Could not find text node: ${value}`);
+}
+
+function renderPlanMarkdown(markdown: string): HTMLDivElement {
+  const container = document.createElement('div');
+  container.className = 'plan-markdown plan-markdown-dialog';
+  container.innerHTML = new Marked().parse(markdown, { async: false }) as string;
+  document.body.append(container);
+  return container;
+}
+
+function firstTextNodeIn(element: Element): Text {
+  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+  const node = walker.nextNode();
+  if (!node) throw new Error(`Could not find text in ${element.tagName}`);
+  return node as Text;
+}
+
+function lastTextNodeIn(element: Element): Text {
+  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+  let last: Node | null = null;
+  let node = walker.nextNode();
+  while (node) {
+    last = node;
+    node = walker.nextNode();
+  }
+  if (!last) throw new Error(`Could not find text in ${element.tagName}`);
+  return last as Text;
 }
 
 function rect(top: number, left = 0): DOMRect {
@@ -76,14 +104,9 @@ describe('plan selection DOM behavior', () => {
   });
 
   it('preserves rendered block breaks between selected code and prose', () => {
-    const container = document.createElement('div');
-    container.innerHTML = `
-      <pre class="shiki-block"><code>const x = 1;</code></pre>
-      <p>After step</p>
-    `;
-    document.body.append(container);
+    const container = renderPlanMarkdown('```ts\nconst x = 1;\n```\n\nAfter step');
 
-    const codeText = container.querySelector('code')?.firstChild as Text;
+    const codeText = firstTextNodeIn(container.querySelector('code') as HTMLElement);
     const proseText = container.querySelector('p')?.firstChild as Text;
     selectText(codeText, proseText);
 
@@ -120,9 +143,7 @@ describe('plan selection DOM behavior', () => {
   });
 
   it('preserves native inline whitespace between selected formatted text', () => {
-    const container = document.createElement('div');
-    container.innerHTML = '<p><strong>Hello</strong> <em>world</em></p>';
-    document.body.append(container);
+    const container = renderPlanMarkdown('**Hello** *world*');
 
     const strongText = container.querySelector('strong')?.firstChild as Text;
     const emphasizedText = container.querySelector('em')?.firstChild as Text;
@@ -132,9 +153,7 @@ describe('plan selection DOM behavior', () => {
   });
 
   it('preserves rendered soft and hard line breaks in selected Markdown text', () => {
-    const container = document.createElement('div');
-    container.innerHTML = '<p>Soft\nbreak<br>Hard break</p>';
-    document.body.append(container);
+    const container = renderPlanMarkdown('Soft\nbreak  \nHard break');
 
     const firstText = container.querySelector('p')?.firstChild as Text;
     const lastText = container.querySelector('p')?.lastChild as Text;
@@ -144,19 +163,10 @@ describe('plan selection DOM behavior', () => {
   });
 
   it('preserves table cell and row separators in selected Markdown tables', () => {
-    const container = document.createElement('div');
-    container.innerHTML = `
-      <table>
-        <tbody>
-          <tr><td>A</td><td>B</td></tr>
-          <tr><td>C</td><td>D</td></tr>
-        </tbody>
-      </table>
-    `;
-    document.body.append(container);
+    const container = renderPlanMarkdown('| Left | Right |\n| --- | --- |\n| A | B |\n| C | D |');
 
     const cells = container.querySelectorAll('td');
-    selectText(cells[0].firstChild as Text, cells[3].firstChild as Text);
+    selectText(firstTextNodeIn(cells[0]), lastTextNodeIn(cells[3]));
 
     expect(getPlanSelection(container, 'plan.md')?.selectedText).toBe('A\tB\nC\tD');
   });
