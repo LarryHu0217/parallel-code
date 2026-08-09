@@ -37,6 +37,7 @@ import {
   refreshPrChecksWatcher,
   isPrUrl,
 } from './pr-checks.js';
+import { loadGithubCodeQualityFindings } from './github-code-quality.js';
 import { readCoverageSummary } from './coverage.js';
 import { startRemoteServer, getMCPLogs, type RemoteProject } from '../remote/server.js';
 import type { RemoteAttentionState } from '../remote/protocol.js';
@@ -876,6 +877,10 @@ export function registerAllHandlers(win: BrowserWindow): void {
   ipcMain.handle(IPC.RefreshPrChecksWatcher, (_e, args) => {
     assertString(args.taskId, 'taskId');
     refreshPrChecksWatcher(args.taskId);
+  });
+  ipcMain.handle(IPC.GetGithubCodeQualityFindings, (_e, args) => {
+    validatePath(args.worktreePath, 'worktreePath');
+    return loadGithubCodeQualityFindings(args.worktreePath);
   });
 
   // --- Steps content (one-shot read) ---

@@ -136,6 +136,27 @@ export interface BranchPrDetectionResult {
   unavailable?: 'missing' | 'auth';
 }
 
+export interface GithubCodeQualityFinding {
+  id: string;
+  source: 'github-code-quality';
+  ruleId: string;
+  category: 'reliability' | 'maintainability';
+  severity: 'error' | 'warning' | 'note';
+  location: {
+    filePath: string;
+    startLine: number;
+    startColumn?: number;
+    endLine?: number;
+    endColumn?: number;
+  };
+  explanation: string;
+}
+
+export type GithubCodeQualityResult =
+  | { status: 'available'; findings: GithubCodeQualityFinding[] }
+  | { status: 'not-applicable' }
+  | { status: 'unavailable'; message: string };
+
 export interface StepEntry {
   summary: string;
   detail?: string;

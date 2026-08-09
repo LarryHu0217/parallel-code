@@ -72,6 +72,8 @@ export interface ReviewContextValue {
   findingsLoading: () => boolean;
   findingsError: () => string;
   clearFindingsError: () => void;
+  canRefreshFindings: () => boolean;
+  refreshFindings: () => void;
 
   beginDiffLoad: () => void;
   completeDiffLoad: (diffIdentity: string, files: FileDiff[]) => void;
@@ -375,6 +377,13 @@ export function ReviewProvider(props: ReviewProviderProps) {
     loadFindingsForDiff(next, files);
   }
 
+  function refreshFindings() {
+    if (!props.findingProvider || !activeReviewDiff || !wasOpen || findingsLoading()) return;
+    findingsLoadedFor = null;
+    findingsLoadedProvider = undefined;
+    loadFindingsForDiff(activeReviewDiff, activeReviewDiff.files);
+  }
+
   function suspendDiffLoad() {
     reviewLifecycleGeneration++;
     invalidateFindingLoad();
@@ -495,6 +504,8 @@ export function ReviewProvider(props: ReviewProviderProps) {
     findingsLoading,
     findingsError,
     clearFindingsError: () => setFindingsError(''),
+    canRefreshFindings: () => Boolean(props.findingProvider && activeReviewDiff && wasOpen),
+    refreshFindings,
     beginDiffLoad,
     completeDiffLoad,
     suspendDiffLoad,

@@ -9,6 +9,8 @@ export type {
   CreateTaskResult,
   FileDiffResult,
   GitIgnoredEntry,
+  GithubCodeQualityFinding,
+  GithubCodeQualityResult,
   ImportableWorktree,
   MergeResult,
   MergeStatus,

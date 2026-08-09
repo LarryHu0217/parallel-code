@@ -71,6 +71,14 @@ export function CloseIcon(props: IconProps): JSX.Element {
   );
 }
 
+export function RefreshIcon(props: IconProps): JSX.Element {
+  return (
+    <SvgIcon {...props}>
+      <path d="M13.8 4.2V1.75a.75.75 0 0 1 1.5 0V6a.75.75 0 0 1-.75.75H10.3a.75.75 0 0 1 0-1.5h2.4A5 5 0 1 0 13 10a.75.75 0 0 1 1.5 0A6.5 6.5 0 1 1 13.8 4.2Z" />
+    </SvgIcon>
+  );
+}
+
 export function CopyIcon(props: IconProps): JSX.Element {
   return (
     <SvgIcon {...props}>

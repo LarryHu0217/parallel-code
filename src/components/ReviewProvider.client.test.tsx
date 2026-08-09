@@ -245,6 +245,27 @@ describe('ReviewProvider client lifecycle', () => {
     ]);
   });
 
+  it('reloads the active diff only when an explicit finding refresh is requested', async () => {
+    const loadFindings = vi.fn(async (_context: QualityFindingLoadContext) => [
+      finding('finding-1'),
+    ]);
+    const { review } = mountReview({ loadFindings });
+    review.completeDiffLoad('diff-a', renderedDiff());
+    await flushAsyncWork();
+
+    expect(review.canRefreshFindings()).toBe(true);
+    expect(loadFindings).toHaveBeenCalledOnce();
+
+    review.refreshFindings();
+    await flushAsyncWork();
+
+    expect(loadFindings).toHaveBeenCalledTimes(2);
+    expect(loadFindings.mock.calls[1][0]).toMatchObject({
+      reviewIdentity: 'task-a:/worktree-a',
+      diffIdentity: 'diff-a',
+    });
+  });
+
   it('ignores a completed submission after navigation moves to another diff', async () => {
     let resolveSend: (() => void) | undefined;
     vi.mocked(sendPrompt).mockImplementation(

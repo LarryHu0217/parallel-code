@@ -3,7 +3,7 @@ import { useReview, type ReviewContextValue } from './ReviewProvider';
 import { ReviewSidebar } from './ReviewSidebar';
 import { theme } from '../lib/theme';
 import { sf } from '../lib/fontScale';
-import { CloseIcon } from './icons';
+import { CloseIcon, RefreshIcon } from './icons';
 
 interface ReviewSidebarState {
   reviewCount: number;
@@ -50,6 +50,41 @@ export function ReviewCommentsButton() {
         }}
       >
         Review ({state().reviewCount})
+      </button>
+    </Show>
+  );
+}
+
+export function QualityFindingsRefreshButton() {
+  const review = useReview();
+
+  return (
+    <Show when={review.canRefreshFindings()}>
+      <button
+        type="button"
+        onClick={review.refreshFindings}
+        disabled={review.findingsLoading()}
+        title={
+          review.findingsLoading() ? 'Refreshing quality findings' : 'Refresh quality findings'
+        }
+        aria-label="Refresh quality findings"
+        style={{
+          width: '26px',
+          height: '26px',
+          display: 'inline-flex',
+          'align-items': 'center',
+          'justify-content': 'center',
+          background: 'transparent',
+          color: theme.fgMuted,
+          border: `1px solid ${theme.border}`,
+          'border-radius': '4px',
+          cursor: review.findingsLoading() ? 'default' : 'pointer',
+          opacity: review.findingsLoading() ? '0.55' : '1',
+          padding: '0',
+          'flex-shrink': '0',
+        }}
+      >
+        <RefreshIcon size={14} />
       </button>
     </Show>
   );

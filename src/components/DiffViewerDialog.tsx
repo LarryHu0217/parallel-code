@@ -21,7 +21,11 @@ import {
   isCommitHashSelection,
   isUncommittedSelection,
 } from './CommitNavBar';
-import { ReviewCommentsButton, ReviewSidebarPanel } from './ReviewSidebarPanel';
+import {
+  QualityFindingsRefreshButton,
+  ReviewCommentsButton,
+  ReviewSidebarPanel,
+} from './ReviewSidebarPanel';
 import { ReviewProvider, useReview } from './ReviewProvider';
 import { ChangedFilesList } from './ChangedFilesList';
 import { CloseIcon } from './icons';
@@ -386,6 +390,7 @@ function DiffViewerContent(props: DiffViewerDialogProps) {
         </span>
 
         <ReviewCommentsButton />
+        <QualityFindingsRefreshButton />
 
         <span style={{ flex: '1' }} />
 
