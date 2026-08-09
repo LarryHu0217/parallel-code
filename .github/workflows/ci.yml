@@ -19,6 +19,9 @@ jobs:
 
       - run: npm ci
 
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
       - name: Check (compile + typecheck + lint + format)
         run: npm run check
 
