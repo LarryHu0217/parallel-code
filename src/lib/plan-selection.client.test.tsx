@@ -60,6 +60,14 @@ function lastTextNodeIn(element: Element): Text {
   return last as Text;
 }
 
+function getNativeSelectionText(): string {
+  return window.getSelection()?.toString().trim() ?? '';
+}
+
+function selectAllRenderedText(container: HTMLElement): void {
+  selectText(firstTextNodeIn(container), lastTextNodeIn(container));
+}
+
 function rect(top: number, left = 0): DOMRect {
   return {
     x: left,
@@ -75,7 +83,40 @@ function rect(top: number, left = 0): DOMRect {
 }
 
 describe('plan selection DOM behavior', () => {
-  it('excludes review-card text and blocks from a selection spanning a flow slot', () => {
+  it.each([
+    {
+      name: 'paragraphs and headings',
+      markdown: '# Goal\n\nFirst paragraph.\n\n## Details\n\nSecond paragraph.',
+    },
+    {
+      name: 'nested and loose lists',
+      markdown: '- Parent\n  - Nested child\n\n- Loose item\n\n  Continuation paragraph.',
+    },
+    {
+      name: 'fenced code and blockquotes',
+      markdown: '> Quoted step\n\n```ts\nconst ready = true;\n```',
+    },
+    {
+      name: 'inline emphasis, code, and links',
+      markdown: '**Bold** *emphasis* `inline code` [linked text](https://example.com)',
+    },
+    {
+      name: 'soft and hard breaks',
+      markdown: 'Soft\nbreak  \nHard break',
+    },
+    {
+      name: 'tables',
+      markdown: '| Left | Right |\n| --- | --- |\n| A | B |\n| C | D |',
+    },
+  ])('matches Chromium native selection for $name rendered by Marked', ({ markdown }) => {
+    const container = renderPlanMarkdown(markdown);
+    selectAllRenderedText(container);
+
+    const expected = getNativeSelectionText();
+    expect(getPlanSelection(container, 'plan.md')?.selectedText).toBe(expected);
+  });
+
+  it('intentionally excludes flow-slot UI while preserving Chromium block boundaries', () => {
     const container = document.createElement('div');
     container.innerHTML = `
       <p>Before plan text</p>
@@ -91,7 +132,7 @@ describe('plan selection DOM behavior', () => {
     const selection = getPlanSelection(container, 'plan.md');
     const textRanges = getPlanSelectionTextRanges(container);
 
-    expect(selection?.selectedText).toBe('Before plan text\nAfter plan text');
+    expect(selection?.selectedText).toBe('Before plan text\n\nAfter plan text');
     expect(selection).toMatchObject({ startLine: 0, endLine: 1 });
     expect(textRanges.map((range) => range.toString()).join('')).not.toContain('Previous feedback');
     expect(
@@ -113,7 +154,7 @@ describe('plan selection DOM behavior', () => {
     expect(getPlanSelection(container, 'plan.md')?.selectedText).toBe('const x = 1;\nAfter step');
   });
 
-  it('excludes hidden Mermaid SVG text from selected prompt text', () => {
+  it('intentionally excludes non-rendered Mermaid SVG text from prompt text', () => {
     const container = document.createElement('div');
     container.innerHTML = `
       <div class="mermaid-block mermaid-rendered" data-mermaid="graph TD"></div>
@@ -137,6 +178,7 @@ describe('plan selection DOM behavior', () => {
     const proseText = container.querySelector('p')?.firstChild as Text;
     selectText(hiddenText, proseText);
 
+    expect(window.getSelection()?.toString()).toContain('Hidden marker');
     expect(getPlanSelection(container, 'plan.md')?.selectedText).toBe(
       'Visible diagram label\nAfter diagram',
     );

@@ -11,10 +11,8 @@ export interface PlanSelection {
 }
 
 const BLOCK_SELECTOR = 'p, li, h1, h2, h3, h4, h5, h6, pre, tr';
-const SELECTION_TEXT_BLOCK_SELECTOR = `${BLOCK_SELECTOR}, .mermaid-block`;
 const HEADING_SELECTOR = 'h1, h2, h3, h4, h5, h6';
 export const PLAN_REVIEW_FLOW_SLOT_SELECTOR = '[data-plan-review-flow-slot]';
-let renderedInnerTextSupported: boolean | null = null;
 
 export interface PlanSelectionRect {
   top: number;
@@ -36,157 +34,11 @@ function isInPlanReviewFlowSlot(node: Node): boolean {
   return Boolean(element?.closest(PLAN_REVIEW_FLOW_SLOT_SELECTOR));
 }
 
-function isHiddenSelectionTextNode(node: Node, containerEl: HTMLElement): boolean {
-  let element = node.parentElement;
-  while (element && element !== containerEl) {
-    const tagName = element.tagName.toLowerCase();
-    if (
-      tagName === 'style' ||
-      tagName === 'script' ||
-      tagName === 'defs' ||
-      tagName === 'metadata' ||
-      tagName === 'title' ||
-      tagName === 'desc' ||
-      element.hasAttribute('hidden') ||
-      element.getAttribute('aria-hidden') === 'true'
-    ) {
-      return true;
-    }
-
-    const style = window.getComputedStyle(element);
-    if (style.display === 'none' || style.visibility === 'hidden') return true;
-    element = element.parentElement;
-  }
-  return false;
-}
-
-function isHiddenSelectionElement(element: Element, containerEl: HTMLElement): boolean {
-  let current: Element | null = element;
-  while (current && current !== containerEl) {
-    const tagName = current.tagName.toLowerCase();
-    if (
-      tagName === 'style' ||
-      tagName === 'script' ||
-      tagName === 'defs' ||
-      tagName === 'metadata' ||
-      tagName === 'title' ||
-      tagName === 'desc' ||
-      current.hasAttribute('hidden') ||
-      current.getAttribute('aria-hidden') === 'true'
-    ) {
-      return true;
-    }
-
-    const style = window.getComputedStyle(current);
-    if (style.display === 'none' || style.visibility === 'hidden') return true;
-    current = current.parentElement;
-  }
-  return false;
-}
-
-function getSelectedTextContent(text: Text, selectedRange: Range): string {
-  const start = text === selectedRange.startContainer ? selectedRange.startOffset : 0;
-  const end = text === selectedRange.endContainer ? selectedRange.endOffset : text.length;
-  return start < end ? text.data.slice(start, end) : '';
-}
-
-function getSelectionTextBlock(node: Node, containerEl: HTMLElement): Element | null {
-  const element = node.parentElement;
-  const block = element?.closest(SELECTION_TEXT_BLOCK_SELECTOR);
-  return block && containerEl.contains(block) ? block : null;
-}
-
 function getPlanSelectionVisibleText(containerEl: HTMLElement, selectedRange: Range): string {
-  const renderedText = getPlanSelectionRenderedText(containerEl, selectedRange);
-  if (renderedText !== null) return renderedText;
+  const selection = window.getSelection();
+  if (!selection) return '';
 
-  const parts: string[] = [];
-  let lastBlock: Element | null = null;
-  let lastCell: Element | null = null;
-  let lastRow: Element | null = null;
-
-  function trimTrailingHorizontalWhitespace(): void {
-    const last = parts.at(-1);
-    if (last !== undefined) parts[parts.length - 1] = last.replace(/[ \t]+$/u, '');
-  }
-
-  function trimTrailingBoundaryWhitespace(): void {
-    const last = parts.at(-1);
-    if (last !== undefined) parts[parts.length - 1] = last.replace(/\s+$/u, '');
-  }
-
-  function appendBoundary(block: Element | null, cell: Element | null, row: Element | null): void {
-    if (parts.length === 0) return;
-    if (row && lastRow && row !== lastRow) {
-      trimTrailingBoundaryWhitespace();
-      parts.push('\n');
-    } else if (cell && lastCell && cell !== lastCell && row === lastRow) {
-      trimTrailingHorizontalWhitespace();
-      parts.push('\t');
-    } else if (block && block !== lastBlock) {
-      trimTrailingBoundaryWhitespace();
-      parts.push('\n');
-    }
-  }
-
-  function appendTextForNode(node: Text): void {
-    if (
-      isInPlanReviewFlowSlot(node) ||
-      isHiddenSelectionTextNode(node, containerEl) ||
-      !selectedRange.intersectsNode(node)
-    ) {
-      return;
-    }
-
-    const rawText = getSelectedTextContent(node, selectedRange);
-    if (!rawText) return;
-
-    const parent = node.parentElement;
-    const block = getSelectionTextBlock(node, containerEl);
-    const cell = parent?.closest('td, th') ?? null;
-    const row = parent?.closest('tr') ?? null;
-    const isPreformatted = Boolean(parent?.closest('pre'));
-    const text = isPreformatted ? rawText : rawText.replace(/\s+/g, ' ');
-    if (!text.trim() && !isPreformatted && row && !cell) return;
-    if (!block && !text.trim()) return;
-    if (!text.trim() && !isPreformatted && parts.length === 0) return;
-
-    appendBoundary(block, cell, row);
-    parts.push(text);
-    lastBlock = block;
-    lastCell = cell;
-    lastRow = row;
-  }
-
-  function visit(node: Node): void {
-    if (node.nodeType === Node.TEXT_NODE) {
-      appendTextForNode(node as Text);
-      return;
-    }
-
-    if (!(node instanceof Element)) return;
-    if (isInPlanReviewFlowSlot(node) || isHiddenSelectionElement(node, containerEl)) return;
-    if (node !== containerEl && !selectedRange.intersectsNode(node)) return;
-
-    if (node.tagName === 'BR') {
-      parts.push('\n');
-      return;
-    }
-
-    for (const child of Array.from(node.childNodes)) visit(child);
-  }
-
-  visit(containerEl);
-  return parts.join('').trim();
-}
-
-function getPlanSelectionRenderedText(
-  containerEl: HTMLElement,
-  selectedRange: Range,
-): string | null {
   const host = document.createElement('div');
-  if (!('innerText' in host) || !supportsRenderedInnerText()) return null;
-
   const fragment = selectedRange.cloneContents();
   fragment.querySelectorAll(PLAN_REVIEW_FLOW_SLOT_SELECTOR).forEach((node) => node.remove());
   fragment
@@ -205,26 +57,30 @@ function getPlanSelectionRenderedText(
 
   const parent = containerEl.parentElement ?? document.body;
   parent.append(host);
+  const originalRanges = Array.from({ length: selection.rangeCount }, (_, index) =>
+    selection.getRangeAt(index).cloneRange(),
+  );
+  const { anchorNode, anchorOffset, focusNode, focusOffset } = selection;
+  const sanitizedRange = document.createRange();
+  sanitizedRange.selectNodeContents(host);
+
   try {
-    return host.innerText.replace(/[ \t]+\n/g, '\n').trim();
+    selection.removeAllRanges();
+    selection.addRange(sanitizedRange);
+    return selection.toString().trim();
   } finally {
+    selection.removeAllRanges();
+    let restoredDirection = false;
+    if (anchorNode && focusNode) {
+      try {
+        selection.setBaseAndExtent(anchorNode, anchorOffset, focusNode, focusOffset);
+        restoredDirection = true;
+      } catch {
+        restoredDirection = false;
+      }
+    }
+    if (!restoredDirection) originalRanges.forEach((range) => selection.addRange(range));
     host.remove();
-  }
-}
-
-function supportsRenderedInnerText(): boolean {
-  if (renderedInnerTextSupported !== null) return renderedInnerTextSupported;
-
-  const probe = document.createElement('div');
-  probe.style.cssText = 'position:absolute;left:-99999px;top:0';
-  probe.innerHTML = '<table><tbody><tr><td>A</td><td>B</td></tr></tbody></table><p>C<br>D</p>';
-  document.body.append(probe);
-  try {
-    const text = probe.innerText;
-    renderedInnerTextSupported = text.includes('A\tB') && text.includes('C\nD');
-    return renderedInnerTextSupported;
-  } finally {
-    probe.remove();
   }
 }
 
