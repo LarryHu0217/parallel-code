@@ -20,6 +20,7 @@ import {
   setShowPromptInput,
   setShowSidebarTips,
   setShowSidebarProgress,
+  setSidebarNeedsInputFirst,
   setFontSmoothing,
   setDesktopNotificationsEnabled,
   setVerboseLogging,
@@ -41,6 +42,7 @@ import {
   checkForUpdates,
 } from '../store/store';
 import { CustomAgentEditor } from './CustomAgentEditor';
+import { AgentEnvFileEditor } from './AgentEnvFileEditor';
 import { mod } from '../lib/platform';
 import { DEFAULT_DOCKER_IMAGE, PROJECT_DOCKERFILE_RELATIVE_PATH } from '../lib/docker';
 
@@ -445,6 +447,12 @@ export function SettingsDialog(props: SettingsDialogProps) {
               description="When hidden, the terminal occupies the full panel and auto-focuses on activation"
             />
             <SettingsCheckboxRow
+              label="Pin tasks that need input to the top of the sidebar"
+              checked={store.sidebarNeedsInputFirst}
+              onChange={setSidebarNeedsInputFirst}
+              description="Tasks waiting on an answer appear directly under New Task, most recent question first"
+            />
+            <SettingsCheckboxRow
               label="Show progress section in sidebar"
               checked={store.showSidebarProgress}
               onChange={setShowSidebarProgress}
@@ -786,6 +794,10 @@ export function SettingsDialog(props: SettingsDialogProps) {
             </div>
             <CustomAgentEditor />
           </div>
+
+          <SettingsSection title="Agent Environment">
+            <AgentEnvFileEditor />
+          </SettingsSection>
 
           <div style={{ display: 'flex', 'flex-direction': 'column', gap: '10px' }}>
             <div

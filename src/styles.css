@@ -110,6 +110,141 @@ body.font-smoothing {
   border: 0;
 }
 
+.task-branch-info-bar {
+  container-name: task-branch-info;
+  container-type: inline-size;
+  min-width: 0;
+}
+
+.task-branch-info-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.task-pr-link {
+  flex: 0 0 auto;
+}
+
+.task-branch-project,
+.task-branch-source,
+.task-branch-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.task-pr-ci-state {
+  width: 10px;
+  height: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+
+.task-pr-label,
+.task-pr-review-status {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.task-pr-review-icon {
+  display: none;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.task-branch-project-label,
+.task-branch-source-label,
+.task-branch-name-label,
+.task-branch-path-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-branch-source-prefix {
+  flex: 0 0 auto;
+}
+
+.task-branch-source-compact-label {
+  display: none;
+  flex: 0 0 auto;
+}
+
+.task-branch-path {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.task-branch-existing-worktree {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+@container task-branch-info (max-width: 720px) {
+  .task-branch-source-prefix,
+  .task-branch-source-label {
+    display: none;
+  }
+
+  .task-branch-source-compact-label {
+    display: inline;
+  }
+}
+
+@container task-branch-info (max-width: 620px) {
+  .task-branch-path,
+  .task-branch-existing-worktree {
+    display: none;
+  }
+
+  .task-branch-name {
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
+@container task-branch-info (max-width: 480px) {
+  .task-branch-project {
+    display: none;
+  }
+}
+
+@container task-branch-info (max-width: 420px) {
+  .task-pr-review-label {
+    display: none;
+  }
+
+  .task-pr-review-icon {
+    display: inline-flex;
+  }
+}
+
+@container task-branch-info (max-width: 340px) {
+  .task-branch-name,
+  .task-pr-prefix {
+    display: none;
+  }
+
+  .task-pr-ci-state {
+    order: 1;
+  }
+
+  .task-pr-review-status {
+    order: 2;
+  }
+
+  .task-pr-label {
+    order: 3;
+  }
+}
+
 .app-shell {
   position: relative;
   isolation: isolate;
@@ -908,6 +1043,46 @@ textarea::placeholder {
   color: var(--fg) !important;
 }
 
+/* Task names wrap to two lines rather than being cut mid-word — at sidebar
+   widths, similar names are otherwise indistinguishable. */
+.task-item-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+}
+
+.sidebar-attention-tray {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex-shrink: 0;
+  max-height: 32vh;
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--warning) 32%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--warning) 7%, transparent);
+}
+
+.sidebar-attention-tray-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 0 2px 2px;
+}
+
+.sidebar-attention-row + .sidebar-attention-row {
+  border-top: 1px solid color-mix(in srgb, var(--warning) 16%, transparent);
+}
+
 .sidebar-offscreen-attention-badge {
   display: inline-flex;
   align-items: center;
@@ -1256,15 +1431,15 @@ textarea::placeholder {
   animation: taskAppear 0.24s ease;
 }
 
+/* No max-height here: rows whose name wraps to two lines are taller than any
+   fixed cap, and a cap clips the second line for the length of the animation. */
 @keyframes taskItemAppear {
   from {
     opacity: 0;
-    max-height: 0;
     transform: translateX(-6px);
   }
   to {
     opacity: 1;
-    max-height: 40px;
     transform: translateX(0);
   }
 }
@@ -1947,6 +2122,77 @@ body.dragging-task * {
   padding: 0 4px;
   font-size: 16px;
   line-height: 1;
+}
+
+/* macOS press-and-hold quit hint. The bar filling up IS the feedback — it is
+   deliberately left out of the reduced-motion overrides below, since without it
+   there is nothing to show how much longer the key has to be held. The island
+   fades in on a delay so an accidental tap doesn't flash it; the bar underneath
+   still starts at mount, so it keeps telling the truth about elapsed time. */
+/* Shares the transient-message slot with the notification toast, one layer up:
+   a hint you see whenever a finger slips near Cmd+W belongs out of the way, not
+   centered over the terminals, and for its one second it outranks a toast. */
+.hold-to-quit {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  z-index: 2100;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 20px;
+  transform: translateX(-50%);
+  border: 1px solid var(--island-border);
+  border-radius: 8px;
+  background: var(--island-bg);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+  color: var(--fg);
+  font-size: 14px;
+  text-align: center;
+  pointer-events: none;
+  opacity: 0;
+  animation: hold-to-quit-appear 120ms ease 100ms forwards;
+}
+
+.hold-to-quit kbd {
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-elevated);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.hold-to-quit-track {
+  overflow: hidden;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border);
+}
+
+/* scaleX rather than width: a width keyframe relayouts every frame on the same
+   main thread that writes terminal output, so the bar stutters under load. */
+.hold-to-quit-fill {
+  display: block;
+  width: 100%;
+  height: 100%;
+  transform: scaleX(0);
+  transform-origin: left;
+  border-radius: 2px;
+  background: var(--accent);
+  animation: hold-to-quit-fill var(--hold-to-quit-ms) linear forwards;
+}
+
+@keyframes hold-to-quit-appear {
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes hold-to-quit-fill {
+  to {
+    transform: scaleX(1);
+  }
 }
 
 /* Monaco diff: hidden unchanged regions — make the collapse bar obvious and clickable */

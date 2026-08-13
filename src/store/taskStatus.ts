@@ -1,4 +1,4 @@
-import { createSignal } from 'solid-js';
+import { createSignal, untrack } from 'solid-js';
 import { invoke } from '../lib/ipc';
 import { IPC } from '../../electron/ipc/channels';
 import { store, setStore } from './core';
@@ -446,14 +446,59 @@ export function isAgentBracketedPasteEnabled(agentId: string): boolean {
   return agentStates.get(agentId)?.bracketedPasteEnabled === true;
 }
 
+// When each agent's current question first appeared (epoch ms). Cleared as soon
+// as the question goes away, so an entry only ever describes the open question.
+const questionSinceByAgent = new Map<string, number>();
+
 function updateQuestionState(agentId: string, hasQuestion: boolean): void {
-  setQuestionAgents((prev) => {
-    if (hasQuestion === prev.has(agentId)) return prev;
-    const next = new Set(prev);
-    if (hasQuestion) next.add(agentId);
-    else next.delete(agentId);
-    return next;
-  });
+  const asking = untrack(questionAgents);
+  if (hasQuestion === asking.has(agentId)) return;
+
+  const next = new Set(asking);
+  if (hasQuestion) {
+    next.add(agentId);
+    questionSinceByAgent.set(agentId, Date.now());
+  } else {
+    next.delete(agentId);
+    questionSinceByAgent.delete(agentId);
+  }
+  setQuestionAgents(next);
+}
+
+export interface TaskOpenQuestion {
+  /** The agent whose terminal is showing the question. */
+  agentId: string;
+  /** When the question appeared (epoch ms). */
+  since: number;
+}
+
+/** This task's newest open question — who is asking and since when — or null
+ *  when nothing in the task is asking.
+ *
+ *  Deliberately independent of `getTaskAttentionState`: that function reports a
+ *  single prioritized status, so an exited-non-zero agent (`error`) or a review
+ *  flag hides a question another agent is still blocked on. The sidebar tray
+ *  reads this instead. The desktop-notification watcher and `remoteStatusSync`
+ *  still classify `needs_input` from the attention state and so inherit that
+ *  masking — knowingly unconverted, since changing when a notification fires is
+ *  a product decision, not a mechanical follow-through. */
+export function getTaskOpenQuestion(taskId: string): TaskOpenQuestion | null {
+  const asking = questionAgents(); // reactive read
+  const task = store.tasks[taskId];
+  if (!task) return null;
+
+  let newest: TaskOpenQuestion | null = null;
+  const runningAgentIds = task.agentIds.filter((id) => store.agents[id]?.status === 'running');
+  for (const agentId of [...runningAgentIds, ...task.shellAgentIds]) {
+    if (!asking.has(agentId)) continue;
+    // The asking set and the onset map are separate structures kept in step by
+    // `updateQuestionState`, their sole writer. This is the one place they meet,
+    // so it is the one place that has to tolerate them drifting apart.
+    const since = questionSinceByAgent.get(agentId);
+    if (since === undefined) continue;
+    if (newest === null || since > newest.since) newest = { agentId, since };
+  }
+  return newest;
 }
 
 // --- Agent activity tracking ---

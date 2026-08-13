@@ -24,6 +24,7 @@ export {
   switchAgent,
   addCustomAgent,
   removeCustomAgent,
+  setAgentEnvFile,
 } from './agents';
 export {
   createTask,
@@ -86,6 +87,8 @@ export {
   triggerAction,
   getTaskFocusedPanel,
   setTaskFocusedPanel,
+  aiTerminalPanelId,
+  shellPanelId,
   isPanelFocused,
   isPanelFocusedPrefix,
   focusSidebar,
@@ -129,6 +132,7 @@ export {
   setShowPromptInput,
   setShowSidebarTips,
   setShowSidebarProgress,
+  setSidebarNeedsInputFirst,
   setProjectsCollapsed,
   setFontSmoothing,
   setDesktopNotificationsEnabled,
