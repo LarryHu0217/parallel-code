@@ -43,7 +43,7 @@ describe('sub-task preamble injection', () => {
     try {
       const injected = await injectSubTaskPreamble({
         worktreePath: dir,
-        agentCommand: 'kimi-code --yolo',
+        agentCommand: 'kimi',
         queue,
       });
 

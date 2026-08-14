@@ -3434,6 +3434,64 @@ describe('Coordinator sub-task MCP config isolation', () => {
     );
   });
 
+  it('only parses the selected Kimi discovery path', async () => {
+    mockSpawnSync.mockImplementation((_command: string, args: string[]) => ({
+      status: args[args.length - 1] === '.mcp.json' ? 0 : 1,
+      error: undefined,
+      stderr: Buffer.alloc(0),
+    }));
+    mockExistsSync.mockImplementation((path) => path === '/tmp/test/.mcp.json');
+    mockReadFileSync.mockImplementation((path) => {
+      if (path === '/tmp/test/.mcp.json') throw new Error('unused candidate must not be parsed');
+      return '# existing\n';
+    });
+    coordinator.setCoordinatorSpawnDefaults('coord-1', 'kimi', []);
+    coordinator.setMCPServerInfo(
+      'coord-1',
+      'http://localhost:3001',
+      'coordinator-tok',
+      'subtask-tok',
+      '/path/server.js',
+    );
+
+    await expect(
+      coordinator.createTask({ name: 'test', prompt: 'do', coordinatorTaskId: 'coord-1' }),
+    ).resolves.toBeDefined();
+    expect(mockReadFileSync).not.toHaveBeenCalledWith('/tmp/test/.mcp.json', 'utf-8');
+  });
+
+  it('keeps restarting sibling Kimi configs after one task refresh fails', async () => {
+    coordinator.setCoordinatorSpawnDefaults('coord-1', 'kimi', []);
+    coordinator.setMCPServerInfo(
+      'coord-1',
+      'http://localhost:3001',
+      'coordinator-tok',
+      'subtask-tok',
+      '/path/server.js',
+    );
+    await coordinator.createTask({ name: 'test', prompt: 'do', coordinatorTaskId: 'coord-1' });
+    mockSpawnSync.mockImplementation(() => ({
+      status: null,
+      error: new Error('worktree disappeared'),
+      stderr: Buffer.alloc(0),
+    }));
+
+    expect(() =>
+      coordinator.setMCPServerInfo(
+        'coord-1',
+        'http://localhost:3002',
+        'coordinator-tok-2',
+        'subtask-tok-2',
+        '/path/server.js',
+      ),
+    ).not.toThrow();
+    expect(mockLogWarn).toHaveBeenCalledWith(
+      'coordinator.kimi_mcp',
+      'failed to refresh Kimi child MCP config',
+      expect.objectContaining({ taskId: 'task-1' }),
+    );
+  });
+
   it('fails task creation when both Kimi discovery paths are tracked', async () => {
     mockSpawnSync.mockReturnValue({ status: 0, error: undefined, stderr: Buffer.alloc(0) });
     coordinator.setCoordinatorSpawnDefaults('coord-1', 'kimi', []);

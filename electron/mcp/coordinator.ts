@@ -687,7 +687,14 @@ export class Coordinator {
         doneToken: task.doneToken,
       });
       writeSubTaskMcpConfigSync(mcpConfigPath, mcpConfig);
-      this.writeKimiAutoDiscoveredMcpConfig(task, mcpConfig);
+      try {
+        this.writeKimiAutoDiscoveredMcpConfig(task, mcpConfig);
+      } catch (err) {
+        logWarn('coordinator.kimi_mcp', 'failed to refresh Kimi child MCP config', {
+          taskId: task.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
   }
 
@@ -1614,19 +1621,8 @@ export class Coordinator {
         relativePath,
         configPath,
         tracked: isTrackedGitPath(task.worktreePath, relativePath),
-        content: readMcpJsonContent(configPath),
       };
     });
-
-    for (const candidate of candidates) {
-      const existingParallelCode = candidate.content.mcpServers?.['parallel-code'];
-      const isManagedCandidate = priorState?.path === candidate.configPath;
-      if (existingParallelCode !== undefined && !isManagedCandidate) {
-        throw new Error(
-          `Unable to create Kimi child MCP config: ${candidate.relativePath} already defines mcpServers["parallel-code"].`,
-        );
-      }
-    }
 
     const candidate = priorState
       ? candidates.find(({ configPath }) => configPath === priorState.path)
@@ -1642,7 +1638,15 @@ export class Coordinator {
       );
     }
 
-    const { configPath, content, relativePath } = candidate;
+    const { configPath, relativePath } = candidate;
+    const content = readMcpJsonContent(configPath);
+    const existingParallelCode = content.mcpServers?.['parallel-code'];
+    const isManagedCandidate = priorState?.path === configPath;
+    if (existingParallelCode !== undefined && !isManagedCandidate) {
+      throw new Error(
+        `Unable to create Kimi child MCP config: ${relativePath} already defines mcpServers["parallel-code"].`,
+      );
+    }
     const servers = content.mcpServers ?? {};
 
     if (
@@ -1764,10 +1768,11 @@ export class Coordinator {
         'Unable to verify managed Kimi MCP tokens before landing or merge; refusing to continue.',
       );
     }
+    const historyRange = task.baseBranch ? `${task.baseBranch}..HEAD` : 'HEAD';
     const result = await execAsync(
       'git',
-      ['log', '--all', '-p', '--format=', '--', '.mcp.json', '.kimi-code/mcp.json'],
-      { cwd: task.worktreePath },
+      ['log', historyRange, '-p', '--format=', '--', '.mcp.json', '.kimi-code/mcp.json'],
+      { cwd: task.worktreePath, maxBuffer: 8 * 1024 * 1024 },
     );
     const history = execStdout(result);
     if (tokens.some((token) => history.includes(token))) {
