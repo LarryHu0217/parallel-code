@@ -1,4 +1,4 @@
-import { Show, For, createSignal, createEffect, createMemo, onCleanup } from 'solid-js';
+import { Show, For, createSignal, createEffect, onCleanup } from 'solid-js';
 import { Portal } from 'solid-js/web';
 import { Dialog } from './Dialog';
 import { createDialogScroll } from '../lib/dialog-scroll';
@@ -9,6 +9,7 @@ import { InlineInput } from './InlineInput';
 import { AskCodeCard } from './AskCodeCard';
 import { CloseIcon } from './icons';
 import { createHighlightedMarkdown } from '../lib/marked-shiki';
+import { createReviewIdentity } from '../lib/diff-review-lifecycle';
 import {
   getPlanSelection,
   getPlanSelectionFlowAnchor,
@@ -46,16 +47,11 @@ function compilePlanReview(annotations: ReviewAnnotation[]): string {
 }
 
 export function PlanViewerDialog(props: PlanViewerDialogProps) {
-  const reviewSession = createMemo(() => {
-    if (!props.open) return undefined;
-    return {
-      planContent: props.planContent,
-      planFileName: props.planFileName,
+  const reviewIdentity = () =>
+    createReviewIdentity({
       taskId: props.taskId,
-      agentId: props.agentId,
-      worktreePath: props.worktreePath,
-    };
-  });
+      worktreePath: props.worktreePath ?? '',
+    });
 
   return (
     <Dialog
@@ -71,23 +67,21 @@ export function PlanViewerDialog(props: PlanViewerDialogProps) {
         gap: '0',
       }}
     >
-      <Show keyed when={reviewSession()}>
-        {(session) => (
-          <ReviewProvider
-            taskId={session.taskId}
-            agentId={session.agentId}
-            compilePrompt={compilePlanReview}
-            onSubmitted={props.onClose}
-          >
-            <PlanViewerContent
-              planContent={session.planContent}
-              planFileName={session.planFileName}
-              worktreePath={session.worktreePath}
-              onClose={props.onClose}
-            />
-          </ReviewProvider>
-        )}
-      </Show>
+      <ReviewProvider
+        taskId={props.taskId}
+        agentId={props.agentId}
+        reviewIdentity={reviewIdentity()}
+        open={props.open}
+        compilePrompt={compilePlanReview}
+        onSubmitted={props.onClose}
+      >
+        <PlanViewerContent
+          planContent={props.planContent}
+          planFileName={props.planFileName}
+          worktreePath={props.worktreePath}
+          onClose={props.onClose}
+        />
+      </ReviewProvider>
     </Dialog>
   );
 }
@@ -190,6 +184,22 @@ function PlanViewerContent(props: PlanViewerContentProps) {
   // Clear highlight overlays when pending selection is dismissed
   createEffect(() => {
     if (!review.pendingSelection()) clearHighlightGeometry();
+  });
+
+  let previousPlanContent: string | undefined;
+  createEffect(() => {
+    const nextPlanContent = props.planContent;
+    if (previousPlanContent === undefined) {
+      previousPlanContent = nextPlanContent;
+      return;
+    }
+    if (nextPlanContent === previousPlanContent) return;
+    previousPlanContent = nextPlanContent;
+    pendingFlowSlot()?.remove();
+    setPendingFlowSlot(undefined);
+    Object.values(flowSlots()).forEach((slot) => slot.remove());
+    setFlowSlots({});
+    clearHighlightGeometry();
   });
 
   function clearHighlightGeometry() {
