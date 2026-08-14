@@ -35,9 +35,6 @@ function isInPlanReviewFlowSlot(node: Node): boolean {
 }
 
 function getPlanSelectionVisibleText(containerEl: HTMLElement, selectedRange: Range): string {
-  const selection = window.getSelection();
-  if (!selection) return '';
-
   const host = document.createElement('div');
   const fragment = selectedRange.cloneContents();
   fragment.querySelectorAll(PLAN_REVIEW_FLOW_SLOT_SELECTOR).forEach((node) => node.remove());
@@ -57,29 +54,9 @@ function getPlanSelectionVisibleText(containerEl: HTMLElement, selectedRange: Ra
 
   const parent = containerEl.parentElement ?? document.body;
   parent.append(host);
-  const originalRanges = Array.from({ length: selection.rangeCount }, (_, index) =>
-    selection.getRangeAt(index).cloneRange(),
-  );
-  const { anchorNode, anchorOffset, focusNode, focusOffset } = selection;
-  const sanitizedRange = document.createRange();
-  sanitizedRange.selectNodeContents(host);
-
   try {
-    selection.removeAllRanges();
-    selection.addRange(sanitizedRange);
-    return selection.toString().trim();
+    return host.innerText.trim();
   } finally {
-    selection.removeAllRanges();
-    let restoredDirection = false;
-    if (anchorNode && focusNode) {
-      try {
-        selection.setBaseAndExtent(anchorNode, anchorOffset, focusNode, focusOffset);
-        restoredDirection = true;
-      } catch {
-        restoredDirection = false;
-      }
-    }
-    if (!restoredDirection) originalRanges.forEach((range) => selection.addRange(range));
     host.remove();
   }
 }
