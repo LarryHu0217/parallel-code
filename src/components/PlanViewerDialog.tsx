@@ -100,7 +100,12 @@ function insertPlanReviewFlowSlot(anchor: HTMLElement): HTMLDivElement {
   slot.setAttribute('data-plan-review-flow-slot', '');
 
   if (anchor.tagName === 'LI') {
-    anchor.append(slot);
+    const nestedList = Array.from(anchor.children).find((child) => child.matches('ul, ol'));
+    if (nestedList) {
+      anchor.insertBefore(slot, nestedList);
+    } else {
+      anchor.append(slot);
+    }
     return slot;
   }
 

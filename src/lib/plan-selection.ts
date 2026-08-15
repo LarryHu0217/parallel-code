@@ -34,9 +34,32 @@ function isInPlanReviewFlowSlot(node: Node): boolean {
   return Boolean(element?.closest(PLAN_REVIEW_FLOW_SLOT_SELECTOR));
 }
 
+function cloneSelectionWithAncestors(
+  containerEl: HTMLElement,
+  selectedRange: Range,
+): DocumentFragment {
+  let fragment = selectedRange.cloneContents();
+  let ancestor: Node | null =
+    selectedRange.commonAncestorContainer.nodeType === Node.TEXT_NODE
+      ? selectedRange.commonAncestorContainer.parentNode
+      : selectedRange.commonAncestorContainer;
+
+  while (ancestor && ancestor !== containerEl) {
+    if (ancestor instanceof Element) {
+      const wrapper = ancestor.cloneNode(false) as Element;
+      wrapper.append(fragment);
+      fragment = document.createDocumentFragment();
+      fragment.append(wrapper);
+    }
+    ancestor = ancestor.parentNode;
+  }
+
+  return fragment;
+}
+
 function getPlanSelectionVisibleText(containerEl: HTMLElement, selectedRange: Range): string {
   const host = document.createElement('div');
-  const fragment = selectedRange.cloneContents();
+  const fragment = cloneSelectionWithAncestors(containerEl, selectedRange);
   fragment.querySelectorAll(PLAN_REVIEW_FLOW_SLOT_SELECTOR).forEach((node) => node.remove());
   fragment
     .querySelectorAll('style, script, defs, metadata, title, desc, [hidden], [aria-hidden="true"]')
@@ -67,7 +90,14 @@ export function getPlanSelectionTextRanges(containerEl: HTMLElement): Range[] {
   if (!selectedRange) return [];
 
   const ranges: Range[] = [];
-  const walker = document.createTreeWalker(containerEl, NodeFilter.SHOW_TEXT);
+  const walkerRoot =
+    selectedRange.commonAncestorContainer.nodeType === Node.TEXT_NODE
+      ? selectedRange.commonAncestorContainer.parentElement
+      : selectedRange.commonAncestorContainer;
+  const walker = document.createTreeWalker(
+    walkerRoot && containerEl.contains(walkerRoot) ? walkerRoot : containerEl,
+    NodeFilter.SHOW_TEXT,
+  );
   let node = walker.nextNode();
   while (node) {
     if (!isInPlanReviewFlowSlot(node) && selectedRange.intersectsNode(node)) {
@@ -149,7 +179,8 @@ export function getPlanSelection(containerEl: HTMLElement, source: string): Plan
 
 /** Find the block that should own an inline review card for the current selection. */
 export function getPlanSelectionFlowAnchor(containerEl: HTMLElement): HTMLElement | null {
-  const range = getSelectionRange(containerEl);
+  const ranges = getPlanSelectionTextRanges(containerEl);
+  const range = ranges.at(-1);
   if (!range) return null;
 
   let element: Element | null =
