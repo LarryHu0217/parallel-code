@@ -1588,6 +1588,53 @@ describe('Coordinator land_self', () => {
     expect(vi.mocked(mergeTask)).toHaveBeenCalled();
   });
 
+  it('lands when the managed Kimi child MCP entry is already absent', async () => {
+    const configPath = '/tmp/test/.kimi-code/mcp.json';
+    let currentConfig = JSON.stringify({
+      mcpServers: { other: { command: 'user-owned-server' } },
+    });
+    mockExistsSync.mockImplementation((path) => path === configPath);
+    mockReadFileSync.mockImplementation((path) =>
+      path === configPath ? currentConfig : '# existing\n',
+    );
+    mockAtomicWriteFileSync.mockImplementation((path, raw) => {
+      if (path === configPath) currentConfig = raw as string;
+    });
+
+    const kimiCoordinator = new Coordinator();
+    kimiCoordinator.setWindow(mockWin);
+    kimiCoordinator.setDefaultProject('proj-1', '/tmp/project');
+    kimiCoordinator.registerCoordinator('coord-kimi', 'proj-1', {
+      worktreePath: '/tmp/project',
+    });
+    kimiCoordinator.setCoordinatorSpawnDefaults('coord-kimi', 'kimi', []);
+    kimiCoordinator.setMCPServerInfo(
+      'coord-kimi',
+      'http://localhost:3001',
+      'coordinator-token',
+      'subtask-token',
+      '/path/server.js',
+    );
+    await kimiCoordinator.createTask({
+      name: 'test',
+      prompt: 'do',
+      coordinatorTaskId: 'coord-kimi',
+    });
+
+    const withoutManagedEntry = JSON.parse(currentConfig) as {
+      mcpServers: Record<string, unknown>;
+    };
+    delete withoutManagedEntry.mcpServers['parallel-code'];
+    currentConfig = JSON.stringify(withoutManagedEntry);
+
+    await kimiCoordinator.landSelf('task-1', { verification });
+
+    expect(JSON.parse(currentConfig).mcpServers).toEqual({
+      other: { command: 'user-owned-server' },
+    });
+    expect(vi.mocked(mergeTask)).toHaveBeenCalled();
+  });
+
   it('fails closed on token-bearing history even when the discovery config was deleted', async () => {
     const configPath = '/tmp/test/.kimi-code/mcp.json';
     let autoConfigExists = true;
@@ -3719,6 +3766,61 @@ describe('Coordinator sub-task MCP config isolation', () => {
       'coordinator.kimi_mcp',
       expect.stringContaining('refusing overwrite'),
       expect.objectContaining({ taskId: 'task-1', configPath }),
+    );
+  });
+
+  it('recreates a missing managed Kimi child MCP entry during refresh', async () => {
+    const configPath = '/tmp/test/.kimi-code/mcp.json';
+    let currentConfig = JSON.stringify({
+      mcpServers: { other: { command: 'other-server' } },
+    });
+    mockExistsSync.mockImplementation((path) => path === configPath);
+    mockReadFileSync.mockImplementation((path) =>
+      path === configPath ? currentConfig : '# existing\n',
+    );
+    mockAtomicWriteFileSync.mockImplementation((path, raw) => {
+      if (path === configPath) currentConfig = raw as string;
+    });
+    coordinator.setCoordinatorSpawnDefaults('coord-1', 'kimi', []);
+    coordinator.setMCPServerInfo(
+      'coord-1',
+      'http://localhost:3001',
+      'coordinator-tok',
+      'subtask-tok',
+      '/path/server.js',
+    );
+    await coordinator.createTask({ name: 'test', prompt: 'do', coordinatorTaskId: 'coord-1' });
+
+    const withoutManagedEntry = JSON.parse(currentConfig) as {
+      mcpServers: Record<string, unknown>;
+    };
+    delete withoutManagedEntry.mcpServers['parallel-code'];
+    currentConfig = JSON.stringify(withoutManagedEntry);
+    mockAtomicWriteFileSync.mockClear();
+    mockLogWarn.mockClear();
+
+    coordinator.setMCPServerInfo(
+      'coord-1',
+      'http://localhost:3002',
+      'new-coordinator-tok',
+      'new-subtask-tok',
+      '/path/server.js',
+    );
+
+    const refreshed = JSON.parse(currentConfig) as {
+      mcpServers: {
+        other: { command: string };
+        'parallel-code': { env: Record<string, string> };
+      };
+    };
+    expect(refreshed.mcpServers.other).toEqual({ command: 'other-server' });
+    expect(refreshed.mcpServers['parallel-code'].env['PARALLEL_CODE_MCP_TOKEN']).toBe(
+      'new-subtask-tok',
+    );
+    expect(mockLogWarn).not.toHaveBeenCalledWith(
+      'coordinator.kimi_mcp',
+      expect.stringContaining('refusing overwrite'),
+      expect.anything(),
     );
   });
 });

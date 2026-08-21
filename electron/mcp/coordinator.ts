@@ -1651,6 +1651,7 @@ export class Coordinator {
 
     if (
       priorState?.path === configPath &&
+      existingParallelCode !== undefined &&
       mcpEntryFingerprint(servers['parallel-code']) !== priorState.writtenParallelCodeFingerprint
     ) {
       logWarn('coordinator.kimi_mcp', 'auto-discovered MCP config changed; refusing overwrite', {
@@ -1720,6 +1721,12 @@ export class Coordinator {
       const content = readMcpJsonContent(state.path);
       const servers = content.mcpServers ?? {};
       const managedEntry = servers['parallel-code'];
+      if (managedEntry === undefined) {
+        const historicalManagedEntry = this.readManagedMcpEntryFromTaskConfig(task, state);
+        task.autoDiscoveredMcpConfig = undefined;
+        this.syncAutoDiscoveredMcpConfig(task);
+        return { status: 'restored', managedEntry: historicalManagedEntry };
+      }
       if (mcpEntryFingerprint(managedEntry) !== state.writtenParallelCodeFingerprint)
         return { status: 'failed' };
 
