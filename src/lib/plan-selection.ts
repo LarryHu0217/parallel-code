@@ -100,15 +100,15 @@ export function getPlanSelectionTextRanges(containerEl: HTMLElement): Range[] {
   );
   let node = walker.nextNode();
   while (node) {
+    const text = node as Text;
     if (!isInPlanReviewFlowSlot(node) && selectedRange.intersectsNode(node)) {
-      const text = node as Text;
       const start = node === selectedRange.startContainer ? selectedRange.startOffset : 0;
       const end = node === selectedRange.endContainer ? selectedRange.endOffset : text.length;
       if (start < end) {
         const range = document.createRange();
         range.setStart(text, start);
         range.setEnd(text, end);
-        ranges.push(range);
+        if (range.toString().trim()) ranges.push(range);
       }
     }
     node = walker.nextNode();
@@ -161,12 +161,17 @@ export function getPlanSelection(containerEl: HTMLElement, source: string): Plan
   const selectedText = getPlanSelectionVisibleText(containerEl, range);
   if (!selectedText) return null;
 
+  const textRanges = getPlanSelectionTextRanges(containerEl);
+  const firstTextRange = textRanges[0];
+  const lastTextRange = textRanges.at(-1);
+  if (!firstTextRange || !lastTextRange) return null;
+
   const nearestHeading = findNearestHeading(containerEl, range.startContainer);
   const blocks = Array.from(containerEl.querySelectorAll(BLOCK_SELECTOR)).filter(
     (block) => !block.closest(PLAN_REVIEW_FLOW_SLOT_SELECTOR),
   );
-  const blockIndex = countBlocksBefore(blocks, range.startContainer);
-  const endBlockIndex = countBlocksBefore(blocks, range.endContainer);
+  const blockIndex = countBlocksBefore(blocks, firstTextRange.startContainer);
+  const endBlockIndex = countBlocksBefore(blocks, lastTextRange.endContainer);
 
   return {
     source,
