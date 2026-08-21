@@ -1,4 +1,4 @@
-import { Show, For, createSignal, createEffect, onCleanup } from 'solid-js';
+import { Show, For, createSignal, createEffect, on, onCleanup } from 'solid-js';
 import { Portal } from 'solid-js/web';
 import { Dialog } from './Dialog';
 import { createDialogScroll } from '../lib/dialog-scroll';
@@ -186,26 +186,28 @@ function PlanViewerContent(props: PlanViewerContentProps) {
     );
   });
 
-  // Clear highlight overlays when pending selection is dismissed
+  // Clear inline selection UI when pending selection is dismissed elsewhere.
   createEffect(() => {
-    if (!review.pendingSelection()) clearHighlightGeometry();
-  });
-
-  let previousPlanContent: string | undefined;
-  createEffect(() => {
-    const nextPlanContent = props.planContent;
-    if (previousPlanContent === undefined) {
-      previousPlanContent = nextPlanContent;
-      return;
-    }
-    if (nextPlanContent === previousPlanContent) return;
-    previousPlanContent = nextPlanContent;
+    if (review.pendingSelection()) return;
     pendingFlowSlot()?.remove();
     setPendingFlowSlot(undefined);
-    Object.values(flowSlots()).forEach((slot) => slot.remove());
-    setFlowSlots({});
     clearHighlightGeometry();
   });
+
+  createEffect(
+    on(
+      planHtml,
+      () => {
+        pendingFlowSlot()?.remove();
+        setPendingFlowSlot(undefined);
+        review.clearPendingSelection();
+        Object.values(flowSlots()).forEach((slot) => slot.remove());
+        setFlowSlots({});
+        clearHighlightGeometry();
+      },
+      { defer: true },
+    ),
+  );
 
   function clearHighlightGeometry() {
     stopHighlightTracking?.();
@@ -395,7 +397,7 @@ function PlanViewerContent(props: PlanViewerContentProps) {
             </For>
 
             {/* Inline input for pending selection — mounted after the selected block */}
-            <Show keyed when={pendingFlowSlot()}>
+            <Show keyed when={review.pendingSelection() ? pendingFlowSlot() : undefined}>
               {(slot) => (
                 <Portal mount={slot}>
                   <InlineInput onSubmit={handleSubmitInFlow} onDismiss={dismissPendingSelection} />

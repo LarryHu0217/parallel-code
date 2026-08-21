@@ -217,9 +217,7 @@ describe('plan selection DOM behavior', () => {
   });
 
   it('anchors a selection ending at the next block boundary to the prior block', () => {
-    const container = document.createElement('div');
-    container.innerHTML = '<p>First paragraph</p><p>Second paragraph</p>';
-    document.body.append(container);
+    const container = renderPlanMarkdown('First paragraph.\n\nSecond paragraph.');
     const paragraphs = container.querySelectorAll('p');
     const range = document.createRange();
     range.setStart(paragraphs[0].firstChild as Text, 0);
@@ -229,6 +227,10 @@ describe('plan selection DOM behavior', () => {
     selection?.addRange(range);
 
     expect(getPlanSelectionFlowAnchor(container)).toBe(paragraphs[0]);
+    expect(getPlanSelection(container, 'plan.md')).toMatchObject({ startLine: 0, endLine: 0 });
+    expect(getPlanSelectionTextRanges(container).map((item) => item.toString())).toEqual([
+      'First paragraph.',
+    ]);
   });
 
   it('preserves rendered block breaks between selected code and prose', () => {
