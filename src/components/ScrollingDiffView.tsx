@@ -795,27 +795,30 @@ function FileSection(props: {
 export function ScrollingDiffView(props: ScrollingDiffViewProps) {
   const review = useReview();
   const sectionRefs = new Map<string, HTMLDivElement>();
-  const [collapsedFiles, setCollapsedFiles] = createSignal<ReadonlySet<string>>(new Set());
-  const [autoCollapsed, setAutoCollapsed] = createSignal(false);
+  // Seeded eagerly rather than from the effect below: effects run *after* the
+  // first render, so a lazily-collapsed diff would build every file's rows and
+  // immediately tear them down again.
+  const initialCollapsed = untrack(() => getInitialCollapsedFiles(props.files, props.scrollToPath));
+  const [collapsedFiles, setCollapsedFiles] = createSignal<ReadonlySet<string>>(initialCollapsed);
+  const [autoCollapsed, setAutoCollapsed] = createSignal(initialCollapsed.size > 0);
   const [dimOthers, setDimOthers] = createSignal(false);
   let navigationFrame: number | undefined;
   let navigationLineFrame: number | undefined;
   let navigationHighlightTimer: ReturnType<typeof setTimeout> | undefined;
   let containerRef: HTMLDivElement | undefined;
 
-  // A fresh diff decides its own starting shape: small ones render fully, large
-  // ones open with only the clicked file expanded so the dialog stays responsive.
+  // Re-seed if the file list is ever swapped in place. `defer` skips the first
+  // run, which the eager seed above already covered. `on` untracks the callback,
+  // so reading scrollToPath here does not subscribe.
   createEffect(
     on(
       () => props.files,
       (files) => {
-        const initial = getInitialCollapsedFiles(
-          files,
-          untrack(() => props.scrollToPath),
-        );
+        const initial = getInitialCollapsedFiles(files, props.scrollToPath);
         setCollapsedFiles(initial);
         setAutoCollapsed(initial.size > 0);
       },
+      { defer: true },
     ),
   );
 
@@ -992,7 +995,7 @@ export function ScrollingDiffView(props: ScrollingDiffViewProps) {
         position: 'relative',
       }}
     >
-      <Show when={autoCollapsed()}>
+      <Show when={autoCollapsed() && collapsedFiles().size > 0}>
         <div
           style={{
             display: 'flex',
@@ -1025,7 +1028,7 @@ export function ScrollingDiffView(props: ScrollingDiffViewProps) {
               'white-space': 'nowrap',
             }}
           >
-            Expand all
+            Expand all {props.files.length} files
           </button>
         </div>
       </Show>
@@ -1048,9 +1051,7 @@ export function ScrollingDiffView(props: ScrollingDiffViewProps) {
             }
             dimmed={dimOthers() && file.path !== props.scrollToPath}
             searchQuery={props.searchQuery}
-            searchMatchCount={
-              collapsedFiles().has(file.path) ? countFileSearchMatches(file, props.searchQuery) : 0
-            }
+            searchMatchCount={countFileSearchMatches(file, props.searchQuery)}
             activeQuestions={review.activeQuestions()}
             onDismissQuestion={review.dismissQuestion}
             reviewAnnotations={review.annotations()}
