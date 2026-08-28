@@ -12,6 +12,7 @@ import {
 import { theme } from '../lib/theme';
 import { sf } from '../lib/fontScale';
 import { parseUnifiedDiff } from '../lib/unified-diff-parser';
+import { countSearchMatches } from '../lib/diff-collapse';
 import { type QualityFindingProvider } from '../lib/quality-findings';
 import { windowChromeTopInset } from '../lib/platform';
 import { ScrollingDiffView } from './ScrollingDiffView';
@@ -269,24 +270,7 @@ function DiffViewerContent(props: DiffViewerDialogProps) {
       0,
     );
 
-  const countMatches = () => {
-    const q = searchQuery().toLowerCase();
-    if (!q) return 0;
-    let count = 0;
-    for (const file of parsedFiles()) {
-      for (const hunk of file.hunks) {
-        for (const line of hunk.lines) {
-          let idx = 0;
-          const lower = line.content.toLowerCase();
-          while ((idx = lower.indexOf(q, idx)) !== -1) {
-            count++;
-            idx += q.length;
-          }
-        }
-      }
-    }
-    return count;
-  };
+  const countMatches = () => countSearchMatches(parsedFiles(), searchQuery());
 
   return (
     <div ref={containerRef} style={{ display: 'flex', 'flex-direction': 'column', height: '100%' }}>

@@ -12,6 +12,7 @@ import { debug as logDebug, warn as logWarn } from '../lib/log';
 import type { FileDiffResult } from '../ipc/types';
 import { getDiffSelection } from '../lib/diff-selection';
 import { getContextGapLineCount, type ContextGapRange } from '../lib/diff-context-gaps';
+import { countFileSearchMatches, getInitialCollapsedFiles } from '../lib/diff-collapse';
 import { AskCodeCard } from './AskCodeCard';
 import { ReviewCommentCard } from './ReviewCommentCard';
 import { QualityFindingCard } from './QualityFindingCard';
@@ -459,6 +460,8 @@ function FileSection(props: {
   onCollapsedChange: (collapsed: boolean) => void;
   dimmed: boolean;
   searchQuery?: string;
+  /** Search hits inside this file — surfaced on the header while it stays collapsed. */
+  searchMatchCount: number;
   activeQuestions: ActiveQuestion[];
   onDismissQuestion: (id: string) => void;
   reviewAnnotations: ReviewAnnotation[];
@@ -552,6 +555,23 @@ function FileSection(props: {
         >
           {props.file.path}
         </span>
+
+        {/* Collapsed files hide their own <mark>s, so surface the hit count here. */}
+        <Show when={props.collapsed && props.searchMatchCount > 0}>
+          <span
+            style={{
+              'font-size': sf(12),
+              'font-weight': '600',
+              padding: '2px 8px',
+              'border-radius': '4px',
+              color: theme.fg,
+              background: SEARCH_HIGHLIGHT_BG,
+              'white-space': 'nowrap',
+            }}
+          >
+            {props.searchMatchCount} {props.searchMatchCount === 1 ? 'match' : 'matches'}
+          </span>
+        </Show>
 
         <span
           style={{
@@ -776,18 +796,39 @@ export function ScrollingDiffView(props: ScrollingDiffViewProps) {
   const review = useReview();
   const sectionRefs = new Map<string, HTMLDivElement>();
   const [collapsedFiles, setCollapsedFiles] = createSignal<ReadonlySet<string>>(new Set());
+  const [autoCollapsed, setAutoCollapsed] = createSignal(false);
   const [dimOthers, setDimOthers] = createSignal(false);
   let navigationFrame: number | undefined;
   let navigationLineFrame: number | undefined;
   let navigationHighlightTimer: ReturnType<typeof setTimeout> | undefined;
   let containerRef: HTMLDivElement | undefined;
 
+  // A fresh diff decides its own starting shape: small ones render fully, large
+  // ones open with only the clicked file expanded so the dialog stays responsive.
   createEffect(
     on(
       () => props.files,
-      () => setCollapsedFiles(new Set<string>()),
+      (files) => {
+        const initial = getInitialCollapsedFiles(
+          files,
+          untrack(() => props.scrollToPath),
+        );
+        setCollapsedFiles(initial);
+        setAutoCollapsed(initial.size > 0);
+      },
     ),
   );
+
+  function expandFile(filePath: string) {
+    const current = untrack(collapsedFiles);
+    const expanded = expandCollapsedFileForNavigation(current, filePath);
+    if (expanded !== current) setCollapsedFiles(expanded);
+  }
+
+  function expandAll() {
+    setCollapsedFiles(new Set<string>());
+    setAutoCollapsed(false);
+  }
 
   const highlightedRange = (): HighlightRange | null => {
     const selection = review.pendingSelection();
@@ -823,6 +864,7 @@ export function ScrollingDiffView(props: ScrollingDiffViewProps) {
   createEffect(() => {
     const target = props.scrollToPath;
     if (!target) return;
+    expandFile(target);
     setDimOthers(true);
     // Start fade-in on next frame so the browser registers the dimmed state first
     requestAnimationFrame(() => setDimOthers(false));
@@ -858,9 +900,7 @@ export function ScrollingDiffView(props: ScrollingDiffViewProps) {
     const target = props.scrollToAnnotation;
     clearNavigationSchedule();
     if (!target) return;
-    const currentCollapsed = untrack(collapsedFiles);
-    const expanded = expandCollapsedFileForNavigation(currentCollapsed, target.filePath);
-    if (expanded !== currentCollapsed) setCollapsedFiles(expanded);
+    expandFile(target.filePath);
 
     navigationFrame = requestAnimationFrame(() => {
       navigationFrame = undefined;
@@ -952,6 +992,44 @@ export function ScrollingDiffView(props: ScrollingDiffViewProps) {
         position: 'relative',
       }}
     >
+      <Show when={autoCollapsed()}>
+        <div
+          style={{
+            display: 'flex',
+            'align-items': 'center',
+            gap: '10px',
+            margin: '10px 10px 0',
+            padding: '8px 12px',
+            border: `1px solid ${theme.border}`,
+            'border-radius': '8px',
+            background: theme.bgElevated,
+            'font-size': sf(12),
+            color: theme.fgMuted,
+            'user-select': 'none',
+          }}
+        >
+          <span style={{ flex: '1' }}>
+            Large diff — files start collapsed to keep this view responsive. Click a file to expand
+            it.
+          </span>
+          <button
+            onClick={expandAll}
+            style={{
+              background: 'transparent',
+              border: `1px solid ${theme.border}`,
+              'border-radius': '4px',
+              color: theme.fg,
+              cursor: 'pointer',
+              'font-size': sf(12),
+              padding: '3px 10px',
+              'white-space': 'nowrap',
+            }}
+          >
+            Expand all
+          </button>
+        </div>
+      </Show>
+
       <For each={props.files}>
         {(file) => (
           <FileSection
@@ -970,6 +1048,9 @@ export function ScrollingDiffView(props: ScrollingDiffViewProps) {
             }
             dimmed={dimOthers() && file.path !== props.scrollToPath}
             searchQuery={props.searchQuery}
+            searchMatchCount={
+              collapsedFiles().has(file.path) ? countFileSearchMatches(file, props.searchQuery) : 0
+            }
             activeQuestions={review.activeQuestions()}
             onDismissQuestion={review.dismissQuestion}
             reviewAnnotations={review.annotations()}
