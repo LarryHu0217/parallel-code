@@ -1,4 +1,5 @@
 import { app, autoUpdater, BrowserWindow, Menu, ipcMain, session, shell } from 'electron';
+import { buildMenuTemplate } from './menu-template.js';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
@@ -126,86 +127,14 @@ function getIconPath(): string | undefined {
   return path.join(__dirname, '..', 'build', 'icon.png');
 }
 
-// Electron installs a default menu when none is set, and macOS dispatches native
-// menu key equivalents *before* the web contents sees the keydown — so every
-// accelerator that menu registers is a shortcut the renderer can never receive.
-// Several default roles claim keys this app binds itself: `fileMenu` takes Cmd+W
-// (close the focused shell/terminal), `viewMenu` takes Cmd+0 / Cmd+± (the app
-// scales its whole UI through globalScale instead of Chromium's zoom), and
-// `appMenu` takes Cmd+Q (the renderer turns it into a hold, see below).
-// Spelling those submenus out keeps their items reachable by mouse while leaving
-// the keys to the renderer; Cmd+W stays unbound here on purpose, so it does
-// nothing when no pane is focused rather than closing the window out from under
-// a terminal.
-//
-// Reload is absent from the View menu on *both* platforms — no item, no
-// accelerator. A reload throws away every pane's UI state, which is not a thing
-// to hang off a single mistyped keystroke in a terminal app. Leaving the key
-// unclaimed is also what gives DevTools its own Cmd/Ctrl+R back (reload the
-// inspected page) while DevTools has focus: nothing upstream intercepts the key
-// any more. That is why Linux gets an explicit menu too — its default `viewMenu`
-// role would otherwise bind Ctrl+R / Ctrl+Shift+R. The rest of the Linux menu
-// stays on the default roles, so only reload changes there; unhandled keys reach
-// those items only after the renderer has had (and prevented) them.
 function setupApplicationMenu(): void {
-  const isMac = process.platform === 'darwin';
   Menu.setApplicationMenu(
     Menu.buildFromTemplate(
-      isMac
-        ? [
-            {
-              label: app.name,
-              submenu: [
-                { role: 'about' },
-                { type: 'separator' },
-                { role: 'services' },
-                { type: 'separator' },
-                { role: 'hide' },
-                { role: 'hideOthers' },
-                { role: 'unhide' },
-                { type: 'separator' },
-                // Accelerator-free on purpose: the renderer turns Cmd+Q into a
-                // press-and-hold, so a stray tap can't tear down running terminals.
-                // (There is no way to show the key equivalent without also binding it:
-                // `registerAccelerator: false` is Linux/Windows-only. The hint the
-                // renderer shows on the first press is what teaches the gesture.)
-                // The mouse path skips only the hold — it still lands in `before-quit`
-                // below, so it still asks about running terminals.
-                { label: `Quit ${app.name}`, click: () => app.quit() },
-              ],
-            },
-            {
-              label: 'File',
-              submenu: [{ label: 'Close Window', click: (_item, window) => window?.close() }],
-            },
-            { role: 'editMenu' },
-            {
-              label: 'View',
-              submenu: [
-                { role: 'toggleDevTools' },
-                { type: 'separator' },
-                { role: 'togglefullscreen' },
-              ],
-            },
-            { role: 'windowMenu' },
-          ]
-        : [
-            { role: 'fileMenu' },
-            { role: 'editMenu' },
-            {
-              label: 'View',
-              submenu: [
-                { role: 'toggleDevTools' },
-                { type: 'separator' },
-                { role: 'resetZoom' },
-                { role: 'zoomIn' },
-                { role: 'zoomOut' },
-                { type: 'separator' },
-                { role: 'togglefullscreen' },
-              ],
-            },
-            { role: 'windowMenu' },
-          ],
+      buildMenuTemplate({
+        platform: process.platform,
+        appName: app.name,
+        onQuit: () => app.quit(),
+      }),
     ),
   );
 }
