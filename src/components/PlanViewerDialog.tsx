@@ -1,4 +1,4 @@
-import { Show, For, createSignal, createEffect, on, onCleanup } from 'solid-js';
+import { Show, For, batch, createSignal, createEffect, on, onCleanup } from 'solid-js';
 import { Portal } from 'solid-js/web';
 import { Dialog } from './Dialog';
 import { createDialogScroll } from '../lib/dialog-scroll';
@@ -230,7 +230,6 @@ function PlanViewerContent(props: PlanViewerContentProps) {
     stopHighlightTracking?.();
     pendingFlowSlot()?.remove();
     stopHighlightTracking = trackPlanSelectionGeometry(contentRef, textRanges, setHighlightRects);
-    setPendingFlowSlot(insertPlanReviewFlowSlot(flowAnchor));
     // Clear native selection — overlay rects provide the visual highlight from here
     window.getSelection()?.removeAllRanges();
 
@@ -238,20 +237,25 @@ function PlanViewerContent(props: PlanViewerContentProps) {
       ? `${props.planFileName} \u00A7 ${sel.nearestHeading}`
       : props.planFileName;
 
-    review.handleSelection({
-      source,
-      startLine: sel.startLine,
-      endLine: sel.endLine,
-      selectedText: sel.selectedText,
+    batch(() => {
+      setPendingFlowSlot(insertPlanReviewFlowSlot(flowAnchor));
+      review.handleSelection({
+        source,
+        startLine: sel.startLine,
+        endLine: sel.endLine,
+        selectedText: sel.selectedText,
+      });
     });
   }
 
   function handleSubmitInFlow(text: string, mode: Parameters<typeof review.handleSubmit>[1]) {
     const slot = pendingFlowSlot();
-    const id = review.handleSubmit(text, mode);
-    if (!id) return;
-    if (slot) setFlowSlots((prev) => ({ ...prev, [id]: slot }));
-    setPendingFlowSlot(undefined);
+    batch(() => {
+      const id = review.handleSubmit(text, mode);
+      if (!id) return;
+      if (slot) setFlowSlots((prev) => ({ ...prev, [id]: slot }));
+      setPendingFlowSlot(undefined);
+    });
     clearHighlightGeometry();
   }
 
