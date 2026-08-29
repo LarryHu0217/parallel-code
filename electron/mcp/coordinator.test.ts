@@ -1590,6 +1590,65 @@ describe('Coordinator land_self', () => {
 
   it('lands when the managed Kimi child MCP entry is already absent', async () => {
     const configPath = '/tmp/test/.kimi-code/mcp.json';
+    let taskConfig = '';
+    let currentConfig = JSON.stringify({
+      mcpServers: { other: { command: 'user-owned-server' } },
+    });
+    mockExistsSync.mockImplementation(
+      (path) =>
+        path === configPath ||
+        (typeof path === 'string' && path.includes('parallel-code-subtask-')),
+    );
+    mockReadFileSync.mockImplementation((path) => {
+      if (path === configPath) return currentConfig;
+      if (typeof path === 'string' && path.includes('parallel-code-subtask-')) return taskConfig;
+      return '# existing\n';
+    });
+    mockAtomicWriteFileSync.mockImplementation((path, raw) => {
+      if (path === configPath) currentConfig = raw as string;
+    });
+    mockAtomicWriteFile.mockImplementation(async (path, raw) => {
+      if (typeof path === 'string' && path.includes('parallel-code-subtask-')) {
+        taskConfig = raw as string;
+      }
+    });
+
+    const kimiCoordinator = new Coordinator();
+    kimiCoordinator.setWindow(mockWin);
+    kimiCoordinator.setDefaultProject('proj-1', '/tmp/project');
+    kimiCoordinator.registerCoordinator('coord-kimi', 'proj-1', {
+      worktreePath: '/tmp/project',
+    });
+    kimiCoordinator.setCoordinatorSpawnDefaults('coord-kimi', 'kimi', []);
+    kimiCoordinator.setMCPServerInfo(
+      'coord-kimi',
+      'http://localhost:3001',
+      'coordinator-token',
+      'subtask-token',
+      '/path/server.js',
+    );
+    await kimiCoordinator.createTask({
+      name: 'test',
+      prompt: 'do',
+      coordinatorTaskId: 'coord-kimi',
+    });
+
+    const withoutManagedEntry = JSON.parse(currentConfig) as {
+      mcpServers: Record<string, unknown>;
+    };
+    delete withoutManagedEntry.mcpServers['parallel-code'];
+    currentConfig = JSON.stringify(withoutManagedEntry);
+
+    await kimiCoordinator.landSelf('task-1', { verification });
+
+    expect(JSON.parse(currentConfig).mcpServers).toEqual({
+      other: { command: 'user-owned-server' },
+    });
+    expect(vi.mocked(mergeTask)).toHaveBeenCalled();
+  });
+
+  it('fails closed when the managed Kimi child MCP entry cannot be recovered', async () => {
+    const configPath = '/tmp/test/.kimi-code/mcp.json';
     let currentConfig = JSON.stringify({
       mcpServers: { other: { command: 'user-owned-server' } },
     });
@@ -1627,12 +1686,13 @@ describe('Coordinator land_self', () => {
     delete withoutManagedEntry.mcpServers['parallel-code'];
     currentConfig = JSON.stringify(withoutManagedEntry);
 
-    await kimiCoordinator.landSelf('task-1', { verification });
+    await expect(kimiCoordinator.landSelf('task-1', { verification })).rejects.toThrow(
+      'Unable to restore managed Kimi MCP config',
+    );
 
-    expect(JSON.parse(currentConfig).mcpServers).toEqual({
-      other: { command: 'user-owned-server' },
-    });
-    expect(vi.mocked(mergeTask)).toHaveBeenCalled();
+    expect(vi.mocked(mergeTask)).not.toHaveBeenCalled();
+    expect(kimiCoordinator.getTask('task-1')?.autoDiscoveredMcpConfig).toBeDefined();
+    expect(kimiCoordinator.getTask('task-1')?.landingState).toBe('landing_escalated');
   });
 
   it('fails closed on token-bearing history even when the discovery config was deleted', async () => {

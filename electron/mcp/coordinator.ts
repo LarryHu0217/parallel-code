@@ -1723,6 +1723,7 @@ export class Coordinator {
       const managedEntry = servers['parallel-code'];
       if (managedEntry === undefined) {
         const historicalManagedEntry = this.readManagedMcpEntryFromTaskConfig(task, state);
+        if (historicalManagedEntry === undefined) return { status: 'failed' };
         task.autoDiscoveredMcpConfig = undefined;
         this.syncAutoDiscoveredMcpConfig(task);
         return { status: 'restored', managedEntry: historicalManagedEntry };
