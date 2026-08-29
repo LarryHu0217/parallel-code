@@ -115,7 +115,9 @@ describe('plan selection DOM behavior', () => {
     const container = renderPlanMarkdown(markdown);
     selectAllRenderedText(container);
 
-    expect(getPlanSelection(container, 'plan.md')?.selectedText).toBe(getNativeSelectionText());
+    expect(
+      getPlanSelection(container, 'plan.md', getPlanSelectionTextRanges(container))?.selectedText,
+    ).toBe(getNativeSelectionText());
   });
 
   it('excludes review-slot text from the selected prompt', () => {
@@ -129,7 +131,9 @@ describe('plan selection DOM behavior', () => {
     const paragraphs = container.querySelectorAll('p');
     selectText(paragraphs[0].firstChild as Text, paragraphs[2].firstChild as Text);
 
-    const selectedText = getPlanSelection(container, 'plan.md')?.selectedText ?? '';
+    const selectedText =
+      getPlanSelection(container, 'plan.md', getPlanSelectionTextRanges(container))?.selectedText ??
+      '';
     expect(selectedText).toContain('Before plan text');
     expect(selectedText).toContain('After plan text');
     expect(selectedText).not.toContain('Previous feedback');
@@ -173,11 +177,21 @@ describe('plan selection DOM behavior', () => {
     selection?.removeAllRanges();
     selection?.addRange(range);
 
-    expect(getPlanSelection(container, 'plan.md')).toMatchObject({ startLine: 0, endLine: 1 });
-    expect(getPlanSelectionFlowAnchor(container)).toBe(paragraphs[2]);
+    expect(
+      getPlanSelection(container, 'plan.md', getPlanSelectionTextRanges(container)),
+    ).toMatchObject({ startLine: 0, endLine: 1 });
+    expect(getPlanSelectionFlowAnchor(container, getPlanSelectionTextRanges(container))).toBe(
+      paragraphs[2],
+    );
   });
 
-  it('preserves newlines and indentation for a selection contained in a code block', () => {
+  // innerText is stubbed here because happy-dom does not implement layout, so this cannot
+  // assert real whitespace preservation. What it does assert is the reason whitespace
+  // survives in a browser: the stub only returns code-block text when the offscreen host
+  // contains `pre.shiki-block code`, so it fails unless cloneSelectionWithAncestors has
+  // rebuilt that ancestor chain and let `white-space: pre` apply. Real whitespace parity is
+  // covered by the native corpus above.
+  it('rebuilds the code-block ancestor chain on the offscreen host', () => {
     const container = document.createElement('div');
     container.className = 'plan-markdown plan-markdown-dialog';
     const pre = document.createElement('pre');
@@ -204,9 +218,9 @@ describe('plan selection DOM behavior', () => {
       },
     });
     try {
-      expect(getPlanSelection(container, 'plan.md')?.selectedText).toBe(
-        'function a() {\n  return 1;\n}',
-      );
+      expect(
+        getPlanSelection(container, 'plan.md', getPlanSelectionTextRanges(container))?.selectedText,
+      ).toBe('function a() {\n  return 1;\n}');
     } finally {
       if (originalInnerText) {
         Object.defineProperty(HTMLElement.prototype, 'innerText', originalInnerText);
@@ -226,8 +240,12 @@ describe('plan selection DOM behavior', () => {
     selection?.removeAllRanges();
     selection?.addRange(range);
 
-    expect(getPlanSelectionFlowAnchor(container)).toBe(paragraphs[0]);
-    expect(getPlanSelection(container, 'plan.md')).toMatchObject({ startLine: 0, endLine: 0 });
+    expect(getPlanSelectionFlowAnchor(container, getPlanSelectionTextRanges(container))).toBe(
+      paragraphs[0],
+    );
+    expect(
+      getPlanSelection(container, 'plan.md', getPlanSelectionTextRanges(container)),
+    ).toMatchObject({ startLine: 0, endLine: 0 });
     expect(getPlanSelectionTextRanges(container).map((item) => item.toString())).toEqual([
       'First paragraph.',
     ]);
@@ -239,7 +257,9 @@ describe('plan selection DOM behavior', () => {
     const proseText = container.querySelector('p')?.firstChild as Text;
     selectText(codeText, proseText);
 
-    expect(getPlanSelection(container, 'plan.md')?.selectedText).toBe('const x = 1;\nAfter step');
+    expect(
+      getPlanSelection(container, 'plan.md', getPlanSelectionTextRanges(container))?.selectedText,
+    ).toBe('const x = 1;\nAfter step');
   });
 
   it('intentionally excludes non-rendered Mermaid SVG text from prompt text', () => {
@@ -262,9 +282,36 @@ describe('plan selection DOM behavior', () => {
       container.querySelector('p')?.firstChild as Text,
     );
 
-    const selectedText = getPlanSelection(container, 'plan.md')?.selectedText ?? '';
+    const selectedText =
+      getPlanSelection(container, 'plan.md', getPlanSelectionTextRanges(container))?.selectedText ??
+      '';
     expect(selectedText).not.toContain('Hidden marker');
     expect(selectedText).toContain('After diagram');
+  });
+
+  // Both helpers now take the ranges the caller already walked, so the contract is that the
+  // ranges — not the live selection — decide whether there is anything to anchor.
+  it('returns null when given no text ranges, even with a live selection', () => {
+    const container = renderPlanMarkdown('First paragraph.\n\nSecond paragraph.');
+    selectAllRenderedText(container);
+    expect(getNativeSelectionText()).not.toBe('');
+
+    expect(getPlanSelection(container, 'plan.md', [])).toBeNull();
+    expect(getPlanSelectionFlowAnchor(container, [])).toBeNull();
+  });
+
+  it('resolves the flow anchor from ranges after the selection is cleared', () => {
+    const container = renderPlanMarkdown('First paragraph.\n\nSecond paragraph.');
+    const paragraphs = container.querySelectorAll('p');
+    selectText(paragraphs[0].firstChild as Text, paragraphs[0].firstChild as Text);
+    const textRanges = getPlanSelectionTextRanges(container);
+    expect(textRanges).not.toHaveLength(0);
+
+    // PlanViewerDialog clears the native selection right after computing these ranges.
+    window.getSelection()?.removeAllRanges();
+
+    expect(getPlanSelectionFlowAnchor(container, textRanges)).toBe(paragraphs[0]);
+    expect(getPlanSelection(container, 'plan.md', textRanges)).toBeNull();
   });
 
   it('recalculates retained range geometry when the plan reflows', () => {

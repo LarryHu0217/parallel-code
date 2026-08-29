@@ -9,7 +9,6 @@ import { InlineInput } from './InlineInput';
 import { AskCodeCard } from './AskCodeCard';
 import { CloseIcon } from './icons';
 import { createHighlightedMarkdown } from '../lib/marked-shiki';
-import { createReviewIdentity } from '../lib/diff-review-lifecycle';
 import {
   getPlanSelection,
   getPlanSelectionFlowAnchor,
@@ -47,12 +46,6 @@ function compilePlanReview(annotations: ReviewAnnotation[]): string {
 }
 
 export function PlanViewerDialog(props: PlanViewerDialogProps) {
-  const reviewIdentity = () =>
-    createReviewIdentity({
-      taskId: props.taskId,
-      worktreePath: props.worktreePath ?? '',
-    });
-
   return (
     <Dialog
       open={props.open}
@@ -67,11 +60,15 @@ export function PlanViewerDialog(props: PlanViewerDialogProps) {
         gap: '0',
       }}
     >
+      {/* Review state lives and dies with this provider: Dialog renders children under
+          <Show when={open}>, so it is created on open and disposed on close, and that reset
+          subsumes what `open` and `reviewIdentity` would do — a mounted task panel's taskId
+          and worktreePath do not change under it. Lift the provider above Dialog (as
+          DiffViewerDialog does) if plan review should survive a close; both props become
+          load-bearing again at that point. */}
       <ReviewProvider
         taskId={props.taskId}
         agentId={props.agentId}
-        reviewIdentity={reviewIdentity()}
-        open={props.open}
         compilePrompt={compilePlanReview}
         onSubmitted={props.onClose}
       >
@@ -186,7 +183,13 @@ function PlanViewerContent(props: PlanViewerContentProps) {
     );
   });
 
-  // Clear inline selection UI when pending selection is dismissed elsewhere.
+  // Clear inline selection UI when pending selection is dismissed elsewhere (sidebar,
+  // review reset). This infers "dismissed" from a signal the mouseup and submit paths also
+  // write, and Solid flushes user effects synchronously between writes inside a DOM handler.
+  // Both paths therefore batch() their writes so this only ever sees settled state — without
+  // that, it tears down the slot they just created. See PlanViewerDialog.client.test.tsx.
+  // dismissPendingSelection and the planHtml effect below write the same signals unbatched;
+  // they are safe only because they clear the slot before clearing pendingSelection.
   createEffect(() => {
     if (review.pendingSelection()) return;
     pendingFlowSlot()?.remove();
@@ -222,10 +225,10 @@ function PlanViewerContent(props: PlanViewerContentProps) {
       return;
     }
 
-    const sel = getPlanSelection(contentRef, props.planFileName);
-    const flowAnchor = getPlanSelectionFlowAnchor(contentRef);
     const textRanges = getPlanSelectionTextRanges(contentRef);
-    if (!sel || !flowAnchor || textRanges.length === 0) return;
+    const sel = getPlanSelection(contentRef, props.planFileName, textRanges);
+    const flowAnchor = getPlanSelectionFlowAnchor(contentRef, textRanges);
+    if (!sel || !flowAnchor) return;
 
     stopHighlightTracking?.();
     pendingFlowSlot()?.remove();

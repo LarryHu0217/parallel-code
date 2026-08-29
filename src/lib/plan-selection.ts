@@ -61,6 +61,14 @@ function getPlanSelectionVisibleText(containerEl: HTMLElement, selectedRange: Ra
   const host = document.createElement('div');
   const fragment = cloneSelectionWithAncestors(containerEl, selectedRange);
   fragment.querySelectorAll(PLAN_REVIEW_FLOW_SLOT_SELECTOR).forEach((node) => node.remove());
+  // Deliberate deviation from native selection, measured in Chromium 149. innerText already
+  // drops SVG <style> and <title>, but NOT <defs> text — Mermaid parks off-screen labels
+  // there and Selection.toString() emits them too, so `defs` here is the only thing keeping
+  // them out of the agent prompt. [hidden] and [aria-hidden] are genuinely rendered and do
+  // survive innerText; they are dropped on purpose as markup the agent should not read.
+  // No local test guards any of this: happy-dom's innerText already omits <defs> text, so
+  // the Mermaid case in plan-selection.client.test.tsx passes with or without this line.
+  // Removing an entry here needs a browser check, not a green suite.
   fragment
     .querySelectorAll('style, script, defs, metadata, title, desc, [hidden], [aria-hidden="true"]')
     .forEach((node) => node.remove());
@@ -84,7 +92,11 @@ function getPlanSelectionVisibleText(containerEl: HTMLElement, selectedRange: Ra
   }
 }
 
-/** Return the selected text ranges that belong to plan content, excluding inline review UI. */
+/**
+ * Return the selected text ranges that belong to plan content, excluding inline review UI.
+ * Walks the selection subtree, so callers compute this once per gesture and pass the result
+ * to `getPlanSelection` and `getPlanSelectionFlowAnchor` rather than having each re-walk.
+ */
 export function getPlanSelectionTextRanges(containerEl: HTMLElement): Range[] {
   const selectedRange = getSelectionRange(containerEl);
   if (!selectedRange) return [];
@@ -151,17 +163,24 @@ export function trackPlanSelectionGeometry(
 }
 
 /**
- * Extract structured selection info from the current DOM selection
- * within a plan viewer container. Returns null if no valid selection.
+ * Extract structured selection info for a plan viewer selection. `textRanges` must come from
+ * `getPlanSelectionTextRanges(containerEl)` on the same, unmutated selection: the text and
+ * heading are read from the live selection, while the line range is derived from these, so
+ * passing stale ranges desynchronizes the two. Returns null if no valid selection.
  */
-export function getPlanSelection(containerEl: HTMLElement, source: string): PlanSelection | null {
+export function getPlanSelection(
+  containerEl: HTMLElement,
+  source: string,
+  textRanges: readonly Range[],
+): PlanSelection | null {
   const range = getSelectionRange(containerEl);
   if (!range) return null;
+  // Checked before the offscreen clone below, which forces a layout to read innerText.
+  if (textRanges.length === 0) return null;
 
   const selectedText = getPlanSelectionVisibleText(containerEl, range);
   if (!selectedText) return null;
 
-  const textRanges = getPlanSelectionTextRanges(containerEl);
   const firstTextRange = textRanges[0];
   const lastTextRange = textRanges.at(-1);
   if (!firstTextRange || !lastTextRange) return null;
@@ -182,10 +201,16 @@ export function getPlanSelection(containerEl: HTMLElement, source: string): Plan
   };
 }
 
-/** Find the block that should own an inline review card for the current selection. */
-export function getPlanSelectionFlowAnchor(containerEl: HTMLElement): HTMLElement | null {
-  const ranges = getPlanSelectionTextRanges(containerEl);
-  const range = ranges.at(-1);
+/**
+ * Find the block that should own an inline review card for the given selection ranges.
+ * Pure with respect to `textRanges` — it does not read the live selection, so unlike the
+ * other helpers here it still returns a block after the selection has been cleared.
+ */
+export function getPlanSelectionFlowAnchor(
+  containerEl: HTMLElement,
+  textRanges: readonly Range[],
+): HTMLElement | null {
+  const range = textRanges.at(-1);
   if (!range) return null;
 
   let element: Element | null =
