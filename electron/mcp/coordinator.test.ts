@@ -1751,6 +1751,8 @@ describe('Coordinator land_self', () => {
 
     expect(vi.mocked(mergeTask)).not.toHaveBeenCalled();
     expect(coordinator.getTask('task-1')?.landingState).toBe('landing_escalated');
+    const historyCall = mockExecFile.mock.calls.find(([, args]) => args[0] === 'log');
+    expect(historyCall?.[1]).toEqual(expect.arrayContaining(['-m', '--text', '--no-textconv']));
   });
 
   it('fails closed before self-landing when Kimi MCP restoration fingerprint mismatches', async () => {
@@ -3502,6 +3504,12 @@ describe('Coordinator sub-task MCP config isolation', () => {
       expect.stringContaining('.kimi-code/mcp.json'),
       expect.any(Function),
     );
+    expect(mockAppendGitInfoExcludeBlock).toHaveBeenCalledWith(
+      '/tmp/a',
+      '.kimi-code/.parallel-code-atomic-*.tmp',
+      expect.stringContaining('.kimi-code/.parallel-code-atomic-*.tmp'),
+      expect.any(Function),
+    );
     for (const [, spawnOpts] of mockSpawnAgent.mock.calls) {
       expect(spawnOpts).toEqual(
         expect.objectContaining({
@@ -4193,6 +4201,48 @@ describe('Coordinator hydrateTask — restart hydration', () => {
     });
 
     expect(result.mcpLaunchArgs).toEqual([]);
+  });
+
+  it('hydrateTask preserves live Kimi MCP state when persisted state is invalid', async () => {
+    coordinator.setCoordinatorSpawnDefaults('coord-1', 'kimi', []);
+    coordinator.setMCPServerInfo(
+      'coord-1',
+      'http://localhost:3001',
+      'coordinator-token',
+      'subtask-token',
+      '/path/server.js',
+    );
+    const task = await coordinator.createTask({
+      name: 'kimi-task',
+      prompt: 'do',
+      coordinatorTaskId: 'coord-1',
+    });
+    const liveState = task.autoDiscoveredMcpConfig;
+    expect(liveState).toBeDefined();
+
+    const result = coordinator.hydrateTask({
+      id: task.id,
+      name: task.name,
+      projectId: task.projectId,
+      projectRoot: task.projectRoot,
+      branchName: task.branchName,
+      worktreePath: task.worktreePath,
+      agentId: task.agentId,
+      coordinatorTaskId: task.coordinatorTaskId,
+      mcpConfigPath: task.mcpConfigPath,
+      agentCommand: task.agentCommand,
+      autoDiscoveredMcpConfig: {
+        path: '/tmp/not-this-task/.kimi-code/mcp.json',
+        writtenParallelCodeFingerprint: 'a'.repeat(64),
+      },
+    });
+
+    expect(result.autoDiscoveredMcpConfig?.path).toBe(liveState?.path);
+    expect(mockLogWarn).toHaveBeenCalledWith(
+      'coordinator.kimi_mcp',
+      'ignored invalid persisted Kimi MCP state; preserving live state',
+      { taskId: task.id },
+    );
   });
 
   it('hydrateTask restores an undelivered initial prompt for backend delivery', () => {
