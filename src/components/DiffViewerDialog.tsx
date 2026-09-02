@@ -390,7 +390,7 @@ function DiffViewerContent(props: DiffViewerDialogProps) {
           style={{
             background: 'color-mix(in srgb, var(--fg) 6%, transparent)',
             border: `1px solid ${theme.borderSubtle}`,
-            'border-radius': '4px',
+            'border-radius': 'var(--radius-xs)',
             color: theme.fg,
             'font-size': sf(13),
             'font-family': "'JetBrains Mono', monospace",
@@ -415,7 +415,7 @@ function DiffViewerContent(props: DiffViewerDialogProps) {
             padding: '4px',
             display: 'flex',
             'align-items': 'center',
-            'border-radius': '4px',
+            'border-radius': 'var(--radius-xs)',
           }}
           title="Close"
         >

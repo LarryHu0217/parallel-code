@@ -129,7 +129,7 @@ export function TaskTitleBar(props: TaskTitleBarProps) {
 
   return (
     <div
-      class={`task-title-bar${props.isActive ? ' island-header-active' : ''}`}
+      class="task-title-bar"
       style={{
         display: 'flex',
         'align-items': 'center',
@@ -137,7 +137,6 @@ export function TaskTitleBar(props: TaskTitleBarProps) {
         padding: '0 10px',
         height: '100%',
         background: 'transparent',
-        'border-bottom': `1px solid ${theme.border}`,
         'user-select': 'none',
         cursor: 'grab',
       }}
@@ -240,7 +239,7 @@ export function TaskTitleBar(props: TaskTitleBarProps) {
                     'justify-content': 'center',
                     padding: '4px',
                     border: `1px solid ${theme.border}`,
-                    'border-radius': '6px',
+                    'border-radius': 'var(--radius-sm)',
                   }}
                 >
                   <span class="inline-spinner" style={{ width: '14px', height: '14px' }} />

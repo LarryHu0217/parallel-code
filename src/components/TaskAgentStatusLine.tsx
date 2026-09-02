@@ -57,7 +57,7 @@ export function TaskAgentStatusLine(props: TaskAgentStatusLineProps) {
               'min-width': '0',
               padding: '1px 0 0 12px',
               color: theme.fgMuted,
-              'font-size': sf(10),
+              'font-size': sf(11),
               'line-height': '1.4',
               overflow: 'hidden',
               'white-space': 'nowrap',
@@ -81,7 +81,7 @@ export function TaskAgentStatusLine(props: TaskAgentStatusLineProps) {
                 {described().text}
               </span>
             </Show>
-            <span style={{ 'font-size': sf(9), 'flex-shrink': '0', 'margin-left': 'auto' }}>
+            <span style={{ 'font-size': sf(11), 'flex-shrink': '0', 'margin-left': 'auto' }}>
               {age()}
             </span>
           </div>

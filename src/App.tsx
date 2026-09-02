@@ -787,7 +787,7 @@ function App() {
               border: `1px solid ${theme.border}`,
               color: theme.fg,
               padding: '8px 24px',
-              'border-radius': '8px',
+              'border-radius': 'var(--radius-md)',
               cursor: 'pointer',
               'font-size': '15px',
             }}
@@ -936,7 +936,7 @@ function App() {
               transform: 'translateX(-50%)',
               background: theme.islandBg,
               border: `1px solid ${theme.border}`,
-              'border-radius': '8px',
+              'border-radius': 'var(--radius-md)',
               padding: '10px 20px',
               color: theme.fg,
               'font-size': '14px',

@@ -74,7 +74,7 @@ function getAttentionColor(attention: TaskAttentionState): string | null {
   if (attention === 'active') return theme.accent;
   if (attention === 'needs_input') return theme.warning;
   if (attention === 'error') return theme.error;
-  if (attention === 'review') return '#c084fc';
+  if (attention === 'review') return theme.review;
   return null;
 }
 
@@ -128,10 +128,10 @@ function DirectBranchBadge(props: { branchName: string }) {
     <span
       title={`Works directly on ${props.branchName}`}
       style={{
-        'font-size': sf(10),
+        'font-size': sf(11),
         'font-weight': '600',
         padding: '1px 5px',
-        'border-radius': '3px',
+        'border-radius': 'var(--radius-xs)',
         background: `color-mix(in srgb, ${theme.warning} 12%, transparent)`,
         color: theme.warning,
         'flex-shrink': '0',
@@ -184,14 +184,14 @@ export function ProjectTaskGroupToggle(props: {
         width: '100%',
         background: 'transparent',
         border: 'none',
-        color: theme.fgSubtle,
+        color: theme.fgMuted,
         cursor: 'pointer',
-        'font-size': sf(11),
-        'text-transform': 'uppercase',
-        'letter-spacing': '0.05em',
+        'font-size': sf(12),
+        'font-weight': '600',
+        'font-family': 'inherit',
         'margin-top': '8px',
         'margin-bottom': '4px',
-        padding: '0 2px',
+        padding: '2px 2px',
         display: 'flex',
         'align-items': 'center',
         gap: '5px',
@@ -230,7 +230,9 @@ export function ProjectTaskGroupToggle(props: {
       >
         {props.project.name}
       </span>
-      <span style={{ 'flex-shrink': '0' }}>({props.taskCount})</span>
+      <span style={{ 'flex-shrink': '0', color: theme.fgSubtle, 'font-weight': '400' }}>
+        ({props.taskCount})
+      </span>
     </button>
   );
 }
@@ -286,7 +288,7 @@ function NeedsInputRow(props: {
             'flex-shrink': '0',
             gap: '2px',
             padding: '6px 8px',
-            'border-radius': '6px',
+            'border-radius': 'var(--radius-sm)',
             'font-size': sf(12),
             color: theme.fg,
             'font-weight': '500',
@@ -318,7 +320,7 @@ function NeedsInputRow(props: {
               'align-items': 'center',
               gap: '5px',
               'padding-left': '12px',
-              'font-size': sf(10),
+              'font-size': sf(11),
               color: theme.fgSubtle,
               'min-width': '0',
             }}
@@ -369,9 +371,7 @@ function NeedsInputTray(props: { nowMs: number }) {
         <div class="sidebar-attention-tray-header">
           <span
             style={{
-              'font-size': sf(11),
-              'text-transform': 'uppercase',
-              'letter-spacing': '0.05em',
+              'font-size': sf(12),
               color: theme.warning,
               'font-weight': '600',
             }}
@@ -442,7 +442,7 @@ export function TaskRowShell(props: {
       style={{
         padding: '0 10px',
         'padding-left': props.paddingLeft ?? '10px',
-        'border-radius': '6px',
+        'border-radius': 'var(--radius-sm)',
         'font-size': props.fontSize,
         cursor: props.cursor,
         'white-space': 'nowrap',
@@ -849,7 +849,7 @@ export function Sidebar() {
                 style={{
                   display: 'flex',
                   'flex-direction': 'column',
-                  gap: '6px',
+                  gap: '2px',
                   'min-height': '0',
                   'max-height': projectListMaxHeight(),
                   'overflow-y': 'auto',
@@ -860,20 +860,23 @@ export function Sidebar() {
                     <div
                       role="button"
                       tabIndex={0}
+                      class="project-row"
                       data-project-id={project.id}
                       onClick={() => setEditingProject(project)}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter') setEditingProject(project);
                       }}
+                      title={
+                        isProjectMissing(project.id)
+                          ? `Folder not found: ${abbreviateHomePath(project.path)}`
+                          : abbreviateHomePath(project.path)
+                      }
                       style={{
                         display: 'flex',
                         'align-items': 'center',
-                        gap: '6px',
-                        padding: '4px 6px',
-                        'border-radius': '6px',
-                        background: isProjectMissing(project.id)
-                          ? `color-mix(in srgb, ${theme.warning} 8%, ${theme.bgInput})`
-                          : theme.bgInput,
+                        gap: '8px',
+                        padding: '3px 4px',
+                        'border-radius': 'var(--radius-sm)',
                         'font-size': sf(12),
                         cursor: 'pointer',
                         border:
@@ -892,32 +895,30 @@ export function Sidebar() {
                           'flex-shrink': '0',
                         }}
                       />
-                      <div style={{ flex: '1', 'min-width': '0', overflow: 'hidden' }}>
-                        <div
+                      <span
+                        style={{
+                          flex: '1',
+                          'min-width': '0',
+                          color: theme.fg,
+                          'font-weight': '500',
+                          'white-space': 'nowrap',
+                          overflow: 'hidden',
+                          'text-overflow': 'ellipsis',
+                        }}
+                      >
+                        {project.name}
+                      </span>
+                      <Show when={isProjectMissing(project.id)}>
+                        <span
                           style={{
-                            color: theme.fg,
-                            'font-weight': '500',
-                            'white-space': 'nowrap',
-                            overflow: 'hidden',
-                            'text-overflow': 'ellipsis',
-                          }}
-                        >
-                          {project.name}
-                        </div>
-                        <div
-                          style={{
-                            color: isProjectMissing(project.id) ? theme.warning : theme.fgSubtle,
+                            color: theme.warning,
                             'font-size': sf(11),
-                            'white-space': 'nowrap',
-                            overflow: 'hidden',
-                            'text-overflow': 'ellipsis',
+                            'flex-shrink': '0',
                           }}
                         >
-                          {isProjectMissing(project.id)
-                            ? 'Folder not found'
-                            : abbreviateHomePath(project.path)}
-                        </div>
-                      </div>
+                          Folder not found
+                        </span>
+                      </Show>
                       <button
                         class="icon-btn"
                         onClick={(e) => {
@@ -964,7 +965,7 @@ export function Sidebar() {
               style={{
                 background: 'transparent',
                 border: `1px solid ${theme.border}`,
-                'border-radius': '8px',
+                'border-radius': 'var(--radius-md)',
                 padding: '8px 14px',
                 color: theme.fgMuted,
                 cursor: 'pointer',
@@ -996,7 +997,7 @@ export function Sidebar() {
             style={{
               background: 'transparent',
               border: `1px solid ${theme.border}`,
-              'border-radius': '8px',
+              'border-radius': 'var(--radius-md)',
               padding: '8px 14px',
               color: theme.fgMuted,
               cursor: 'pointer',
@@ -1110,13 +1111,12 @@ export function Sidebar() {
           >
             <span
               style={{
-                'font-size': sf(11),
-                color: theme.fgSubtle,
-                'text-transform': 'uppercase',
-                'letter-spacing': '0.05em',
+                'font-size': sf(12),
+                'font-weight': '600',
+                color: theme.fgMuted,
                 'margin-top': '8px',
                 'margin-bottom': '4px',
-                padding: '0 2px',
+                padding: '2px 2px',
               }}
             >
               Other (
@@ -1143,48 +1143,7 @@ export function Sidebar() {
           </Show>
         </div>
 
-        {/* Connect / Disconnect Phone button */}
-        {(() => {
-          const connected = () =>
-            store.remoteAccess.enabled && store.remoteAccess.connectedClients > 0;
-          const accent = () => (connected() ? theme.success : theme.fgMuted);
-          return (
-            <button
-              onClick={() => setShowConnectPhone(true)}
-              style={{
-                display: 'flex',
-                'align-items': 'center',
-                gap: '8px',
-                padding: '8px 12px',
-                margin: '4px 8px',
-                background: 'transparent',
-                border: `1px solid ${connected() ? theme.success : theme.border}`,
-                'border-radius': '8px',
-                color: accent(),
-                'font-size': sf(13),
-                cursor: 'pointer',
-                'flex-shrink': '0',
-              }}
-            >
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke={accent()}
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              >
-                <rect x="5" y="2" width="14" height="20" rx="2" ry="2" />
-                <line x1="12" y1="18" x2="12.01" y2="18" />
-              </svg>
-              {connected() ? 'Phone Connected' : 'Connect Phone'}
-            </button>
-          );
-        })()}
-
-        <SidebarFooter />
+        <SidebarFooter onConnectPhone={() => setShowConnectPhone(true)} />
 
         <ConnectPhoneModal open={showConnectPhone()} onClose={() => setShowConnectPhone(false)} />
 
@@ -1301,7 +1260,7 @@ function CoordinatorFolder(props: TaskEntryProps) {
               <Show when={childCount() > 0}>
                 <span
                   style={{
-                    'font-size': sf(10),
+                    'font-size': sf(11),
                     color: theme.fgSubtle,
                     'flex-shrink': '0',
                   }}
@@ -1417,7 +1376,7 @@ function CollapsedTaskEntry(props: {
               <Show when={isCoordinator() && childCount() > 0}>
                 <span
                   style={{
-                    'font-size': sf(10),
+                    'font-size': sf(11),
                     color: theme.fgSubtle,
                     'flex-shrink': '0',
                   }}
@@ -1514,11 +1473,11 @@ function TaskRow(props: TaskRowProps) {
                 {(label) => (
                   <span
                     style={{
-                      'font-size': sf(10),
+                      'font-size': sf(11),
                       color: offscreenAttention.color(),
                       background: `color-mix(in srgb, ${offscreenAttention.color()} 12%, transparent)`,
                       padding: '1px 5px',
-                      'border-radius': '3px',
+                      'border-radius': 'var(--radius-xs)',
                       'flex-shrink': '0',
                     }}
                   >

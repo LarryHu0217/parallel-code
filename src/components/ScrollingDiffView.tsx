@@ -486,7 +486,7 @@ function FileSection(props: {
       style={{
         margin: '16px 10px',
         border: `1px solid ${theme.border}`,
-        'border-radius': '8px',
+        'border-radius': 'var(--radius-md)',
         overflow: 'hidden',
         background: theme.bgElevated,
         opacity: props.dimmed ? '0.25' : '0.9',
@@ -530,7 +530,7 @@ function FileSection(props: {
             'font-size': sf(12),
             'font-weight': '600',
             padding: '2px 8px',
-            'border-radius': '4px',
+            'border-radius': 'var(--radius-xs)',
             color: getStatusColor(props.file.status),
             background:
               props.file.status === 'M'
@@ -563,7 +563,7 @@ function FileSection(props: {
               'font-size': sf(12),
               'font-weight': '600',
               padding: '2px 8px',
-              'border-radius': '4px',
+              'border-radius': 'var(--radius-xs)',
               color: theme.fg,
               background: SEARCH_HIGHLIGHT_BG,
               'white-space': 'nowrap',
@@ -608,7 +608,7 @@ function FileSection(props: {
             padding: '4px',
             display: 'flex',
             'align-items': 'center',
-            'border-radius': '4px',
+            'border-radius': 'var(--radius-xs)',
           }}
           title="Open in editor"
         >
@@ -1004,7 +1004,7 @@ export function ScrollingDiffView(props: ScrollingDiffViewProps) {
             margin: '10px 10px 0',
             padding: '8px 12px',
             border: `1px solid ${theme.border}`,
-            'border-radius': '8px',
+            'border-radius': 'var(--radius-md)',
             background: theme.bgElevated,
             'font-size': sf(12),
             color: theme.fgMuted,
@@ -1020,7 +1020,7 @@ export function ScrollingDiffView(props: ScrollingDiffViewProps) {
             style={{
               background: 'transparent',
               border: `1px solid ${theme.border}`,
-              'border-radius': '4px',
+              'border-radius': 'var(--radius-xs)',
               color: theme.fg,
               cursor: 'pointer',
               'font-size': sf(12),

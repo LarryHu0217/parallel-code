@@ -183,7 +183,7 @@ export function MergeDialog(props: MergeDialogProps) {
                           padding: '4px 12px',
                           background: theme.bgInput,
                           border: `1px solid ${theme.border}`,
-                          'border-radius': '6px',
+                          'border-radius': 'var(--radius-sm)',
                           color: theme.fg,
                           cursor: 'pointer',
                           'font-size': '13px',
@@ -228,7 +228,7 @@ export function MergeDialog(props: MergeDialogProps) {
                 'font-size': '13px',
                 color: theme.fgMuted,
                 padding: '8px 12px',
-                'border-radius': '8px',
+                'border-radius': 'var(--radius-md)',
                 background: theme.bgInput,
                 border: `1px solid ${theme.border}`,
               }}
@@ -305,7 +305,7 @@ export function MergeDialog(props: MergeDialogProps) {
                       padding: '6px 14px',
                       background: hasConflicts() ? theme.bgInput : theme.accent,
                       border: hasConflicts() ? `1px solid ${theme.border}` : 'none',
-                      'border-radius': '8px',
+                      'border-radius': 'var(--radius-md)',
                       color: hasConflicts() ? theme.fg : theme.accentText,
                       cursor:
                         rebasing() || worktreeStatus()?.has_uncommitted_changes
@@ -342,7 +342,7 @@ export function MergeDialog(props: MergeDialogProps) {
                         padding: '6px 14px',
                         background: hasConflicts() ? theme.accent : theme.bgInput,
                         border: hasConflicts() ? 'none' : `1px solid ${theme.border}`,
-                        'border-radius': '8px',
+                        'border-radius': 'var(--radius-md)',
                         color: hasConflicts() ? theme.accentText : theme.fg,
                         cursor: 'pointer',
                         'font-size': '13px',
@@ -394,7 +394,7 @@ export function MergeDialog(props: MergeDialogProps) {
                     'font-family': "'JetBrains Mono', monospace",
                     'font-size': '12px',
                     border: `1px solid ${theme.border}`,
-                    'border-radius': '8px',
+                    'border-radius': 'var(--radius-md)',
                     padding: '4px 0',
                   }}
                 >
@@ -451,7 +451,7 @@ export function MergeDialog(props: MergeDialogProps) {
           <div
             style={{
               border: `1px solid ${theme.border}`,
-              'border-radius': '8px',
+              'border-radius': 'var(--radius-md)',
               overflow: 'hidden',
               'max-height': '240px',
               display: 'flex',
@@ -532,7 +532,7 @@ export function MergeDialog(props: MergeDialogProps) {
                 width: '100%',
                 background: theme.bgInput,
                 border: `1px solid ${theme.border}`,
-                'border-radius': '8px',
+                'border-radius': 'var(--radius-md)',
                 padding: '8px 10px',
                 color: theme.fg,
                 'font-size': '13px',

@@ -25,19 +25,22 @@ import { mod } from '../lib/platform';
 import { extractLabel, consumePendingShellCommand } from '../lib/bookmarks';
 import type { Task } from '../store/types';
 
-const toolbarBtnStyle = (highlighted: boolean): JSX.CSSProperties => ({
-  background: theme.taskPanelBg,
-  border: `1px solid ${highlighted ? theme.accent : theme.border}`,
+/** The "open terminal" action is the one bordered button; bookmark launchers
+ *  sit next to it as quiet text so a project with six shortcuts doesn't read
+ *  as a row of equal tabs. Hover/focus borders come from `.icon-btn`. */
+const toolbarBtnStyle = (highlighted: boolean, bordered: boolean): JSX.CSSProperties => ({
+  background: bordered ? theme.taskPanelBg : 'transparent',
+  border: `1px solid ${highlighted ? theme.accent : bordered ? theme.border : 'transparent'}`,
   color: theme.fgMuted,
   cursor: 'pointer',
-  'border-radius': '4px',
-  padding: '4px 12px',
-  'font-size': sf(14),
+  'border-radius': 'var(--radius-sm)',
+  padding: '3px 8px',
+  'font-size': sf(12),
   'line-height': '1',
   display: 'flex',
   'align-items': 'center',
   'flex-shrink': '0',
-  gap: '4px',
+  gap: '5px',
 });
 
 interface TaskShellSectionProps {
@@ -170,10 +173,10 @@ export function TaskShellSection(props: TaskShellSectionProps) {
           }}
           tabIndex={-1}
           title={`Open terminal (${mod}+Shift+T)`}
-          style={toolbarBtnStyle(shellToolbarIdx() === 0 && shellToolbarFocused())}
+          aria-label="Open terminal"
+          style={toolbarBtnStyle(shellToolbarIdx() === 0 && shellToolbarFocused(), true)}
         >
-          <span style={{ 'font-family': 'monospace', 'font-size': sf(14) }}>&gt;_</span>
-          <span>Terminal</span>
+          <span style={{ 'font-family': 'var(--font-mono)', 'font-size': sf(12) }}>&gt;_</span>
         </button>
         <For each={projectBookmarks()}>
           {(bookmark, i) => (
@@ -187,7 +190,7 @@ export function TaskShellSection(props: TaskShellSectionProps) {
               }}
               tabIndex={-1}
               title={bookmark.command}
-              style={toolbarBtnStyle(shellToolbarIdx() === i() + 1 && shellToolbarFocused())}
+              style={toolbarBtnStyle(shellToolbarIdx() === i() + 1 && shellToolbarFocused(), false)}
             >
               <span>{extractLabel(bookmark.command)}</span>
             </button>
@@ -248,7 +251,7 @@ export function TaskShellSection(props: TaskShellSectionProps) {
                       border: `1px solid ${theme.border}`,
                       color: theme.fgMuted,
                       cursor: 'pointer',
-                      'border-radius': '6px',
+                      'border-radius': 'var(--radius-sm)',
                       padding: '2px 6px',
                       'line-height': '1',
                       'font-size': '15px',
@@ -268,7 +271,7 @@ export function TaskShellSection(props: TaskShellSectionProps) {
                         color: shellExits[shellId]?.exitCode === 0 ? theme.success : theme.error,
                         background: 'color-mix(in srgb, var(--island-bg) 80%, transparent)',
                         padding: '4px 12px',
-                        'border-radius': '8px',
+                        'border-radius': 'var(--radius-md)',
                         border: `1px solid ${theme.border}`,
                       }}
                     >

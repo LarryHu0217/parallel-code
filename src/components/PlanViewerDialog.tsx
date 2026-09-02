@@ -334,7 +334,7 @@ function PlanViewerContent(props: PlanViewerContentProps) {
               padding: '4px',
               display: 'flex',
               'align-items': 'center',
-              'border-radius': '4px',
+              'border-radius': 'var(--radius-xs)',
             }}
             title="Open in editor"
           >
@@ -354,7 +354,7 @@ function PlanViewerContent(props: PlanViewerContentProps) {
             padding: '4px',
             display: 'flex',
             'align-items': 'center',
-            'border-radius': '4px',
+            'border-radius': 'var(--radius-xs)',
           }}
           title="Close"
         >

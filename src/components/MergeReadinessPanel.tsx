@@ -56,7 +56,7 @@ export function MergeReadinessPanel(props: { readiness: MergeReadiness }) {
         padding: '10px 12px',
         border: `1px solid color-mix(in srgb, ${color()} 45%, ${theme.border})`,
         'border-left': `3px solid ${color()}`,
-        'border-radius': '8px',
+        'border-radius': 'var(--radius-md)',
         background: 'color-mix(in srgb, var(--fg) 3%, transparent)',
       }}
     >

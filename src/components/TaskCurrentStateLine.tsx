@@ -41,7 +41,7 @@ export function TaskCurrentStateLine(props: TaskCurrentStateLineProps) {
             background: props.variant === 'card' ? theme.bgSelectedSubtle : 'transparent',
             'border-bottom': props.variant === 'card' ? `1px solid ${theme.border}` : undefined,
             color: theme.fgMuted,
-            'font-size': props.variant === 'card' ? sf(11) : sf(10),
+            'font-size': sf(11),
             'line-height': '1.4',
             overflow: 'hidden',
             'white-space': 'nowrap',
@@ -74,7 +74,7 @@ export function TaskCurrentStateLine(props: TaskCurrentStateLineProps) {
               <span
                 style={{
                   color: current().stale ? theme.warning : theme.fgMuted,
-                  'font-size': props.variant === 'card' ? sf(10) : sf(9),
+                  'font-size': sf(11),
                   'flex-shrink': '0',
                 }}
               >

@@ -1237,10 +1237,10 @@ export function TerminalView(props: TerminalViewProps) {
           <button
             style={{
               padding: '6px 16px',
-              background: '#3b82f6',
-              color: '#fff',
+              background: 'var(--accent)',
+              color: 'var(--accent-text)',
               border: 'none',
-              'border-radius': '4px',
+              'border-radius': 'var(--radius-xs)',
               'font-size': '13px',
               cursor: 'pointer',
             }}

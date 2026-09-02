@@ -5,7 +5,7 @@ const SIZES = { sm: 6, md: 8 } as const;
 /** Fixed lane so task names line up whatever glyph sits in front of them. */
 const LANES = { sm: 12, md: 14 } as const;
 const SPINNERS = { sm: 10, md: 12 } as const;
-const REVIEW_COLOR = '#c084fc';
+const REVIEW_COLOR = theme.review;
 
 /** Shape carries the state, colour only reinforces it — a scan of the list
  *  should separate "spinning", "asking", and "resting" without reading hue. */

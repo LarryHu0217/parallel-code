@@ -34,7 +34,7 @@ function UsageMeter(props: { label: string; window: UsageWindow; width?: number 
         style={{
           width: `${props.width ?? 56}px`,
           height: '5px',
-          'border-radius': '3px',
+          'border-radius': 'var(--radius-xs)',
           background: theme.bgInput,
           border: `1px solid ${theme.border}`,
           overflow: 'hidden',
@@ -85,7 +85,7 @@ function UsagePopover(props: {
           'z-index': '1000',
           background: theme.bgElevated,
           border: `1px solid ${theme.border}`,
-          'border-radius': '6px',
+          'border-radius': 'var(--radius-sm)',
           'box-shadow': '0 4px 16px rgba(0, 0, 0, 0.3)',
           padding: '8px 10px',
           'font-family': "'JetBrains Mono', monospace",
@@ -102,7 +102,7 @@ function UsagePopover(props: {
             'font-weight': '600',
             'text-transform': 'uppercase',
             'letter-spacing': '0.05em',
-            'font-size': sf(10),
+            'font-size': sf(11),
           }}
         >
           {PROVIDER_LABELS[props.provider]} usage
@@ -116,7 +116,7 @@ function UsagePopover(props: {
         <div
           style={{
             color: props.usage.status === 'error' ? theme.warning : theme.fgSubtle,
-            'font-size': sf(10),
+            'font-size': sf(11),
           }}
         >
           {footer()}

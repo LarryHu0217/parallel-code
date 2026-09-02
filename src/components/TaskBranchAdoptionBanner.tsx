@@ -6,7 +6,7 @@ import type { Task } from '../store/types';
 const bannerBtnStyle: JSX.CSSProperties = {
   background: 'transparent',
   border: `1px solid ${theme.warning}`,
-  'border-radius': '4px',
+  'border-radius': 'var(--radius-xs)',
   padding: '1px 8px',
   color: theme.warning,
   cursor: 'pointer',

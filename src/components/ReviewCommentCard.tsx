@@ -78,7 +78,7 @@ export function ReviewCommentCard(props: ReviewCommentCardProps) {
             color: theme.fgMuted,
             cursor: 'pointer',
             padding: '2px 4px',
-            'border-radius': '3px',
+            'border-radius': 'var(--radius-xs)',
             'font-size': sf(15),
             'line-height': '1',
           }}
@@ -109,7 +109,7 @@ export function ReviewCommentCard(props: ReviewCommentCardProps) {
               width: '100%',
               background: theme.bgInput,
               border: `1px solid ${theme.borderSubtle}`,
-              'border-radius': '4px',
+              'border-radius': 'var(--radius-xs)',
               color: theme.fg,
               'font-size': sf(13),
               'font-family': "'JetBrains Mono', monospace",

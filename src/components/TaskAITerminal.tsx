@@ -358,7 +358,7 @@ export function TaskAITerminal(props: TaskAITerminalProps) {
                     background: theme.bgInput,
                     border: `1px solid ${theme.border}`,
                     color: theme.fgMuted,
-                    'border-radius': '5px',
+                    'border-radius': 'var(--radius-sm)',
                     cursor: 'pointer',
                     padding: '0',
                   }}
@@ -489,7 +489,7 @@ function AddAgentMenu(props: { taskId: string }) {
           background: theme.bgInput,
           border: `1px solid ${theme.border}`,
           color: theme.fgMuted,
-          'border-radius': '5px',
+          'border-radius': 'var(--radius-sm)',
           cursor: 'pointer',
           padding: '0',
         }}
@@ -507,14 +507,14 @@ function AddAgentMenu(props: { taskId: string }) {
             'margin-top': '4px',
             background: theme.bgElevated,
             border: `1px solid ${theme.border}`,
-            'border-radius': '6px',
+            'border-radius': 'var(--radius-sm)',
             padding: '4px 0',
             'z-index': '30',
             'min-width': '180px',
             'box-shadow': '0 4px 12px rgba(0,0,0,0.3)',
           }}
         >
-          <div style={{ padding: '4px 10px', 'font-size': sf(10), color: theme.fgMuted }}>
+          <div style={{ padding: '4px 10px', 'font-size': sf(11), color: theme.fgMuted }}>
             Add agent
           </div>
           <For each={availableAgents()}>
@@ -620,7 +620,7 @@ function AgentTerminalPane(props: {
             color: theme.fgMuted,
             background: 'color-mix(in srgb, var(--island-bg) 80%, transparent)',
             padding: '2px 8px',
-            'border-radius': '6px',
+            'border-radius': 'var(--radius-sm)',
             border: `1px solid ${theme.border}`,
           }}
         >
@@ -643,7 +643,7 @@ function AgentTerminalPane(props: {
                   color: a().exitCode === 0 ? theme.success : theme.error,
                   background: 'color-mix(in srgb, var(--island-bg) 80%, transparent)',
                   padding: '4px 12px',
-                  'border-radius': '8px',
+                  'border-radius': 'var(--radius-md)',
                   border: `1px solid ${theme.border}`,
                   display: 'flex',
                   'align-items': 'center',
@@ -667,7 +667,7 @@ function AgentTerminalPane(props: {
                       border: `1px solid ${theme.border}`,
                       color: theme.fg,
                       padding: '2px 8px',
-                      'border-radius': '4px',
+                      'border-radius': 'var(--radius-xs)',
                       cursor: 'pointer',
                       'font-size': sf(11),
                     }}
@@ -794,7 +794,7 @@ function MarkdownViewerDialog(props: {
               padding: '4px',
               display: 'flex',
               'align-items': 'center',
-              'border-radius': '4px',
+              'border-radius': 'var(--radius-xs)',
             }}
             title="Open in editor"
           >
@@ -813,7 +813,7 @@ function MarkdownViewerDialog(props: {
             padding: '4px',
             display: 'flex',
             'align-items': 'center',
-            'border-radius': '4px',
+            'border-radius': 'var(--radius-xs)',
           }}
           title="Close"
         >
@@ -898,7 +898,7 @@ function AgentRestartMenu(props: { agentId: string; agentDefId: string }) {
             'margin-top': '4px',
             background: theme.bgElevated,
             border: `1px solid ${theme.border}`,
-            'border-radius': '6px',
+            'border-radius': 'var(--radius-sm)',
             padding: '4px 0',
             'z-index': '20',
             'min-width': '160px',
@@ -908,7 +908,7 @@ function AgentRestartMenu(props: { agentId: string; agentDefId: string }) {
           <div
             style={{
               padding: '4px 10px',
-              'font-size': sf(10),
+              'font-size': sf(11),
               color: theme.fgMuted,
             }}
           >
