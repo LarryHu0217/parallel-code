@@ -38,6 +38,20 @@ describe('recordWebglContextLoss', () => {
     expect(retry).toBe(false);
   });
 
+  it('brakes a drip of losses arriving just under the wave span apart', () => {
+    // Desynchronized eviction chains can land losses <1s apart indefinitely.
+    // Anchoring the wave at its start bounds this: the brake must trip.
+    let state = initialWebglLossState();
+    let retry = true;
+    let i = 0;
+    for (; i < 100 && retry; i++) {
+      ({ state, retry } = recordWebglContextLoss(state, T0 + i * (WEBGL_LOSS_WAVE_MS - 100)));
+    }
+    expect(retry).toBe(false);
+    // Trips once the third wave starts — a handful of losses, not dozens.
+    expect(i).toBeLessThanOrEqual(6);
+  });
+
   it('always retries isolated waves, e.g. one per sleep/wake cycle', () => {
     let state = initialWebglLossState();
     let retry = false;

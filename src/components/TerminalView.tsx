@@ -994,7 +994,7 @@ export function TerminalView(props: TerminalViewProps) {
     // trips the brake even though every hop lands on a different pane.
     let webglReattachTimer: number | undefined;
 
-    function attachWebgl(isReattach: boolean) {
+    function attachWebgl() {
       if (!term) return;
       try {
         const addon = new WebglAddon();
@@ -1004,23 +1004,22 @@ export function TerminalView(props: TerminalViewProps) {
           if (recordSharedWebglContextLoss()) {
             webglReattachTimer = window.setTimeout(() => {
               webglReattachTimer = undefined;
-              attachWebgl(true);
+              attachWebgl();
             }, WEBGL_REATTACH_DELAY_MS);
           }
         });
         term.loadAddon(addon);
         webglAddon = addon;
-        // A reattached canvas starts blank — repaint so a recovered pane
-        // doesn't look frozen until its next output. Never on initial mount:
-        // redrawTerminal clears the glyph atlas xterm SHARES across panes
-        // without invalidating the other owners' render models, so a
-        // mount-time clear garbles glyphs in every already-open terminal.
-        if (isReattach) redrawTerminal(agentId);
+        // No manual repaint here: loadAddon → RenderService.setRenderer
+        // already forces a full refresh of this pane. redrawTerminal would
+        // additionally clear the glyph atlas xterm SHARES across panes
+        // without invalidating the other owners' render models, garbling
+        // glyphs in every healthy terminal.
       } catch {
         // WebGL2 not supported — DOM renderer used automatically
       }
     }
-    attachWebgl(false);
+    attachWebgl();
 
     let spawnTimer: number | undefined;
     let spawnStarted = false;

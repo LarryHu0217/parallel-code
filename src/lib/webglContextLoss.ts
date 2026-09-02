@@ -19,8 +19,18 @@
 // shortcut: after giving up, a pane stays on the DOM renderer until remount —
 // attaching/detaching on visibility edges would make this recoverable and
 // keep live contexts ≈ visible panes.
+//
+// Known conflation: unrelated one-off losses on different panes inside one
+// window also advance the wave count, so a third such pane is denied even
+// though each pane lost only once. Accepted — from the outside that pattern is
+// indistinguishable from slow churn, and the cost (one pane on the DOM
+// renderer until remount) is bounded.
 
-/** Losses within this span belong to the same wave (one underlying event). */
+/** Losses within this span OF THE WAVE'S START belong to that wave (one
+ *  underlying event, e.g. a GPU crash hitting every pane at once). The span is
+ *  anchored at the wave start, not the latest loss: desynchronized eviction
+ *  chains can drip losses less than a second apart indefinitely, and a
+ *  latest-loss anchor would let that drip ride a single wave forever. */
 export const WEBGL_LOSS_WAVE_MS = 1_000;
 /** A wave this long after the previous one is isolated — the window restarts. */
 export const WEBGL_LOSS_RESET_MS = 30_000;
@@ -32,12 +42,14 @@ export const WEBGL_REATTACH_DELAY_MS = 2_000;
 export interface WebglLossState {
   /** Loss waves observed in the current window; 0 = no loss seen yet. */
   waves: number;
+  /** Timestamp (ms) the current wave started. */
+  waveStartAt: number;
   /** Timestamp (ms) of the most recent loss. */
   lastLossAt: number;
 }
 
 export function initialWebglLossState(): WebglLossState {
-  return { waves: 0, lastLossAt: 0 };
+  return { waves: 0, waveStartAt: 0, lastLossAt: 0 };
 }
 
 /**
@@ -48,21 +60,25 @@ export function recordWebglContextLoss(
   state: WebglLossState,
   now: number,
 ): { state: WebglLossState; retry: boolean } {
-  const delta = now - state.lastLossAt;
+  const sinceLast = now - state.lastLossAt;
   let waves: number;
-  if (state.waves === 0 || delta < 0 || delta > WEBGL_LOSS_RESET_MS) {
+  let waveStartAt: number;
+  if (state.waves === 0 || sinceLast < 0 || sinceLast > WEBGL_LOSS_RESET_MS) {
     // First loss ever, clock stepped backwards (Date.now() is not monotonic —
     // NTP correction on wake must not read as a rapid repeat), or a quiet
     // period — start a fresh window.
     waves = 1;
-  } else if (delta <= WEBGL_LOSS_WAVE_MS) {
+    waveStartAt = now;
+  } else if (now - state.waveStartAt <= WEBGL_LOSS_WAVE_MS) {
     // Same underlying event (e.g. one GPU crash killing every pane at once).
     waves = state.waves;
+    waveStartAt = state.waveStartAt;
   } else {
     waves = state.waves + 1;
+    waveStartAt = now;
   }
   return {
-    state: { waves, lastLossAt: now },
+    state: { waves, waveStartAt, lastLossAt: now },
     retry: waves < WEBGL_MAX_LOSS_WAVES,
   };
 }
