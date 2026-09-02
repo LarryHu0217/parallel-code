@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { expectDefined, type MockStoreHarness } from './test-helpers';
 
-const { mockMarkAgentSpawned } = vi.hoisted(() => ({
+const { mockMarkAgentSpawned, mockRefreshClaudeUsage } = vi.hoisted(() => ({
   mockMarkAgentSpawned: vi.fn(),
+  mockRefreshClaudeUsage: vi.fn(),
 }));
 const core = vi.hoisted(() => ({
   harness: undefined as MockStoreHarness<{ agents: Record<string, AgentLike> }> | undefined,
@@ -55,8 +56,9 @@ vi.mock('./taskStatus', () => ({
 
 vi.mock('./persistence', () => ({ saveState: vi.fn() }));
 vi.mock('../lib/ipc', () => ({ invoke: vi.fn() }));
+vi.mock('./claudeUsage', () => ({ refreshClaudeUsage: mockRefreshClaudeUsage }));
 
-import { restartAgent, switchAgent } from './agents';
+import { markAgentExited, restartAgent, switchAgent } from './agents';
 
 const codexDef: AgentDefLike = {
   id: 'codex',
@@ -133,5 +135,33 @@ describe('switchAgent', () => {
     });
     expect(mockAgents['agent-1'].spawnDelayMs).toBeUndefined();
     expect(mockMarkAgentSpawned).toHaveBeenCalledWith('agent-1');
+  });
+});
+
+describe('markAgentExited', () => {
+  const exitInfo = { exit_code: 0, signal: null, last_output: ['bye'] };
+
+  it('records the exit and refreshes Claude usage for a Claude Code agent', () => {
+    mockAgents = {
+      'agent-1': exitedAgent({ status: 'running', def: { ...codexDef, id: 'claude-code' } }),
+    };
+
+    markAgentExited('agent-1', exitInfo);
+
+    expect(mockAgents['agent-1']).toMatchObject({
+      status: 'exited',
+      exitCode: 0,
+      lastOutput: ['bye'],
+    });
+    expect(mockRefreshClaudeUsage).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves Claude usage alone when another agent exits', () => {
+    mockAgents = { 'agent-1': exitedAgent({ status: 'running' }) };
+
+    markAgentExited('agent-1', exitInfo);
+
+    expect(mockAgents['agent-1'].status).toBe('exited');
+    expect(mockRefreshClaudeUsage).not.toHaveBeenCalled();
   });
 });

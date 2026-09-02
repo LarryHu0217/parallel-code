@@ -2,11 +2,14 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import crypto from 'crypto';
 import {
   fetchClaudeUsage,
   parseAccessToken,
   parseClaudeUsageResponse,
   parseResetsAt,
+  readKeychainCredentials,
+  type KeychainExec,
 } from './claude-usage.js';
 
 const NOW = 1_700_000_000_000;
@@ -138,5 +141,38 @@ describe('fetchClaudeUsage', () => {
     );
     const result = await fetchClaudeUsage(configDir('{"claudeAiOauth":{"accessToken":"tok"}}'));
     expect(result).toEqual({ status: 'error', message: 'ECONNRESET' });
+  });
+});
+
+describe('readKeychainCredentials', () => {
+  const SECURITY_ARGS = (service: string) => ['find-generic-password', '-s', service, '-w'];
+
+  it('reads the unscoped service for the default config dir', async () => {
+    const exec = vi.fn<KeychainExec>(async () => ({ stdout: '{"claudeAiOauth":{}}\n' }));
+    const result = await readKeychainCredentials(path.join(os.homedir(), '.claude'), exec);
+    expect(result).toBe('{"claudeAiOauth":{}}');
+    expect(exec).toHaveBeenCalledTimes(1);
+    expect(exec).toHaveBeenCalledWith('security', SECURITY_ARGS('Claude Code-credentials'), {
+      timeout: 5_000,
+    });
+  });
+
+  it('tries the config-dir-scoped service first, then falls back to the unscoped one', async () => {
+    const exec = vi
+      .fn<KeychainExec>()
+      .mockRejectedValueOnce(new Error('item not found'))
+      .mockResolvedValueOnce({ stdout: 'creds' });
+    await expect(readKeychainCredentials('/custom/dir', exec)).resolves.toBe('creds');
+    const suffix = crypto.createHash('sha256').update('/custom/dir').digest('hex').slice(0, 8);
+    expect(exec.mock.calls.map(([, args]) => args)).toEqual([
+      SECURITY_ARGS(`Claude Code-credentials-${suffix}`),
+      SECURITY_ARGS('Claude Code-credentials'),
+    ]);
+  });
+
+  it('returns null when every lookup fails or comes back empty', async () => {
+    const exec = vi.fn<KeychainExec>(async () => ({ stdout: '  \n' }));
+    await expect(readKeychainCredentials('/custom/dir', exec)).resolves.toBeNull();
+    expect(exec).toHaveBeenCalledTimes(2);
   });
 });

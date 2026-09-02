@@ -5,7 +5,7 @@ import crypto from 'crypto';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import type { ClaudeUsageResult, ClaudeUsageWindow } from './shared-types.js';
-import { warn as logWarn, errMessage } from '../log.js';
+import { debug as logDebug, warn as logWarn, errMessage } from '../log.js';
 
 /**
  * Reads the rate-limit windows Claude Code shows under `/usage`, from the same
@@ -22,6 +22,13 @@ const REQUEST_TIMEOUT_MS = 10_000;
 const KEYCHAIN_SERVICE = 'Claude Code-credentials';
 
 const execFileAsync = promisify(execFile);
+
+/** Shape of `execFile` the keychain reader needs; injectable so tests can run the darwin path on Linux. */
+export type KeychainExec = (
+  file: string,
+  args: string[],
+  opts: { timeout: number },
+) => Promise<{ stdout: string }>;
 
 interface UsageWindowJson {
   utilization?: unknown;
@@ -88,14 +95,15 @@ function keychainServices(configDir: string): string[] {
   return [`${KEYCHAIN_SERVICE}-${suffix}`, KEYCHAIN_SERVICE];
 }
 
-async function readKeychainCredentials(configDir: string): Promise<string | null> {
+export async function readKeychainCredentials(
+  configDir: string,
+  exec: KeychainExec = execFileAsync,
+): Promise<string | null> {
   for (const service of keychainServices(configDir)) {
     try {
-      const { stdout } = await execFileAsync(
-        'security',
-        ['find-generic-password', '-s', service, '-w'],
-        { timeout: 5_000 },
-      );
+      const { stdout } = await exec('security', ['find-generic-password', '-s', service, '-w'], {
+        timeout: 5_000,
+      });
       if (stdout.trim()) return stdout.trim();
     } catch {
       // `security` exits non-zero when the item is absent; try the next service name.
@@ -104,13 +112,27 @@ async function readKeychainCredentials(configDir: string): Promise<string | null
   return null;
 }
 
-async function readCredentialsJson(configDir: string): Promise<string | null> {
+async function readCredentialsFile(configDir: string): Promise<string | null> {
+  const file = path.join(configDir, '.credentials.json');
   try {
-    return await fs.promises.readFile(path.join(configDir, '.credentials.json'), 'utf8');
-  } catch {
-    // No file: on macOS the keychain is the normal home for these credentials.
-    return process.platform === 'darwin' ? readKeychainCredentials(configDir) : null;
+    return await fs.promises.readFile(file, 'utf8');
+  } catch (err) {
+    // Missing file just means no subscription login; anything else is worth a trace.
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      logWarn('claude-usage', 'credentials file unreadable', { file, err: errMessage(err) });
+    }
+    return null;
   }
+}
+
+async function readCredentialsJson(configDir: string): Promise<string | null> {
+  // macOS Claude Code keeps the live token in the keychain; a leftover file
+  // there could hold a stale one, so the keychain wins when it has an entry.
+  if (process.platform === 'darwin') {
+    const fromKeychain = await readKeychainCredentials(configDir);
+    if (fromKeychain) return fromKeychain;
+  }
+  return readCredentialsFile(configDir);
 }
 
 async function requestUsage(token: string): Promise<ClaudeUsageResult> {
@@ -141,7 +163,9 @@ export async function fetchClaudeUsage(configDir = claudeConfigDir()): Promise<C
   try {
     return await requestUsage(token);
   } catch (err) {
-    logWarn('claude-usage', 'fetch failed', { err: errMessage(err) });
+    // The renderer shows this in the bar's tooltip; at warn it would spam the
+    // log every tick while offline.
+    logDebug('claude-usage', 'fetch failed', { err: errMessage(err) });
     return { status: 'error', message: errMessage(err) };
   }
 }

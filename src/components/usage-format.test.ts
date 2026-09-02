@@ -15,6 +15,11 @@ describe('formatReset', () => {
     expect(formatReset(null, NOON)).toBe('');
   });
 
+  it('says the reset is due once the time has passed', () => {
+    expect(formatReset(NOON - 60_000, NOON)).toBe('reset due');
+    expect(formatReset(NOON, NOON)).toBe('reset due');
+  });
+
   it('shows only the time for a reset later today', () => {
     const label = formatReset(NOON + 2 * 60 * 60_000, NOON);
     expect(label).toMatch(/^resets \d{1,2}:\d{2}/);

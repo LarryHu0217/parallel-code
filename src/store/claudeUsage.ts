@@ -22,14 +22,22 @@ function applyResult(result: ClaudeUsageResult): void {
       error: null,
     });
   } else if (result.status === 'unavailable') {
-    setStore('claudeUsage', { status: 'unavailable', error: result.reason });
+    // Full reset: setStore merges, and a surviving snapshot would keep the bar visible after logout.
+    setStore('claudeUsage', {
+      fiveHour: null,
+      sevenDay: null,
+      fetchedAt: null,
+      status: 'unavailable',
+      error: result.reason,
+    });
   } else {
     setStore('claudeUsage', { status: 'error', error: result.message });
   }
 }
 
 /** Re-reads Claude usage. Coalesces concurrent calls and, unless forced, skips
- *  refreshes that land within MIN_REFRESH_GAP_MS of the previous request. */
+ *  refreshes that land within MIN_REFRESH_GAP_MS of the previous request — the
+ *  guard is for bursts of agent exits, so the poll tick and user clicks force. */
 export function refreshClaudeUsage(opts: { force?: boolean } = {}): Promise<void> {
   if (inFlight) return inFlight;
   if (!opts.force && Date.now() - lastRequestAt < MIN_REFRESH_GAP_MS) return Promise.resolve();
@@ -51,7 +59,7 @@ export function refreshClaudeUsage(opts: { force?: boolean } = {}): Promise<void
 export function startClaudeUsagePolling(): void {
   if (pollTimer) return;
   void refreshClaudeUsage({ force: true });
-  pollTimer = setInterval(() => void refreshClaudeUsage(), POLL_INTERVAL_MS);
+  pollTimer = setInterval(() => void refreshClaudeUsage({ force: true }), POLL_INTERVAL_MS);
 }
 
 export function stopClaudeUsagePolling(): void {

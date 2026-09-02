@@ -7,9 +7,12 @@ export function remainingPercent(window: ClaudeUsageWindow): number {
   return Math.max(0, Math.round(100 - window.usedPercent));
 }
 
-/** "resets 14:30" for today, "resets Thu 09:00" otherwise, '' when unknown. */
+/** "resets 14:30" for today, "resets Thu 09:00" otherwise, "reset due" once the
+ *  time has passed (the API keeps reporting a window until the next request),
+ *  '' when unknown. */
 export function formatReset(resetsAt: number | null, now = Date.now()): string {
   if (resetsAt === null) return '';
+  if (resetsAt <= now) return 'reset due';
   const date = new Date(resetsAt);
   const time = date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
   if (date.toDateString() === new Date(now).toDateString()) return `resets ${time}`;
