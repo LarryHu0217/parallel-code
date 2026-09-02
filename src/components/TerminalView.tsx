@@ -39,11 +39,7 @@ import { dataTransferToShellArgs, escapePath } from '../lib/terminalDrop';
 import { cleanCopiedTerminalText } from '../lib/copy-text';
 import { hasTerminalUserActivity, nextTerminalInputPending } from '../lib/terminalInputPending';
 import { computeWrappedPathLinks, createTerminalHttpLinkHandler } from '../lib/terminalLinks';
-import {
-  initialWebglLossState,
-  recordWebglContextLoss,
-  WEBGL_REATTACH_DELAY_MS,
-} from '../lib/webglContextLoss';
+import { recordSharedWebglContextLoss, WEBGL_REATTACH_DELAY_MS } from '../lib/webglContextLoss';
 import type { PtyOutput } from '../ipc/types';
 
 let windowUnloading = false;
@@ -993,37 +989,38 @@ export function TerminalView(props: TerminalViewProps) {
     // Load WebGL addon for all terminals. On context loss (GPU process crash,
     // sleep/wake, or context-cap eviction — see max-active-webgl-contexts in
     // electron/main.ts) reattach after a short delay instead of permanently
-    // falling back to the much slower DOM renderer; the loss-window policy
-    // settles rapid loss loops onto the DOM renderer.
-    let webglLossState = initialWebglLossState();
+    // falling back to the much slower DOM renderer. The loss window is shared
+    // app-wide so an eviction rotation (each reattach evicting another pane)
+    // trips the brake even though every hop lands on a different pane.
     let webglReattachTimer: number | undefined;
 
-    function attachWebgl() {
+    function attachWebgl(isReattach: boolean) {
       if (!term) return;
       try {
         const addon = new WebglAddon();
         addon.onContextLoss(() => {
           addon.dispose();
           webglAddon = undefined;
-          const { state, retry } = recordWebglContextLoss(webglLossState, Date.now());
-          webglLossState = state;
-          if (retry && webglReattachTimer === undefined) {
+          if (recordSharedWebglContextLoss()) {
             webglReattachTimer = window.setTimeout(() => {
               webglReattachTimer = undefined;
-              attachWebgl();
+              attachWebgl(true);
             }, WEBGL_REATTACH_DELAY_MS);
           }
         });
         term.loadAddon(addon);
         webglAddon = addon;
-        // A freshly attached canvas starts blank — repaint so a recovered pane
-        // doesn't look frozen until the next output (no-op on initial mount).
-        redrawTerminal(agentId);
+        // A reattached canvas starts blank — repaint so a recovered pane
+        // doesn't look frozen until its next output. Never on initial mount:
+        // redrawTerminal clears the glyph atlas xterm SHARES across panes
+        // without invalidating the other owners' render models, so a
+        // mount-time clear garbles glyphs in every already-open terminal.
+        if (isReattach) redrawTerminal(agentId);
       } catch {
         // WebGL2 not supported — DOM renderer used automatically
       }
     }
-    attachWebgl();
+    attachWebgl(false);
 
     let spawnTimer: number | undefined;
     let spawnStarted = false;

@@ -83,9 +83,12 @@ fixEnv();
 // Blink evicts the oldest WebGL context past 16 per renderer process, and every
 // mounted terminal pane holds one — hidden task/tab terminals included. Past 16
 // terminals the oldest panes silently lose their context and degrade to xterm's
-// slower DOM renderer (janky scrolling). Raise the cap well above realistic
-// layouts while keeping it bounded so genuine context leaks still surface.
-app.commandLine.appendSwitch('max-active-webgl-contexts', '128');
+// slower DOM renderer (janky scrolling). 32 covers realistic layouts while
+// staying small: Chromium keeps the cap low because past it GPU drivers tend to
+// crash rather than report out-of-memory, so a large value trades graceful
+// eviction for GPU-process crashes on weak GPUs. The switch also raises the
+// worker-context limit to the same value (unused — no WebGL in our workers).
+app.commandLine.appendSwitch('max-active-webgl-contexts', '32');
 
 // Verify that preload.cjs ALLOWED_CHANNELS stays in sync with the IPC enum.
 // Logs a warning in dev if they drift — catches mismatches before they hit users.
