@@ -25,6 +25,8 @@ import {
   uncollapseTask,
   isProjectMissing,
   showNotification,
+  getTaskAgentHookStatus,
+  isTaskUnread,
 } from '../store/store';
 import type { Project } from '../store/types';
 import type { TaskAttentionState } from '../store/store';
@@ -43,10 +45,12 @@ import { IconButton } from './IconButton';
 import { UpdateButton } from './UpdateButton';
 import { StatusDot, getDotTooltip } from './StatusDot';
 import { TaskCurrentStateLine } from './TaskCurrentStateLine';
+import { TaskAgentStatusLine } from './TaskAgentStatusLine';
 import { theme } from '../lib/theme';
 import { sf } from '../lib/fontScale';
 import { mod } from '../lib/platform';
 import { abbreviateHomePath } from '../lib/path';
+import { formatRelativeAge } from '../lib/relativeAge';
 import { invoke } from '../lib/ipc';
 import { IPC } from '../../electron/ipc/channels';
 import type { ImportableWorktree } from '../ipc/types';
@@ -143,23 +147,18 @@ function DirectBranchBadge(props: { branchName: string }) {
 }
 
 /** Task name, wrapping to at most two lines so long names stay readable in a
- *  narrow sidebar. Full name always available as a tooltip. */
-function TaskName(props: { name: string }) {
+ *  narrow sidebar. Full name always available as a tooltip. Bold, not badged,
+ *  when an agent finished while the task was off screen. */
+function TaskName(props: { name: string; unread?: boolean }) {
   return (
-    <span class="task-item-name" title={props.name}>
+    <span
+      class="task-item-name"
+      title={props.name}
+      style={{ 'font-weight': props.unread ? '700' : undefined }}
+    >
       {props.name}
     </span>
   );
-}
-
-function waitingLabel(since: number, nowMs: number): string {
-  const seconds = Math.max(0, Math.floor((nowMs - since) / 1_000));
-  if (seconds < 60) return 'just now';
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h`;
-  return `${Math.floor(hours / 24)}d`;
 }
 
 function taskAttentionStyles(
@@ -191,7 +190,7 @@ function NeedsInputRow(props: {
 }) {
   const task = () => store.tasks[props.taskId];
   const project = () => store.projects.find((p) => p.id === task()?.projectId) ?? null;
-  const waited = () => waitingLabel(props.since, props.nowMs);
+  const waited = () => formatRelativeAge(props.since, props.nowMs);
 
   return (
     <Show when={task()}>
@@ -1242,7 +1241,7 @@ function CoordinatorFolder(props: TaskEntryProps) {
                 size="sm"
                 attention={getTaskAttentionState(props.taskId)}
               />
-              <TaskName name={t().name} />
+              <TaskName name={t().name} unread={isTaskUnread(props.taskId)} />
               <Show when={childCount() > 0}>
                 <span
                   style={{
@@ -1255,6 +1254,10 @@ function CoordinatorFolder(props: TaskEntryProps) {
                 </span>
               </Show>
             </div>
+            <TaskAgentStatusLine
+              status={getTaskAgentHookStatus(props.taskId)}
+              nowMs={props.nowMs}
+            />
             <TaskCurrentStateLine task={t()} nowMs={props.nowMs} variant="sidebar" />
           </TaskRowShell>
 
@@ -1447,7 +1450,7 @@ function TaskRow(props: TaskRowProps) {
                 size="sm"
                 attention={getTaskAttentionState(props.taskId)}
               />
-              <TaskName name={t().name} />
+              <TaskName name={t().name} unread={isTaskUnread(props.taskId)} />
               <Show when={t().gitIsolation === 'direct'}>
                 <DirectBranchBadge branchName={t().branchName} />
               </Show>
@@ -1468,6 +1471,10 @@ function TaskRow(props: TaskRowProps) {
                 )}
               </Show>
             </div>
+            <TaskAgentStatusLine
+              status={getTaskAgentHookStatus(props.taskId)}
+              nowMs={props.nowMs}
+            />
             <TaskCurrentStateLine task={t()} nowMs={props.nowMs} variant="sidebar" />
           </TaskRowShell>
         </>

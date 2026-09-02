@@ -19,6 +19,7 @@ module.exports = {
           '^electron/ipc/channels\\.ts',
           '^electron/mcp/prompt-detect\\.ts',
           '^electron/mcp/validation\\.ts',
+          '^electron/agent-hooks/status\\.ts',
         ],
       },
     },

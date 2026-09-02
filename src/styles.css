@@ -1612,6 +1612,25 @@ textarea::placeholder {
   }
 }
 
+/* Sidebar "working" glyph: a rotating ring reads as activity at a glance, and
+   under reduced motion the hollow ring still separates it from resting dots. */
+.status-glyph-spinner {
+  display: inline-block;
+  box-sizing: border-box;
+  border-radius: 999px;
+  border: 2px solid color-mix(in srgb, currentColor 28%, transparent);
+  border-top-color: currentColor;
+  animation: spinnerSpin 0.9s linear infinite;
+}
+
+.status-glyph-question {
+  display: inline-block;
+  box-sizing: border-box;
+  border-radius: 999px;
+  font-weight: 700;
+  text-align: center;
+}
+
 .inline-spinner {
   /* Rotation is the loading cue, so functional spinners remain animated under reduced motion. */
   display: inline-block;
@@ -2508,6 +2527,11 @@ body.dragging-task * {
   .status-dot-ring {
     outline: 1px solid var(--fg-muted);
     outline-offset: 2px;
+  }
+
+  /* The hollow ring alone still says "working"; only the rotation goes. */
+  .status-glyph-spinner {
+    animation: none;
   }
 
   /* These animations are declared inline and require an important override. */

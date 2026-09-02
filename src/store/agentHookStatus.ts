@@ -1,0 +1,221 @@
+import { createEffect, createRoot, createSignal, untrack } from 'solid-js';
+import { IPC } from '../../electron/ipc/channels';
+import {
+  isAgentHookEventPayload,
+  type AgentHookEventPayload,
+  type AgentHookStatusState,
+} from '../../electron/agent-hooks/status';
+import { store } from './core';
+
+/**
+ * Status an agent reported about itself through Claude Code hooks. Unlike the
+ * PTY heuristics in `taskStatus.ts`, this is authoritative: `working` means a
+ * turn is in flight, `waiting` means it is blocked on the human, `done` means
+ * the turn ended. Absent for shells, Docker agents, and non-Claude agents.
+ */
+export interface AgentHookStatus {
+  state: AgentHookStatusState;
+  /** Hook event that produced this state, or `Interrupt` when inferred from a keypress. */
+  event: string;
+  /** When the agent entered this state (epoch ms); kept across same-state events. */
+  since: number;
+  updatedAt: number;
+  toolName?: string;
+  detail?: string;
+  lastAssistantMessage?: string;
+  /** The turn ended while the task was not on screen and nobody has looked since. */
+  unread: boolean;
+}
+
+export interface TaskAgentHookStatus extends AgentHookStatus {
+  agentId: string;
+}
+
+/** A `working`/`waiting` claim this old has lost its hook stream; heuristics take over. */
+export const AGENT_HOOK_STALE_MS = 30 * 60_000;
+/** Esc/Ctrl-C only counts as an interrupt if no hook event follows within this window. */
+const INTERRUPT_SETTLE_MS = 500;
+/** Tool events of the interrupted turn can still land shortly after; ignore them. */
+const INTERRUPT_SUPPRESS_MS = 5_000;
+const TOOL_EVENTS: ReadonlySet<string> = new Set([
+  'PreToolUse',
+  'PostToolUse',
+  'PostToolUseFailure',
+  'PermissionRequest',
+]);
+const ESC = '\x1b';
+const CTRL_C = '\x03';
+
+const [statuses, setStatuses] = createSignal<ReadonlyMap<string, AgentHookStatus>>(new Map());
+const staleTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const interruptTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const suppressToolEventsUntil = new Map<string, number>();
+
+function updateStatuses(mutate: (next: Map<string, AgentHookStatus>) => void): void {
+  setStatuses((prev) => {
+    const next = new Map(prev);
+    mutate(next);
+    return next;
+  });
+}
+
+function clearTimer(timers: Map<string, ReturnType<typeof setTimeout>>, agentId: string): void {
+  const timer = timers.get(agentId);
+  if (timer === undefined) return;
+  clearTimeout(timer);
+  timers.delete(agentId);
+}
+
+function setStatus(agentId: string, status: AgentHookStatus): void {
+  updateStatuses((next) => next.set(agentId, status));
+  clearTimer(staleTimers, agentId);
+  // `done` is a terminal fact and stays put; only an ongoing claim can go stale.
+  if (status.state === 'done') return;
+  staleTimers.set(
+    agentId,
+    setTimeout(() => {
+      staleTimers.delete(agentId);
+      updateStatuses((next) => next.delete(agentId));
+    }, AGENT_HOOK_STALE_MS),
+  );
+}
+
+function isSuppressedToolEvent(event: AgentHookEventPayload): boolean {
+  const until = suppressToolEventsUntil.get(event.agentId);
+  if (until === undefined) return false;
+  if (event.at >= until) {
+    suppressToolEventsUntil.delete(event.agentId);
+    return false;
+  }
+  return TOOL_EVENTS.has(event.event);
+}
+
+export function applyAgentHookEvent(event: AgentHookEventPayload): void {
+  // Any real event during the settle window means the keypress was not an interrupt.
+  clearTimer(interruptTimers, event.agentId);
+  if (isSuppressedToolEvent(event)) return;
+  const prev = statuses().get(event.agentId);
+  const sameState = prev?.state === event.state;
+  const finished = event.event === 'Stop' || event.event === 'StopFailure';
+  setStatus(event.agentId, {
+    state: event.state,
+    event: event.event,
+    since: sameState ? prev.since : event.at,
+    updatedAt: event.at,
+    toolName: event.toolName,
+    detail: event.detail,
+    // A later idle-prompt notification must not wipe the final message Stop carried.
+    lastAssistantMessage:
+      event.lastAssistantMessage ??
+      (sameState && event.state === 'done' ? prev.lastAssistantMessage : undefined),
+    unread: finished && event.taskId !== store.activeTaskId,
+  });
+}
+
+/**
+ * Claude Code does not fire `Stop` for a user interrupt, so a bare Esc or
+ * Ctrl-C while working is the only signal. It is confirmed only if the hook
+ * stream stays silent for a short settle window; otherwise the key meant
+ * something else (a menu, a paste, a dialog) and the turn is still live.
+ */
+export function noteAgentInterruptInput(agentId: string, data: string): void {
+  if (data !== ESC && data !== CTRL_C) return;
+  const current = statuses().get(agentId);
+  if (current?.state !== 'working') return;
+  clearTimer(interruptTimers, agentId);
+  const baseline = current.updatedAt;
+  interruptTimers.set(
+    agentId,
+    setTimeout(() => {
+      interruptTimers.delete(agentId);
+      const latest = statuses().get(agentId);
+      if (latest?.state !== 'working' || latest.updatedAt !== baseline) return;
+      const now = Date.now();
+      suppressToolEventsUntil.set(agentId, now + INTERRUPT_SUPPRESS_MS);
+      setStatus(agentId, {
+        state: 'done',
+        event: 'Interrupt',
+        since: now,
+        updatedAt: now,
+        detail: 'Interrupted',
+        unread: false,
+      });
+    }, INTERRUPT_SETTLE_MS),
+  );
+}
+
+export function getAgentHookStatus(agentId: string): AgentHookStatus | null {
+  return statuses().get(agentId) ?? null;
+}
+
+export function clearAgentHookStatus(agentId: string): void {
+  clearTimer(staleTimers, agentId);
+  clearTimer(interruptTimers, agentId);
+  suppressToolEventsUntil.delete(agentId);
+  if (!statuses().has(agentId)) return;
+  updateStatuses((next) => next.delete(agentId));
+}
+
+const STATE_RANK: Record<AgentHookStatusState, number> = { waiting: 0, working: 1, done: 2 };
+
+/** The task's most attention-worthy agent status: waiting beats working beats done, newest wins ties. */
+export function getTaskAgentHookStatus(taskId: string): TaskAgentHookStatus | null {
+  const task = store.tasks[taskId];
+  if (!task) return null;
+  const all = statuses();
+  let best: TaskAgentHookStatus | null = null;
+  for (const agentId of task.agentIds) {
+    const status = all.get(agentId);
+    if (!status) continue;
+    const outranks =
+      best === null ||
+      STATE_RANK[status.state] < STATE_RANK[best.state] ||
+      (STATE_RANK[status.state] === STATE_RANK[best.state] && status.updatedAt > best.updatedAt);
+    if (outranks) best = { ...status, agentId };
+  }
+  return best;
+}
+
+export function isTaskUnread(taskId: string): boolean {
+  const task = store.tasks[taskId];
+  if (!task) return false;
+  const all = statuses();
+  return task.agentIds.some((agentId) => all.get(agentId)?.unread === true);
+}
+
+export function markTaskRead(taskId: string): void {
+  const task = store.tasks[taskId];
+  if (!task) return;
+  const all = statuses();
+  const unread = task.agentIds.filter((agentId) => all.get(agentId)?.unread === true);
+  if (unread.length === 0) return;
+  updateStatuses((next) => {
+    for (const agentId of unread) {
+      const status = next.get(agentId);
+      if (status) next.set(agentId, { ...status, unread: false });
+    }
+  });
+}
+
+/** Subscribe to hook events from the main process; returns the unsubscribe. */
+export function startAgentHookStatusListener(): () => void {
+  // eslint-disable-next-line solid/reactivity -- IPC callback is not a reactive context; it writes our own signal
+  const off = window.electron.ipcRenderer.on(IPC.AgentHookEvent, (data: unknown) => {
+    if (isAgentHookEventPayload(data)) applyAgentHookEvent(data);
+  });
+  // Opening a task is how the user "reads" it; runs outside the mount owner
+  // because callers start this past an await.
+  const dispose = createRoot((dispose) => {
+    createEffect(() => {
+      const taskId = store.activeTaskId;
+      untrack(() => {
+        if (taskId) markTaskRead(taskId);
+      });
+    });
+    return dispose;
+  });
+  return () => {
+    off();
+    dispose();
+  };
+}

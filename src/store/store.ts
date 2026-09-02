@@ -177,6 +177,8 @@ export {
   rescheduleTaskStatusPolling,
 } from './taskStatus';
 export type { TaskAttentionState, TaskDotStatus } from './taskStatus';
+export { getTaskAgentHookStatus, isTaskUnread, noteAgentInterruptInput } from './agentHookStatus';
+export type { TaskAgentHookStatus } from './agentHookStatus';
 export { showNotification, clearNotification } from './notification';
 export { startPrChecksSubscription, getPrChecks, type PrChecksState } from './pr-checks';
 export { getMergedTasksTodayCount, getMergedLineTotals } from './completion';

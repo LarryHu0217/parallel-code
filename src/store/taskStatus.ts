@@ -13,6 +13,7 @@ import {
 } from '../lib/branch-divergence';
 import { warn as logWarn, info as logInfo, errMessage } from '../lib/log';
 import { adoptTaskBranch } from './task-branch';
+import { clearAgentHookStatus, getAgentHookStatus } from './agentHookStatus';
 import {
   chunkContainsAgentPrompt,
   PROMPT_PATTERNS,
@@ -498,15 +499,21 @@ export function getTaskOpenQuestion(taskId: string): TaskOpenQuestion | null {
   let newest: TaskOpenQuestion | null = null;
   const runningAgentIds = task.agentIds.filter((id) => store.agents[id]?.status === 'running');
   for (const agentId of [...runningAgentIds, ...task.shellAgentIds]) {
-    if (!asking.has(agentId)) continue;
-    // The asking set and the onset map are separate structures kept in step by
-    // `updateQuestionState`, their sole writer. This is the one place they meet,
-    // so it is the one place that has to tolerate them drifting apart.
-    const since = questionSinceByAgent.get(agentId);
+    const since = agentQuestionSince(agentId, asking);
     if (since === undefined) continue;
     if (newest === null || since > newest.since) newest = { agentId, since };
   }
   return newest;
+}
+
+function agentQuestionSince(agentId: string, asking: ReadonlySet<string>): number | undefined {
+  const hook = getAgentHookStatus(agentId);
+  if (hook?.state === 'waiting') return hook.since;
+  if (hook?.state === 'working' || !asking.has(agentId)) return undefined;
+  // The asking set and the onset map are separate structures kept in step by
+  // `updateQuestionState`, their sole writer. This is the one place they meet,
+  // so it is the one place that has to tolerate them drifting apart.
+  return questionSinceByAgent.get(agentId);
 }
 
 // --- Agent activity tracking ---
@@ -613,6 +620,8 @@ export function markAgentSpawned(agentId: string): void {
   state.lastAnalysisAt = undefined;
   cancelPendingAnalysis(state);
   state.lastDataAt = Date.now();
+  // A fresh process has no turn yet; a leftover hook state would lie about it.
+  clearAgentHookStatus(agentId);
   addToActive(agentId);
   resetIdleTimer(agentId);
 }
@@ -854,6 +863,7 @@ export function clearAgentActivity(agentId: string): void {
   agentReadyCallbacks.delete(agentId);
   removeFromActive(agentId);
   updateQuestionState(agentId, false);
+  clearAgentHookStatus(agentId);
 }
 
 // --- Derived status ---
@@ -873,6 +883,23 @@ function hasTaskAgentError(taskId: string): boolean {
     if (agent?.status !== 'exited') return false;
     return agent.exitCode !== 0 || agent.signal !== null;
   });
+}
+
+/** Hook state wins when present: a self-reported turn in flight is not a question,
+ *  however much the screen looks like one. Only once the turn has ended do the
+ *  heuristics get a say — login and trust prompts arrive with no hook at all. */
+function isAgentBlockedOnInput(agentId: string): boolean {
+  const hook = getAgentHookStatus(agentId);
+  if (hook?.state === 'waiting') return true;
+  if (hook?.state === 'working') return false;
+  return isAgentAskingQuestion(agentId);
+}
+
+/** Same precedence for activity: output still streaming after `Stop` is the
+ *  agent redrawing its prompt, not work, and must not hold the task busy. */
+function isAgentWorking(agentId: string, active: ReadonlySet<string>): boolean {
+  const hook = getAgentHookStatus(agentId);
+  return hook ? hook.state === 'working' : active.has(agentId);
 }
 
 function hasRunningTaskActivity(taskId: string, predicate: (id: string) => boolean): boolean {
@@ -895,7 +922,7 @@ export function getTaskAttentionState(taskId: string): TaskAttentionState {
 
   if (task.needsReview) return 'review';
 
-  const hasQuestion = hasRunningTaskActivity(taskId, isAgentAskingQuestion);
+  const hasQuestion = hasRunningTaskActivity(taskId, isAgentBlockedOnInput);
   if (hasQuestion) return 'needs_input';
 
   const steps = task.stepsContent;
@@ -905,7 +932,7 @@ export function getTaskAttentionState(taskId: string): TaskAttentionState {
   }
 
   const active = activeAgents(); // reactive read
-  const hasActive = hasRunningTaskActivity(taskId, (id) => active.has(id));
+  const hasActive = hasRunningTaskActivity(taskId, (id) => isAgentWorking(id, active));
   if (hasActive) return 'active';
 
   if (isTaskReady(taskId)) return 'ready';
@@ -933,7 +960,7 @@ export function getTaskDotStatus(taskId: string): TaskDotStatus {
   }
 
   const active = activeAgents(); // reactive read
-  const hasActive = hasRunningTaskActivity(taskId, (id) => active.has(id));
+  const hasActive = hasRunningTaskActivity(taskId, (id) => isAgentWorking(id, active));
   if (hasActive) return 'busy';
 
   if (task.needsReview) return 'review';

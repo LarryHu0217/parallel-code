@@ -15,6 +15,8 @@ import {
   refreshWorktreeNodeModules,
 } from './git.js';
 import { loadEnvFile } from './env-file.js';
+import { HOOK_PTY_ENV_KEYS } from '../agent-hooks/hook-script.js';
+import { withClaudeHookSettings } from '../agent-hooks/launch-args.js';
 import { debug as logDebug } from '../log.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -81,6 +83,9 @@ const MAX_LINES = 50;
 // agent's traffic. Now that a file on disk is a first-class env source, anyone
 // who can write that file would otherwise inherit the agent's privileges.
 export const ENV_BLOCK_LIST = new Set([
+  // Hook status is attributed by these; a task env file must not be able to
+  // impersonate another agent or point the hook script at a foreign endpoint.
+  ...HOOK_PTY_ENV_KEYS,
   'PATH',
   'HOME',
   'USER',
@@ -480,6 +485,33 @@ function attachPtyOutputHandlers(
   });
 }
 
+/** What a Claude launch needs to self-report status; null until the hook server is up. */
+export interface AgentHookRuntime {
+  claudeSettingsPath: string;
+  buildPtyEnv(agentId: string, taskId: string): Record<string, string>;
+}
+
+let agentHookRuntime: AgentHookRuntime | null = null;
+
+export function setAgentHookRuntime(runtime: AgentHookRuntime | null): void {
+  agentHookRuntime = runtime;
+}
+
+/**
+ * Adds hook identity env and `--settings` so a Claude Code agent reports its
+ * own status. Shells get nothing (the user runs whatever they like there), and
+ * Docker gets nothing because the loopback port is not reachable from inside.
+ */
+export function applyAgentHookLaunch(
+  args: Pick<SpawnAgentArgs, 'agentId' | 'taskId' | 'args' | 'isShell' | 'dockerMode'>,
+  command: string,
+  spawnEnv: Record<string, string>,
+): string[] {
+  if (!agentHookRuntime || args.isShell || args.dockerMode) return args.args;
+  Object.assign(spawnEnv, agentHookRuntime.buildPtyEnv(args.agentId, args.taskId));
+  return withClaudeHookSettings(command, args.args, agentHookRuntime.claudeSettingsPath);
+}
+
 export function spawnAgent(win: BrowserWindow, args: SpawnAgentArgs): void {
   const channelId = args.onOutput.__CHANNEL_ID__;
   const command = args.command || resolveUserShell();
@@ -526,6 +558,7 @@ export function spawnAgent(win: BrowserWindow, args: SpawnAgentArgs): void {
   cleanupExistingSession(args.agentId, existing);
 
   const spawnEnv = buildPtySpawnEnv(args.env, fileEnv);
+  const launchArgs = applyAgentHookLaunch(args, command, spawnEnv);
 
   // Backfill sandbox placeholders for pre-existing worktrees (and anywhere
   // Claude Code may launch). See ensureClaudeSandboxFiles for the why.
@@ -541,7 +574,7 @@ export function spawnAgent(win: BrowserWindow, args: SpawnAgentArgs): void {
     refreshWorktreeNodeModules(cwd, repoRoot);
   }
 
-  const spawnSpec = buildPtySpawnSpec(args, command, cwd, spawnEnv);
+  const spawnSpec = buildPtySpawnSpec({ ...args, args: launchArgs }, command, cwd, spawnEnv);
 
   logDebug('pty', `spawn command ${args.agentId}`, {
     taskId: args.taskId,

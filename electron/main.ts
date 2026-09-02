@@ -7,6 +7,7 @@ import { execFileSync } from 'child_process';
 import { registerAllHandlers } from './ipc/register.js';
 import { registerLogHandler } from './log.js';
 import { installIpcTracing } from './ipc/trace.js';
+import { startAgentHookRuntime, stopAgentHookRuntime } from './agent-hooks/runtime.js';
 import { killAllAgents } from './ipc/pty.js';
 import { stopAllPlanWatchers } from './ipc/plans.js';
 import { stopAllStepsWatchers } from './ipc/steps.js';
@@ -171,6 +172,8 @@ function createWindow() {
   registerLogHandler(ipcMain);
   installIpcTracing(ipcMain);
   registerAllHandlers(mainWindow);
+  // Async, but listening within a few ms — long before the renderer can spawn.
+  void startAgentHookRuntime(mainWindow);
 
   // Open links in external browser instead of inside Electron
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -279,6 +282,7 @@ app.on('before-quit', (event) => {
 // anything the user still had a chance to cancel.
 app.on('will-quit', () => {
   killAllAgents();
+  stopAgentHookRuntime();
   stopAllPlanWatchers();
   stopAllStepsWatchers();
 });
