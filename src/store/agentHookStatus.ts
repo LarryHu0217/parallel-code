@@ -103,6 +103,10 @@ function isSuppressedToolEvent(event: AgentHookEventPayload): boolean {
 }
 
 export function applyAgentHookEvent(event: AgentHookEventPayload): void {
+  // Only a process this store is running can report. Anything else is a stray
+  // from another app instance sharing the endpoint file, or an event still in
+  // flight when its process exited — and `done` entries never expire.
+  if (store.agents[event.agentId]?.status !== 'running') return;
   // Any real event during the settle window means the keypress was not an interrupt.
   clearTimer(interruptTimers, event.agentId);
   if (isSuppressedToolEvent(event)) return;

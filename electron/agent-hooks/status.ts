@@ -64,7 +64,6 @@ function clip(text: string | undefined, max: number): string | undefined {
   return single.length > max ? `${single.slice(0, max - 1)}…` : single;
 }
 
-/** Vendors spell the ask-the-user tool differently; compare without punctuation. */
 const HOOK_STATES: ReadonlySet<string> = new Set<AgentHookStatusState>([
   'working',
   'waiting',
@@ -90,6 +89,7 @@ export function isPlanApprovalTool(toolName: string | undefined): boolean {
   return toolName?.replace(/[^a-z0-9]/gi, '').toLowerCase() === 'exitplanmode';
 }
 
+/** Vendors spell the ask-the-user tool differently; compare without punctuation. */
 export function isAskUserQuestionTool(toolName: string | undefined): boolean {
   const normalized = toolName?.replace(/[^a-z0-9]/gi, '').toLowerCase();
   return normalized === 'askuserquestion' || normalized === 'requestuserinput';

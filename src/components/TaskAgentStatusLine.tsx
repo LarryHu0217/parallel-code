@@ -29,6 +29,10 @@ export function describeAgentStatus(status: TaskAgentHookStatus): AgentStatusDes
   if (status.event === 'Interrupt') {
     return { label: 'Interrupted', text: '', color: theme.fgMuted };
   }
+  // A session that just started or resumed is idle, not finished with anything.
+  if (status.event === 'SessionStart') {
+    return { label: 'Idle', text: '', color: theme.fgMuted };
+  }
   return { label: 'Done', text: status.lastAssistantMessage ?? '', color: theme.fgMuted };
 }
 
