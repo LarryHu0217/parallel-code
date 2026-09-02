@@ -20,6 +20,7 @@ import {
   getPanelUserSize,
   setPanelUserSize,
   toggleSettingsDialog,
+  setProjectTasksCollapsed,
   setProjectsCollapsed,
   setSidebarNeedsInputFirst,
   uncollapseTask,
@@ -31,9 +32,9 @@ import {
 import type { Project } from '../store/types';
 import type { TaskAttentionState } from '../store/store';
 import {
+  computeSidebarDraggableTaskOrder,
   computeGroupedTasks,
   getCoordinatorChildren,
-  isCoordinatedChild,
 } from '../store/sidebar-order';
 import { computeNeedsInputTasks, jumpToWaitingTask } from '../store/sidebar-attention';
 import { ConnectPhoneModal } from './ConnectPhoneModal';
@@ -158,6 +159,79 @@ function TaskName(props: { name: string; unread?: boolean }) {
     >
       {props.name}
     </span>
+  );
+}
+
+export function ProjectTaskGroupToggle(props: {
+  project: Project;
+  taskCount: number;
+  collapsed: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      class="projects-toggle"
+      onClick={() => props.onToggle()}
+      aria-expanded={!props.collapsed}
+      aria-controls={`sidebar-project-tasks-${props.project.id}`}
+      title={
+        props.collapsed
+          ? `Expand ${props.project.name} tasks`
+          : `Collapse ${props.project.name} tasks`
+      }
+      style={{
+        width: '100%',
+        background: 'transparent',
+        border: 'none',
+        color: theme.fgSubtle,
+        cursor: 'pointer',
+        'font-size': sf(11),
+        'text-transform': 'uppercase',
+        'letter-spacing': '0.05em',
+        'margin-top': '8px',
+        'margin-bottom': '4px',
+        padding: '0 2px',
+        display: 'flex',
+        'align-items': 'center',
+        gap: '5px',
+      }}
+    >
+      <svg
+        width="12"
+        height="12"
+        viewBox="0 0 16 16"
+        fill="currentColor"
+        aria-hidden="true"
+        style={{
+          'flex-shrink': '0',
+          transform: props.collapsed ? 'rotate(-90deg)' : 'none',
+          transition: 'transform 0.15s ease',
+        }}
+      >
+        <path d="M4.22 6.22a.75.75 0 0 1 1.06 0L8 8.94l2.72-2.72a.75.75 0 1 1 1.06 1.06l-3.25 3.25a.75.75 0 0 1-1.06 0L4.22 7.28a.75.75 0 0 1 0-1.06Z" />
+      </svg>
+      <span
+        style={{
+          width: '6px',
+          height: '6px',
+          'border-radius': '50%',
+          background: props.project.color,
+          'flex-shrink': '0',
+        }}
+      />
+      <span
+        style={{
+          overflow: 'hidden',
+          'text-overflow': 'ellipsis',
+          'white-space': 'nowrap',
+          'min-width': '0',
+        }}
+      >
+        {props.project.name}
+      </span>
+      <span style={{ 'flex-shrink': '0' }}>({props.taskCount})</span>
+    </button>
   );
 }
 
@@ -366,7 +440,7 @@ export function TaskRowShell(props: {
       onClick={() => props.onClick()}
       onKeyDown={(event) => props.onKeyDown?.(event)}
       style={{
-        padding: '7px 10px',
+        padding: '0 10px',
         'padding-left': props.paddingLeft ?? '10px',
         'border-radius': '6px',
         'font-size': props.fontSize,
@@ -411,10 +485,8 @@ export function Sidebar() {
   const taskIndexById = createMemo(() => {
     const map = new Map<string, number>();
     let visIdx = 0;
-    for (const taskId of store.taskOrder) {
-      if (!isCoordinatedChild(taskId)) {
-        map.set(taskId, visIdx++);
-      }
+    for (const taskId of computeSidebarDraggableTaskOrder()) {
+      map.set(taskId, visIdx++);
     }
     return map;
   });
@@ -467,7 +539,7 @@ export function Sidebar() {
         if (!target) return;
         const visibleIndex = Number(target.dataset.taskIndex);
         // data-task-index is now the visible draggable index; look up the task ID from the visible order
-        const draggableOrder = store.taskOrder.filter((id) => !isCoordinatedChild(id));
+        const draggableOrder = computeSidebarDraggableTaskOrder();
         const taskId = draggableOrder[visibleIndex];
         if (taskId === undefined || taskId === null) return;
         handleTaskMouseDown(e, taskId, visibleIndex);
@@ -991,56 +1063,40 @@ export function Sidebar() {
               const totalCount = () => activeTasks().length + collapsedTasks().length;
               return (
                 <Show when={totalCount() > 0}>
-                  <span
+                  <ProjectTaskGroupToggle
+                    project={project}
+                    taskCount={totalCount()}
+                    collapsed={project.tasksCollapsed === true}
+                    onToggle={() =>
+                      setProjectTasksCollapsed(project.id, project.tasksCollapsed !== true)
+                    }
+                  />
+                  <div
+                    id={`sidebar-project-tasks-${project.id}`}
+                    aria-hidden={project.tasksCollapsed === true}
                     style={{
-                      'font-size': sf(11),
-                      color: theme.fgSubtle,
-                      'text-transform': 'uppercase',
-                      'letter-spacing': '0.05em',
-                      'margin-top': '8px',
-                      'margin-bottom': '4px',
-                      padding: '0 2px',
-                      display: 'flex',
-                      'align-items': 'center',
-                      gap: '5px',
+                      display: project.tasksCollapsed ? 'none' : 'flex',
+                      'flex-direction': 'column',
+                      gap: '3px',
                     }}
                   >
-                    <div
-                      style={{
-                        width: '6px',
-                        height: '6px',
-                        'border-radius': '50%',
-                        background: project.color,
-                        'flex-shrink': '0',
-                      }}
-                    />
-                    <span
-                      title={project.name}
-                      style={{
-                        overflow: 'hidden',
-                        'text-overflow': 'ellipsis',
-                        'white-space': 'nowrap',
-                        'min-width': '0',
-                      }}
-                    >
-                      {project.name}
-                    </span>
-                    <span style={{ 'flex-shrink': '0' }}>({totalCount()})</span>
-                  </span>
-                  <For each={activeTasks()}>
-                    {(taskId) => (
-                      <TaskEntry
-                        taskId={taskId}
-                        nowMs={nowMs()}
-                        globalIndex={globalIndex}
-                        dragFromIndex={dragFromIndex}
-                        dropTargetIndex={dropTargetIndex}
-                      />
-                    )}
-                  </For>
-                  <For each={collapsedTasks()}>
-                    {(taskId) => <CollapsedTaskEntry taskId={taskId} nowMs={nowMs()} />}
-                  </For>
+                    <Show when={!project.tasksCollapsed}>
+                      <For each={activeTasks()}>
+                        {(taskId) => (
+                          <TaskEntry
+                            taskId={taskId}
+                            nowMs={nowMs()}
+                            globalIndex={globalIndex}
+                            dragFromIndex={dragFromIndex}
+                            dropTargetIndex={dropTargetIndex}
+                          />
+                        )}
+                      </For>
+                      <For each={collapsedTasks()}>
+                        {(taskId) => <CollapsedTaskEntry taskId={taskId} nowMs={nowMs()} />}
+                      </For>
+                    </Show>
+                  </div>
                 </Show>
               );
             }}

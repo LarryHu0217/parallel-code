@@ -443,6 +443,7 @@ export async function loadState(): Promise<void> {
     } else {
       p.coverageReportPath = undefined;
     }
+    p.tasksCollapsed = typeof p.tasksCollapsed === 'boolean' ? p.tasksCollapsed : undefined;
     // Migrate defaultDirectMode -> defaultGitIsolation
     const legacy = p as Project & { defaultDirectMode?: boolean };
     if (legacy.defaultDirectMode !== undefined && p.defaultGitIsolation === undefined) {

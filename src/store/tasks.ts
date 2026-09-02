@@ -34,7 +34,7 @@ import {
   clampCoordinatorConcurrentTasks,
   DEFAULT_COORDINATOR_CONCURRENT_TASKS,
 } from '../lib/coordinator-limits';
-import { getCoordinatorChildren, isCoordinatedChild } from './sidebar-order';
+import { computeSidebarDraggableTaskOrder, getCoordinatorChildren } from './sidebar-order';
 import { isLandedTaskState } from './landing';
 
 export function createAgentRecord(args: {
@@ -805,7 +805,7 @@ export function reorderTask(fromIndex: number, toIndex: number): void {
  */
 export function reorderTaskVisually(movedId: string, targetVisibleIdx: number): void {
   // Visible draggable order: active tasks excluding coordinated children
-  const draggableOrder = store.taskOrder.filter((id) => !isCoordinatedChild(id));
+  const draggableOrder = computeSidebarDraggableTaskOrder();
 
   // After removing the moved item, find what task should come after it
   const remainingDraggable = draggableOrder.filter((id) => id !== movedId);

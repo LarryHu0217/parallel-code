@@ -134,6 +134,7 @@ export {
   setShowSidebarTips,
   setShowSidebarProgress,
   setSidebarNeedsInputFirst,
+  setProjectTasksCollapsed,
   setProjectsCollapsed,
   setFontSmoothing,
   setDesktopNotificationsEnabled,

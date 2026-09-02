@@ -15,7 +15,7 @@ const core = vi.hoisted(() => ({
         agents: Record<string, unknown>;
         taskOrder: string[];
         collapsedTaskOrder: string[];
-        projects: { id: string; path: string }[];
+        projects: { id: string; path: string; tasksCollapsed?: boolean }[];
         availableAgents: unknown[];
         defaultStepsEnabled: boolean;
       }>
@@ -36,7 +36,7 @@ let mockTasks: Record<string, MockTask> = {};
 let mockAgents: Record<string, unknown> = {};
 let mockTaskOrder: string[] = [];
 let mockCollapsedTaskOrder: string[] = [];
-let mockProjects: { id: string; path: string }[] = [];
+let mockProjects: { id: string; path: string; tasksCollapsed?: boolean }[] = [];
 let mockAgentEnvFiles: Record<string, string> = {};
 const ipcHandlers = new Map<string, (data: unknown) => void>();
 
@@ -121,7 +121,17 @@ vi.mock('./completion', () => ({
 vi.mock('../lib/log', () => ({ warn: vi.fn() }));
 vi.mock('../lib/clean-task-name', () => ({ cleanTaskName: vi.fn() }));
 vi.mock('./coordinator-preamble', () => ({ COORDINATOR_PREAMBLE: '' }));
-vi.mock('./sidebar-order', () => ({ getCoordinatorChildren: vi.fn() }));
+vi.mock('./sidebar-order', () => ({
+  getCoordinatorChildren: vi.fn(),
+  computeSidebarDraggableTaskOrder: vi.fn(() =>
+    mockTaskOrder.filter((taskId) => {
+      const projectId = mockTasks[taskId]?.projectId;
+      return !mockProjects.some(
+        (project) => project.id === projectId && project.tasksCollapsed === true,
+      );
+    }),
+  ),
+}));
 vi.mock('../lib/github-url', () => ({
   parseGitHubUrl: vi.fn(),
   taskNameFromGitHubUrl: vi.fn(),
@@ -158,6 +168,7 @@ import {
   retryTaskMcpStartup,
   clearTaskLandingReview,
   toggleAITerminalLayout,
+  reorderTaskVisually,
   createAgentRecord,
   selectActiveNeighborAfterRemoval,
 } from './tasks';
@@ -275,6 +286,26 @@ describe('updateTaskBranch', () => {
     updateTaskBranch('task-1', 'task/same');
 
     expect(mockTasks['task-1'].prUrl).toBe('https://github.com/acme/app/pull/12');
+  });
+});
+
+describe('reorderTaskVisually', () => {
+  it('uses only expanded project tasks when resolving a visible drop index', () => {
+    mockProjects = [
+      { id: 'project-hidden', path: '/hidden', tasksCollapsed: true },
+      { id: 'project-visible', path: '/visible' },
+    ];
+    mockTasks = {
+      hidden: { projectId: 'project-hidden', agentIds: [], shellAgentIds: [] },
+      first: { projectId: 'project-visible', agentIds: [], shellAgentIds: [] },
+      second: { projectId: 'project-visible', agentIds: [], shellAgentIds: [] },
+    };
+    mockTaskOrder = ['hidden', 'first', 'second'];
+    vi.mocked(getCoordinatorChildren).mockReturnValue({ active: [], collapsed: [] });
+
+    reorderTaskVisually('first', 1);
+
+    expect(mockTaskOrder).toEqual(['hidden', 'second', 'first']);
   });
 });
 

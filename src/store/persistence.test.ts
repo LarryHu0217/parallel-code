@@ -702,6 +702,36 @@ describe('projects section collapsed persistence', () => {
   });
 });
 
+describe('project task group collapsed persistence', () => {
+  it('restores boolean state and rejects malformed values', async () => {
+    mockInvoke.mockResolvedValueOnce(
+      basePayload({
+        projects: [
+          { id: 'p1', name: 'Repo', path: '/repo', color: '#abc', tasksCollapsed: true },
+          { id: 'p2', name: 'Other', path: '/other', color: '#def', tasksCollapsed: 'yes' },
+        ],
+      }),
+    );
+
+    await loadState();
+
+    expect(store.projects[0].tasksCollapsed).toBe(true);
+    expect(store.projects[1].tasksCollapsed).toBeUndefined();
+  });
+
+  it('persists collapsed task groups with their projects', async () => {
+    setStore('projects', [
+      { id: 'p1', name: 'Repo', path: '/repo', color: '#abc', tasksCollapsed: true },
+    ]);
+    mockInvoke.mockResolvedValueOnce(undefined);
+
+    await saveState();
+
+    const saved = JSON.parse(mockInvoke.mock.calls[0][1].json);
+    expect(saved.projects[0].tasksCollapsed).toBe(true);
+  });
+});
+
 describe('new task defaults persistence', () => {
   beforeEach(() => {
     vi.clearAllMocks();

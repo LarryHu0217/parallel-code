@@ -75,6 +75,7 @@ export interface Project {
   coverageReportPath?: string;
   terminalBookmarks?: TerminalBookmark[];
   isGitRepo?: boolean; // undefined treated as true for backward compat
+  tasksCollapsed?: boolean; // sidebar task group, defaults to expanded
 }
 
 export interface Agent {
