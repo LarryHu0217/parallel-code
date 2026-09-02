@@ -3,6 +3,7 @@ import { IPC } from '../../electron/ipc/channels';
 import {
   isAgentHookEventPayload,
   type AgentHookEventPayload,
+  type AgentHookPrompt,
   type AgentHookStatusState,
 } from '../../electron/agent-hooks/status';
 import { store } from './core';
@@ -15,8 +16,10 @@ import { store } from './core';
  */
 export interface AgentHookStatus {
   state: AgentHookStatusState;
-  /** Hook event that produced this state, or `Interrupt` when inferred from a keypress. */
+  /** Hook event that produced this state, or `Interrupt` / `PermissionAnswered`
+   *  when inferred from a keypress. */
   event: string;
+  prompt?: AgentHookPrompt;
   /** When the agent entered this state (epoch ms); kept across same-state events. */
   since: number;
   updatedAt: number;
@@ -45,6 +48,15 @@ const TOOL_EVENTS: ReadonlySet<string> = new Set([
 ]);
 const ESC = '\x1b';
 const CTRL_C = '\x03';
+/** Enter in its terminal spellings (incl. kitty keyboard protocol) plus the digit shortcuts of Claude's dialogs. */
+const ANSWER_INPUTS: ReadonlySet<string> = new Set([
+  '\r',
+  '\n',
+  '\r\n',
+  '\x1b[13u',
+  '\x1b[13;1u',
+  ...'123456789',
+]);
 
 const [statuses, setStatuses] = createSignal<ReadonlyMap<string, AgentHookStatus>>(new Map());
 const staleTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -104,26 +116,53 @@ export function applyAgentHookEvent(event: AgentHookEventPayload): void {
     updatedAt: event.at,
     toolName: event.toolName,
     detail: event.detail,
-    // A later idle-prompt notification must not wipe the final message Stop carried.
+    prompt: event.prompt ?? (sameState && event.state === 'waiting' ? prev.prompt : undefined),
+    // A later idle-prompt notification must not wipe the final message Stop carried,
+    // nor count as the user having looked: only opening the task clears unread.
     lastAssistantMessage:
       event.lastAssistantMessage ??
       (sameState && event.state === 'done' ? prev.lastAssistantMessage : undefined),
-    unread: finished && event.taskId !== store.activeTaskId,
+    unread: finished
+      ? event.taskId !== store.activeTaskId
+      : sameState && event.state === 'done' && prev.unread,
   });
 }
 
 /**
- * Claude Code does not fire `Stop` for a user interrupt, so a bare Esc or
- * Ctrl-C while working is the only signal. It is confirmed only if the hook
- * stream stays silent for a short settle window; otherwise the key meant
- * something else (a menu, a paste, a dialog) and the turn is still live.
+ * Two things the hook stream cannot say are visible in what the user types.
+ * Claude Code fires no `Stop` for a user interrupt, so a bare Esc or Ctrl-C
+ * while working is the only signal; and nothing fires between approving a
+ * permission dialog and the tool finishing, so an approved long command would
+ * sit at "Needs you" for its whole run. Both are inferences: the interrupt
+ * waits out a settle window, the approval is corrected by the next hook event.
  */
-export function noteAgentInterruptInput(agentId: string, data: string): void {
-  if (data !== ESC && data !== CTRL_C) return;
+export function noteAgentTerminalInput(agentId: string, data: string): void {
   const current = statuses().get(agentId);
-  if (current?.state !== 'working') return;
+  if (!current) return;
+  if (current.state === 'working' && (data === ESC || data === CTRL_C)) {
+    scheduleInterrupt(agentId, current.updatedAt);
+    return;
+  }
+  // AskUserQuestion is left alone: a digit only advances a multi-question
+  // prompt, and its own PostToolUse clears the wait promptly anyway.
+  if (current.state === 'waiting' && current.prompt === 'permission' && ANSWER_INPUTS.has(data)) {
+    const now = Date.now();
+    setStatus(agentId, {
+      ...current,
+      state: 'working',
+      event: 'PermissionAnswered',
+      since: now,
+      updatedAt: now,
+      prompt: undefined,
+      unread: false,
+    });
+  }
+}
+
+/** Confirm the interrupt only if no hook event lands in the settle window;
+ *  otherwise the key meant something else (a menu, a dialog) and the turn is live. */
+function scheduleInterrupt(agentId: string, baseline: number): void {
   clearTimer(interruptTimers, agentId);
-  const baseline = current.updatedAt;
   interruptTimers.set(
     agentId,
     setTimeout(() => {

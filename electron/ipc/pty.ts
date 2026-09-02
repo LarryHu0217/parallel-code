@@ -16,7 +16,7 @@ import {
 } from './git.js';
 import { loadEnvFile } from './env-file.js';
 import { HOOK_PTY_ENV_KEYS } from '../agent-hooks/hook-script.js';
-import { withClaudeHookSettings } from '../agent-hooks/launch-args.js';
+import { isClaudeCommand, withClaudeHookSettings } from '../agent-hooks/launch-args.js';
 import { debug as logDebug } from '../log.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -499,15 +499,18 @@ export function setAgentHookRuntime(runtime: AgentHookRuntime | null): void {
 
 /**
  * Adds hook identity env and `--settings` so a Claude Code agent reports its
- * own status. Shells get nothing (the user runs whatever they like there), and
- * Docker gets nothing because the loopback port is not reachable from inside.
+ * own status. Shells get nothing (the user runs whatever they like there),
+ * Docker gets nothing because the loopback port is not reachable from inside,
+ * and other agents get nothing because they could only ever forge with it.
  */
 export function applyAgentHookLaunch(
   args: Pick<SpawnAgentArgs, 'agentId' | 'taskId' | 'args' | 'isShell' | 'dockerMode'>,
   command: string,
   spawnEnv: Record<string, string>,
 ): string[] {
-  if (!agentHookRuntime || args.isShell || args.dockerMode) return args.args;
+  if (!agentHookRuntime || args.isShell || args.dockerMode || !isClaudeCommand(command)) {
+    return args.args;
+  }
   Object.assign(spawnEnv, agentHookRuntime.buildPtyEnv(args.agentId, args.taskId));
   return withClaudeHookSettings(command, args.args, agentHookRuntime.claudeSettingsPath);
 }

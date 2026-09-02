@@ -329,6 +329,9 @@ function App() {
   });
 
   onMount(async () => {
+    // Before the first await: restored agents start firing hooks as soon as
+    // loadState spawns them, and IPC does not replay what nobody listened to.
+    const stopAgentHookStatusListener = startAgentHookStatusListener();
     void syncWindowFocused();
     void syncWindowMaximized();
 
@@ -532,7 +535,6 @@ function App() {
     const stopUpdateSubscription = startUpdateSubscription();
     const stopRemoteTaskHandlers = startRemoteTaskHandlers();
     const stopRemoteStatusSync = startRemoteStatusSync();
-    const stopAgentHookStatusListener = startAgentHookStatusListener();
 
     // Listen for plan content pushed from backend plan watcher
     const offPlanContent = window.electron.ipcRenderer.on(IPC.PlanContent, (data: unknown) => {

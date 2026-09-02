@@ -25,7 +25,7 @@ import {
   retryTaskMcpStartup,
   markTaskUserActivity,
   setTaskTerminalInputPending,
-  noteAgentInterruptInput,
+  noteAgentTerminalInput,
 } from '../store/store';
 import { clearTerminalInputPendingFromQuestion } from '../store/tasks';
 import { isLandedTaskState } from '../store/landing';
@@ -913,7 +913,7 @@ export function TerminalView(props: TerminalViewProps) {
     term.onData((data) => {
       if (!canForwardInput()) return;
       noteUserTerminalInput(data);
-      if (!props.isShell) noteAgentInterruptInput(agentId, data);
+      if (!props.isShell) noteAgentTerminalInput(agentId, data);
       if (props.onPromptDetected) {
         for (const ch of data) {
           if (ch === '\r') {

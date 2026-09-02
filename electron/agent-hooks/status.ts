@@ -10,10 +10,16 @@
 
 export type AgentHookStatusState = 'working' | 'waiting' | 'done';
 
+/** What a `waiting` agent needs: a yes/no on a permission-style dialog, or
+ *  answers to a structured question. The renderer uses this to tell an
+ *  approval keystroke from a partial answer. */
+export type AgentHookPrompt = 'permission' | 'question';
+
 export interface AgentHookStatusUpdate {
   state: AgentHookStatusState;
   /** The originating hook event, e.g. `Stop` or `PreToolUse`. */
   event: string;
+  prompt?: AgentHookPrompt;
   /** Tool in flight (`working`) or the tool a prompt is about (`waiting`). */
   toolName?: string;
   /** Short human summary — a command, a file path, or the question asked. */
@@ -79,6 +85,11 @@ export function isAgentHookEventPayload(value: unknown): value is AgentHookEvent
   );
 }
 
+/** ExitPlanMode blocks on "proceed with this plan?" exactly like a permission dialog. */
+export function isPlanApprovalTool(toolName: string | undefined): boolean {
+  return toolName?.replace(/[^a-z0-9]/gi, '').toLowerCase() === 'exitplanmode';
+}
+
 export function isAskUserQuestionTool(toolName: string | undefined): boolean {
   const normalized = toolName?.replace(/[^a-z0-9]/gi, '').toLowerCase();
   return normalized === 'askuserquestion' || normalized === 'requestuserinput';
@@ -104,6 +115,35 @@ function summarizeQuestions(toolInput: unknown): string | undefined {
   return clip(asString(first?.question), DETAIL_MAX_CHARS);
 }
 
+function mapPreToolUse(body: Record<string, unknown>, toolName: string | undefined) {
+  const event = 'PreToolUse';
+  if (isAskUserQuestionTool(toolName)) {
+    const detail = summarizeQuestions(body.tool_input);
+    return { state: 'waiting', event, toolName, detail, prompt: 'question' } as const;
+  }
+  if (isPlanApprovalTool(toolName)) {
+    const detail = 'Plan ready for approval';
+    return { state: 'waiting', event, toolName, detail, prompt: 'permission' } as const;
+  }
+  return {
+    state: 'working',
+    event,
+    toolName,
+    detail: summarizeToolInput(body.tool_input),
+  } as const;
+}
+
+function mapNotification(body: Record<string, unknown>): AgentHookStatusUpdate | null {
+  const event = 'Notification';
+  const type = asString(body.notification_type);
+  if (type === 'idle_prompt') return { state: 'done', event };
+  if (!type || !WAITING_NOTIFICATION_TYPES.has(type)) return null;
+  const detail = clip(asString(body.message), DETAIL_MAX_CHARS);
+  if (type === 'permission_prompt')
+    return { state: 'waiting', event, detail, prompt: 'permission' };
+  return { state: 'waiting', event, detail };
+}
+
 /**
  * Map a raw Claude Code hook payload (the JSON Claude writes to the hook's
  * stdin) to a status update, or null when the event says nothing about
@@ -117,32 +157,22 @@ export function mapClaudeHookPayload(payload: unknown): AgentHookStatusUpdate | 
   const toolName = asString(body.tool_name);
 
   switch (event) {
-    case 'SessionStart': {
+    case 'SessionStart':
       // Compaction restarts the session mid-turn; the agent is still working.
-      if (body.session_start_reason === 'compact') return null;
-      return { state: 'done', event };
-    }
+      return body.source === 'compact' ? null : { state: 'done', event };
     case 'UserPromptSubmit':
       return { state: 'working', event };
-    case 'PreToolUse': {
-      if (isAskUserQuestionTool(toolName)) {
-        return { state: 'waiting', event, toolName, detail: summarizeQuestions(body.tool_input) };
-      }
-      return { state: 'working', event, toolName, detail: summarizeToolInput(body.tool_input) };
-    }
+    case 'PreToolUse':
+      return mapPreToolUse(body, toolName);
     case 'PostToolUse':
     case 'PostToolUseFailure':
       return { state: 'working', event };
-    case 'PermissionRequest':
-      return { state: 'waiting', event, toolName, detail: summarizeToolInput(body.tool_input) };
-    case 'Notification': {
-      const type = asString(body.notification_type);
-      if (type && WAITING_NOTIFICATION_TYPES.has(type)) {
-        return { state: 'waiting', event, detail: clip(asString(body.message), DETAIL_MAX_CHARS) };
-      }
-      if (type === 'idle_prompt') return { state: 'done', event };
-      return null;
+    case 'PermissionRequest': {
+      const detail = summarizeToolInput(body.tool_input);
+      return { state: 'waiting', event, toolName, detail, prompt: 'permission' };
     }
+    case 'Notification':
+      return mapNotification(body);
     case 'Stop':
     case 'StopFailure':
       return {

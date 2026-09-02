@@ -172,8 +172,6 @@ function createWindow() {
   registerLogHandler(ipcMain);
   installIpcTracing(ipcMain);
   registerAllHandlers(mainWindow);
-  // Async, but listening within a few ms — long before the renderer can spawn.
-  void startAgentHookRuntime(mainWindow);
 
   // Open links in external browser instead of inside Electron
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -227,7 +225,7 @@ function createWindow() {
   });
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   // Grant microphone and clipboard access (deny camera/video)
   session.defaultSession.setPermissionRequestHandler(
     (_webContents, permission, callback, details) => {
@@ -256,6 +254,9 @@ app.whenReady().then(() => {
     quittingForUpdate = true;
   });
 
+  // Listening before the window exists: a renderer cannot spawn a Claude
+  // agent that misses its hooks. Failure falls back to PTY heuristics.
+  await startAgentHookRuntime(() => mainWindow);
   setupApplicationMenu();
   createWindow();
 });

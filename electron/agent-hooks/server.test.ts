@@ -97,6 +97,28 @@ describe('startAgentHookServer', () => {
     expect(await post('{}', { 'x-parallel-code-hook-token': tokenFrom(dir) }, '/other')).toBe(404);
   });
 
+  it('tightens permissions left loose by a previous launch', async () => {
+    const loose = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-hooks-loose-'));
+    fs.chmodSync(loose, 0o755);
+    fs.writeFileSync(path.join(loose, 'endpoint.env'), 'stale', { mode: 0o644 });
+    const second = await startAgentHookServer({ dir: loose, onEvent: () => undefined });
+    try {
+      expect(fs.statSync(loose).mode & 0o777).toBe(0o700);
+      expect(fs.statSync(path.join(loose, 'endpoint.env')).mode & 0o777).toBe(0o600);
+    } finally {
+      await second.close();
+      fs.rmSync(loose, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects instead of crashing when the hook directory cannot be written', async () => {
+    const blocked = path.join(dir, 'not-a-dir');
+    fs.writeFileSync(blocked, '');
+    await expect(
+      startAgentHookServer({ dir: path.join(blocked, 'child'), onEvent: () => undefined }),
+    ).rejects.toThrow();
+  });
+
   it('hands the PTY layer the env the script needs', () => {
     expect(server.buildPtyEnv('agent-9', 'task-9')).toEqual({
       PARALLEL_CODE_HOOK_ENDPOINT: path.join(dir, 'endpoint.env'),

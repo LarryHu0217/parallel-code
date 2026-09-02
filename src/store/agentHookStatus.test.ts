@@ -54,7 +54,7 @@ const {
   getTaskAgentHookStatus,
   isTaskUnread,
   markTaskRead,
-  noteAgentInterruptInput,
+  noteAgentTerminalInput,
 } = await import('./agentHookStatus');
 
 function event(overrides: Partial<AgentHookEventPayload>): AgentHookEventPayload {
@@ -113,8 +113,62 @@ describe('agentHookStatus', () => {
     applyAgentHookEvent(event({ state: 'done', event: 'Stop', at: Date.now() + 1 }));
     expect(isTaskUnread('t1')).toBe(true);
 
+    // The idle-prompt notification a minute later is not the user looking.
+    applyAgentHookEvent(event({ state: 'done', event: 'Notification', at: Date.now() + 60_000 }));
+    expect(isTaskUnread('t1')).toBe(true);
+
     markTaskRead('t1');
     expect(isTaskUnread('t1')).toBe(false);
+
+    applyAgentHookEvent(event({ state: 'done', event: 'Stop', at: Date.now() + 70_000 }));
+    applyAgentHookEvent(event({ state: 'working', at: Date.now() + 80_000 }));
+    expect(isTaskUnread('t1')).toBe(false);
+  });
+
+  it('treats Enter or a digit on a permission dialog as approval until hooks say otherwise', () => {
+    applyAgentHookEvent(
+      event({
+        state: 'waiting',
+        event: 'PermissionRequest',
+        toolName: 'Bash',
+        prompt: 'permission',
+      }),
+    );
+    noteAgentTerminalInput('a1', '\x1b[A');
+    expect(getAgentHookStatus('a1')?.state).toBe('waiting');
+    noteAgentTerminalInput('a1', '\r');
+    expect(getAgentHookStatus('a1')).toMatchObject({
+      state: 'working',
+      event: 'PermissionAnswered',
+      toolName: 'Bash',
+    });
+
+    applyAgentHookEvent(
+      event({ state: 'waiting', event: 'PermissionRequest', prompt: 'permission' }),
+    );
+    noteAgentTerminalInput('a1', '2');
+    expect(getAgentHookStatus('a1')?.state).toBe('working');
+  });
+
+  it('keeps the permission prompt kind across a follow-up notification', () => {
+    applyAgentHookEvent(
+      event({ state: 'waiting', event: 'PermissionRequest', prompt: 'permission' }),
+    );
+    applyAgentHookEvent(event({ state: 'waiting', event: 'Notification', at: Date.now() + 5 }));
+    expect(getAgentHookStatus('a1')?.prompt).toBe('permission');
+  });
+
+  it('does not guess at answers to a structured question', () => {
+    applyAgentHookEvent(
+      event({
+        state: 'waiting',
+        event: 'PreToolUse',
+        toolName: 'AskUserQuestion',
+        prompt: 'question',
+      }),
+    );
+    noteAgentTerminalInput('a1', '\r');
+    expect(getAgentHookStatus('a1')?.state).toBe('waiting');
   });
 
   it('drops a stale working claim but keeps done forever', () => {
@@ -129,7 +183,7 @@ describe('agentHookStatus', () => {
 
   it('infers an interrupt from a bare Esc that no hook event follows', () => {
     applyAgentHookEvent(event({ state: 'working' }));
-    noteAgentInterruptInput('a1', '\x1b');
+    noteAgentTerminalInput('a1', '\x1b');
     vi.advanceTimersByTime(499);
     expect(getAgentHookStatus('a1')?.state).toBe('working');
     vi.advanceTimersByTime(1);
@@ -145,7 +199,7 @@ describe('agentHookStatus', () => {
 
   it('cancels the interrupt when a hook event arrives inside the settle window', () => {
     applyAgentHookEvent(event({ state: 'working' }));
-    noteAgentInterruptInput('a1', '\x03');
+    noteAgentTerminalInput('a1', '\x03');
     vi.advanceTimersByTime(200);
     applyAgentHookEvent(event({ event: 'PostToolUse', at: Date.now() }));
     vi.advanceTimersByTime(500);
@@ -154,12 +208,12 @@ describe('agentHookStatus', () => {
 
   it('ignores Esc sequences that are not the bare key and any key outside working', () => {
     applyAgentHookEvent(event({ state: 'working' }));
-    noteAgentInterruptInput('a1', '\x1b[A');
+    noteAgentTerminalInput('a1', '\x1b[A');
     vi.advanceTimersByTime(1000);
     expect(getAgentHookStatus('a1')?.state).toBe('working');
 
     applyAgentHookEvent(event({ state: 'waiting', event: 'PermissionRequest', at: Date.now() }));
-    noteAgentInterruptInput('a1', '\x1b');
+    noteAgentTerminalInput('a1', '\x1b');
     vi.advanceTimersByTime(1000);
     expect(getAgentHookStatus('a1')?.state).toBe('waiting');
   });
@@ -177,7 +231,7 @@ describe('agentHookStatus', () => {
 
   it('forgets an agent entirely when cleared', () => {
     applyAgentHookEvent(event({ state: 'working' }));
-    noteAgentInterruptInput('a1', '\x1b');
+    noteAgentTerminalInput('a1', '\x1b');
     clearAgentHookStatus('a1');
     vi.advanceTimersByTime(1000);
     expect(getAgentHookStatus('a1')).toBeNull();

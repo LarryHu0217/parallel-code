@@ -46,6 +46,19 @@ describe('mapClaudeHookPayload', () => {
       event: 'PreToolUse',
       toolName: 'AskUserQuestion',
       detail: 'Which DB?',
+      prompt: 'question',
+    });
+  });
+
+  it('treats a plan approval prompt like a permission dialog', () => {
+    expect(
+      mapClaudeHookPayload(payload({ hook_event_name: 'PreToolUse', tool_name: 'ExitPlanMode' })),
+    ).toEqual({
+      state: 'waiting',
+      event: 'PreToolUse',
+      toolName: 'ExitPlanMode',
+      detail: 'Plan ready for approval',
+      prompt: 'permission',
     });
   });
 
@@ -63,6 +76,7 @@ describe('mapClaudeHookPayload', () => {
       event: 'PermissionRequest',
       toolName: 'Edit',
       detail: '/w/src/a.ts',
+      prompt: 'permission',
     });
     expect(
       mapClaudeHookPayload(
@@ -76,6 +90,7 @@ describe('mapClaudeHookPayload', () => {
       state: 'waiting',
       event: 'Notification',
       detail: 'Claude needs your permission',
+      prompt: 'permission',
     });
   });
 
@@ -111,14 +126,10 @@ describe('mapClaudeHookPayload', () => {
 
   it('treats a fresh session as done but a compaction restart as no signal', () => {
     expect(
-      mapClaudeHookPayload(
-        payload({ hook_event_name: 'SessionStart', session_start_reason: 'startup' }),
-      ),
+      mapClaudeHookPayload(payload({ hook_event_name: 'SessionStart', source: 'startup' })),
     ).toEqual({ state: 'done', event: 'SessionStart' });
     expect(
-      mapClaudeHookPayload(
-        payload({ hook_event_name: 'SessionStart', session_start_reason: 'compact' }),
-      ),
+      mapClaudeHookPayload(payload({ hook_event_name: 'SessionStart', source: 'compact' })),
     ).toBeNull();
   });
 

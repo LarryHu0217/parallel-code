@@ -89,6 +89,10 @@ function writeFiles(
     claudeSettingsPath,
     JSON.stringify(buildClaudeHookSettings(hookScriptPath), null, 2) + '\n',
   );
+  // `mode` only applies on creation; a directory or token file left over from
+  // an older build (or loosened by hand) must be tightened again every launch.
+  fs.chmodSync(dir, 0o700);
+  fs.chmodSync(endpointPath, 0o600);
   return { hookScriptPath, claudeSettingsPath };
 }
 
@@ -134,7 +138,16 @@ export function startAgentHookServer(options: AgentHookServerOptions): Promise<A
         return;
       }
       const { port } = address;
-      const files = writeFiles(options.dir, port, token);
+      let files: ReturnType<typeof writeFiles>;
+      try {
+        files = writeFiles(options.dir, port, token);
+      } catch (err) {
+        // Thrown inside a listen callback this would be an uncaught exception,
+        // not a rejection — and a hook server nobody can reach is useless anyway.
+        server.close();
+        reject(err instanceof Error ? err : new Error(String(err)));
+        return;
+      }
       const endpointPath = path.join(options.dir, 'endpoint.env');
       resolve({
         port,
