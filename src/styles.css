@@ -2523,12 +2523,6 @@ body.dragging-task * {
     animation: none;
   }
 
-  /* Preserve a static busy-state distinction after removing the pulse. */
-  .status-dot-ring {
-    outline: 1px solid var(--fg-muted);
-    outline-offset: 2px;
-  }
-
   /* The hollow ring alone still says "working"; only the rotation goes. */
   .status-glyph-spinner {
     animation: none;
