@@ -42,8 +42,8 @@ import {
   resetGlobalScale,
   startTaskStatusPolling,
   stopTaskStatusPolling,
-  startClaudeUsagePolling,
-  stopClaudeUsagePolling,
+  startUsagePolling,
+  stopUsagePolling,
   navigateRow,
   navigateColumn,
   navigateTask,
@@ -532,7 +532,7 @@ function App() {
     await captureWindowState();
     setupAutosave();
     startTaskStatusPolling();
-    startClaudeUsagePolling();
+    startUsagePolling();
     const stopMCPListeners = initMCPListeners();
     const stopNotificationWatcher = startDesktopNotificationWatcher(windowFocused);
     const stopPrChecksSubscription = startPrChecksSubscription();
@@ -731,7 +731,7 @@ function App() {
       unlistenCloseRequested();
       cleanupShortcuts();
       stopTaskStatusPolling();
-      stopClaudeUsagePolling();
+      stopUsagePolling();
       stopMCPListeners();
       stopNotificationWatcher();
       stopPrChecksSubscription();

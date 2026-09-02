@@ -4,8 +4,9 @@ import path from 'path';
 import crypto from 'crypto';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import type { ClaudeUsageResult, ClaudeUsageWindow } from './shared-types.js';
-import { debug as logDebug, warn as logWarn, errMessage } from '../log.js';
+import type { UsageResult, UsageWindow } from './shared-types.js';
+import { warn as logWarn, errMessage } from '../log.js';
+import { clampPercent, finite, parseResetsAt, requestUsage } from './usage-shared.js';
 
 /**
  * Reads the rate-limit windows Claude Code shows under `/usage`, from the same
@@ -16,7 +17,6 @@ import { debug as logDebug, warn as logWarn, errMessage } from '../log.js';
  */
 
 const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
-const REQUEST_TIMEOUT_MS = 10_000;
 // macOS Claude Code keeps credentials in the login keychain, not on disk.
 // Since 2.1 the service name is suffixed with a hash of a custom config dir.
 const KEYCHAIN_SERVICE = 'Claude Code-credentials';
@@ -36,36 +36,16 @@ interface UsageWindowJson {
   resets_at?: unknown;
 }
 
-function finite(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) ? value : null;
-}
-
-/** `resets_at` has shipped as ISO strings and as epoch seconds; accept both. */
-export function parseResetsAt(value: unknown): number | null {
-  const num = finite(value);
-  // 1e10 separates any seconds epoch (< year 2286) from any ms epoch (> 2001).
-  if (num !== null) return num > 1e10 ? num : num * 1000;
-  if (typeof value !== 'string' || !value) return null;
-  const ms = Date.parse(value);
-  return Number.isNaN(ms) ? null : ms;
-}
-
-function parseWindow(value: unknown): ClaudeUsageWindow | null {
+function parseWindow(value: unknown): UsageWindow | null {
   if (typeof value !== 'object' || value === null) return null;
   const raw = value as UsageWindowJson;
   const usedPercent = finite(raw.utilization) ?? finite(raw.used_percentage);
   if (usedPercent === null) return null;
-  return {
-    usedPercent: Math.max(0, Math.min(100, usedPercent)),
-    resetsAt: parseResetsAt(raw.resets_at),
-  };
+  return { usedPercent: clampPercent(usedPercent), resetsAt: parseResetsAt(raw.resets_at) };
 }
 
 /** Parses the usage endpoint body. Returns null when neither window is present. */
-export function parseClaudeUsageResponse(
-  body: unknown,
-  now = Date.now(),
-): ClaudeUsageResult | null {
+export function parseClaudeUsageResponse(body: unknown, now = Date.now()): UsageResult | null {
   if (typeof body !== 'object' || body === null) return null;
   const raw = body as { five_hour?: unknown; seven_day?: unknown };
   const fiveHour = parseWindow(raw.five_hour);
@@ -135,37 +115,20 @@ async function readCredentialsJson(configDir: string): Promise<string | null> {
   return readCredentialsFile(configDir);
 }
 
-async function requestUsage(token: string): Promise<ClaudeUsageResult> {
-  const res = await fetch(USAGE_URL, {
+export async function fetchClaudeUsage(configDir = claudeConfigDir()): Promise<UsageResult> {
+  const json = await readCredentialsJson(configDir);
+  const token = json ? parseAccessToken(json) : null;
+  if (!token) return { status: 'unavailable', reason: 'No Claude subscription login found' };
+  return requestUsage({
+    scope: 'claude-usage',
+    agent: 'Claude Code',
+    url: USAGE_URL,
     headers: {
       Authorization: `Bearer ${token}`,
       'anthropic-beta': 'oauth-2025-04-20',
       // Only the CLI talks to this endpoint; present as it does so we get the same response.
       'User-Agent': 'claude-code/2.1.0',
     },
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    parse: parseClaudeUsageResponse,
   });
-  if (res.status === 401 || res.status === 403) {
-    return {
-      status: 'error',
-      message: `Claude login token rejected (HTTP ${res.status}) — start a Claude Code session to refresh it`,
-    };
-  }
-  if (!res.ok) return { status: 'error', message: `Usage endpoint returned HTTP ${res.status}` };
-  const parsed = parseClaudeUsageResponse(await res.json());
-  return parsed ?? { status: 'unavailable', reason: 'No rate-limit windows in response' };
-}
-
-export async function fetchClaudeUsage(configDir = claudeConfigDir()): Promise<ClaudeUsageResult> {
-  const json = await readCredentialsJson(configDir);
-  const token = json ? parseAccessToken(json) : null;
-  if (!token) return { status: 'unavailable', reason: 'No Claude subscription login found' };
-  try {
-    return await requestUsage(token);
-  } catch (err) {
-    // The renderer shows this in the bar's tooltip; at warn it would spam the
-    // log every tick while offline.
-    logDebug('claude-usage', 'fetch failed', { err: errMessage(err) });
-    return { status: 'error', message: errMessage(err) };
-  }
 }

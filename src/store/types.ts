@@ -1,4 +1,4 @@
-import type { AgentDef, ClaudeUsageWindow, StepEntry, WorktreeStatus } from '../ipc/types';
+import type { AgentDef, StepEntry, UsageProvider, UsageWindow, WorktreeStatus } from '../ipc/types';
 import type { DockerSource } from '../lib/docker';
 import type { LookPreset, AppearanceMode } from '../lib/look';
 import type { KeyBinding } from '../lib/keybindings';
@@ -305,9 +305,9 @@ export interface MCPStatus {
   mcpConfigPath: string | null;
 }
 
-export interface ClaudeUsageState {
-  fiveHour: ClaudeUsageWindow | null;
-  sevenDay: ClaudeUsageWindow | null;
+export interface UsageState {
+  fiveHour: UsageWindow | null;
+  sevenDay: UsageWindow | null;
   /** When the current windows were fetched; null until the first success. */
   fetchedAt: number | null;
   /** `unavailable` means no subscription login — the bar hides. `error` keeps the last snapshot. */
@@ -423,5 +423,5 @@ export interface AppStore {
   defaultSkipPermissions: boolean;
   defaultPropagateSkipPermissions: boolean;
   mcpStatus: MCPStatus;
-  claudeUsage: ClaudeUsageState;
+  usage: Record<UsageProvider, UsageState>;
 }
