@@ -129,6 +129,7 @@ const ALLOWED_CHANNELS = new Set([
   'stop_mcp_server',
   'get_mcp_status',
   'get_mcp_logs',
+  'get_claude_usage',
   'mcp_task_created',
   'mcp_task_closed',
   'mcp_task_state_sync',

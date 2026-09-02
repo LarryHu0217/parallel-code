@@ -25,6 +25,7 @@ import { HelpDialog } from './components/HelpDialog';
 import { SettingsDialog } from './components/SettingsDialog';
 import { WindowTitleBar } from './components/WindowTitleBar';
 import { FocusModeTaskIndicators } from './components/FocusModeTaskIndicators';
+import { UsageStatusBar } from './components/UsageStatusBar';
 import { theme } from './lib/theme';
 import * as log from './lib/log';
 import {
@@ -41,6 +42,8 @@ import {
   resetGlobalScale,
   startTaskStatusPolling,
   stopTaskStatusPolling,
+  startClaudeUsagePolling,
+  stopClaudeUsagePolling,
   navigateRow,
   navigateColumn,
   navigateTask,
@@ -529,6 +532,7 @@ function App() {
     await captureWindowState();
     setupAutosave();
     startTaskStatusPolling();
+    startClaudeUsagePolling();
     const stopMCPListeners = initMCPListeners();
     const stopNotificationWatcher = startDesktopNotificationWatcher(windowFocused);
     const stopPrChecksSubscription = startPrChecksSubscription();
@@ -727,6 +731,7 @@ function App() {
       unlistenCloseRequested();
       cleanupShortcuts();
       stopTaskStatusPolling();
+      stopClaudeUsagePolling();
       stopMCPListeners();
       stopNotificationWatcher();
       stopPrChecksSubscription();
@@ -902,6 +907,7 @@ function App() {
             onClose={() => toggleNewTaskDialog(false)}
           />
         </main>
+        <UsageStatusBar />
         <HelpDialog open={store.showHelpDialog} onClose={() => toggleHelpDialog(false)} />
         <SettingsDialog
           open={store.showSettingsDialog}

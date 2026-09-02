@@ -171,3 +171,22 @@ export interface StepEntry {
   agent_id?: string;
   timestamp: string;
 }
+
+export interface ClaudeUsageWindow {
+  /** Percent of the window consumed, 0–100. */
+  usedPercent: number;
+  /** Unix ms when the window resets, null when the API omits it. */
+  resetsAt: number | null;
+}
+
+export type ClaudeUsageResult =
+  | {
+      status: 'ok';
+      fiveHour: ClaudeUsageWindow | null;
+      sevenDay: ClaudeUsageWindow | null;
+      fetchedAt: number;
+    }
+  /** No subscription login to read — the status bar hides itself. */
+  | { status: 'unavailable'; reason: string }
+  /** Transient failure — the renderer keeps its last good snapshot. */
+  | { status: 'error'; message: string };

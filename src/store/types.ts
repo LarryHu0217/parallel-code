@@ -1,4 +1,4 @@
-import type { AgentDef, StepEntry, WorktreeStatus } from '../ipc/types';
+import type { AgentDef, ClaudeUsageWindow, StepEntry, WorktreeStatus } from '../ipc/types';
 import type { DockerSource } from '../lib/docker';
 import type { LookPreset, AppearanceMode } from '../lib/look';
 import type { KeyBinding } from '../lib/keybindings';
@@ -305,6 +305,16 @@ export interface MCPStatus {
   mcpConfigPath: string | null;
 }
 
+export interface ClaudeUsageState {
+  fiveHour: ClaudeUsageWindow | null;
+  sevenDay: ClaudeUsageWindow | null;
+  /** When the current windows were fetched; null until the first success. */
+  fetchedAt: number | null;
+  /** `unavailable` means no subscription login — the bar hides. `error` keeps the last snapshot. */
+  status: 'idle' | 'ok' | 'error' | 'unavailable';
+  error: string | null;
+}
+
 // Panel cell IDs. Shell terminals use "shell:0", "shell:1", etc.
 // Shell toolbar buttons use "shell-toolbar:0", "shell-toolbar:1", etc.
 export type PanelId = string;
@@ -413,4 +423,5 @@ export interface AppStore {
   defaultSkipPermissions: boolean;
   defaultPropagateSkipPermissions: boolean;
   mcpStatus: MCPStatus;
+  claudeUsage: ClaudeUsageState;
 }

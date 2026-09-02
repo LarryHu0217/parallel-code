@@ -6,6 +6,7 @@ import type { AgentDef } from '../ipc/types';
 import type { Agent } from './types';
 import { refreshTaskStatus, clearAgentActivity, markAgentSpawned } from './taskStatus';
 import { saveState } from './persistence';
+import { refreshClaudeUsage } from './claudeUsage';
 
 export async function loadAgents(): Promise<void> {
   const defaults = await invoke<AgentDef[]>(IPC.ListAgents);
@@ -100,6 +101,8 @@ export function markAgentExited(
   if (agent) {
     clearAgentActivity(agentId);
     refreshTaskStatus(agent.taskId);
+    // A finished Claude session just moved the meter; the slow poll would lag by minutes.
+    if (agent.def.id === 'claude-code') void refreshClaudeUsage();
   }
 }
 

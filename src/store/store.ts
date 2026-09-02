@@ -218,3 +218,4 @@ export {
   startMCPStatusPolling,
   stopMCPStatusPolling,
 } from './mcpStatus';
+export { refreshClaudeUsage, startClaudeUsagePolling, stopClaudeUsagePolling } from './claudeUsage';
