@@ -137,6 +137,30 @@ describe('mapClaudeHookPayload', () => {
     expect(mapClaudeHookPayload(payload({ hook_event_name: 'SubagentStop' }))).toBeNull();
     expect(mapClaudeHookPayload(payload({ hook_event_name: 'SubagentStart' }))).toBeNull();
   });
+
+  it('carries the tool call id so a result can be matched to the prompt it ends', () => {
+    expect(
+      mapClaudeHookPayload(
+        payload({
+          hook_event_name: 'PreToolUse',
+          tool_name: 'AskUserQuestion',
+          tool_use_id: 'toolu_1',
+        }),
+      ),
+    ).toMatchObject({ state: 'waiting', toolUseId: 'toolu_1' });
+    expect(
+      mapClaudeHookPayload(
+        payload({
+          hook_event_name: 'PermissionRequest',
+          tool_name: 'Bash',
+          tool_use_id: 'toolu_2',
+        }),
+      ),
+    ).toMatchObject({ state: 'waiting', toolUseId: 'toolu_2' });
+    expect(
+      mapClaudeHookPayload(payload({ hook_event_name: 'PostToolUse', tool_use_id: 'toolu_2' })),
+    ).toEqual({ state: 'working', event: 'PostToolUse', toolUseId: 'toolu_2' });
+  });
 });
 
 describe('isAskUserQuestionTool', () => {

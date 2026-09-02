@@ -1,4 +1,4 @@
-import type { AgentDef, StepEntry, UsageProvider, UsageWindow, WorktreeStatus } from '../ipc/types';
+import type { AgentDef, ClaudeUsageWindow, StepEntry, WorktreeStatus } from '../ipc/types';
 import type { DockerSource } from '../lib/docker';
 import type { LookPreset, AppearanceMode } from '../lib/look';
 import type { KeyBinding } from '../lib/keybindings';
@@ -151,6 +151,7 @@ export interface Task {
   // Coordinator fields
   coordinatorMode?: boolean;
   propagateSkipPermissions?: boolean;
+  maxConcurrentTasks?: number;
   coordinatedBy?: string;
   controlledBy?: 'coordinator' | 'human';
   automationWriteInFlight?: boolean;
@@ -214,6 +215,7 @@ export interface PersistedTask {
   // Coordinator fields
   coordinatorMode?: boolean;
   propagateSkipPermissions?: boolean;
+  maxConcurrentTasks?: number;
   coordinatedBy?: string;
   controlledBy?: 'coordinator' | 'human';
   mcpConfigPath?: string;
@@ -306,9 +308,9 @@ export interface MCPStatus {
   mcpConfigPath: string | null;
 }
 
-export interface UsageState {
-  fiveHour: UsageWindow | null;
-  sevenDay: UsageWindow | null;
+export interface ClaudeUsageState {
+  fiveHour: ClaudeUsageWindow | null;
+  sevenDay: ClaudeUsageWindow | null;
   /** When the current windows were fetched; null until the first success. */
   fetchedAt: number | null;
   /** `unavailable` means no subscription login — the bar hides. `error` keeps the last snapshot. */
@@ -424,5 +426,5 @@ export interface AppStore {
   defaultSkipPermissions: boolean;
   defaultPropagateSkipPermissions: boolean;
   mcpStatus: MCPStatus;
-  usage: Record<UsageProvider, UsageState>;
+  claudeUsage: ClaudeUsageState;
 }

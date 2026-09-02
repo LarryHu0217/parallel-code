@@ -89,6 +89,8 @@ export interface CoordinatorState {
   restageTimer: ReturnType<typeof setTimeout> | null;
   /** Whether to pass skipPermissions to sub-tasks created by this coordinator. */
   propagateSkipPermissions: boolean;
+  /** Enforced ceiling on concurrently in-flight sub-tasks (clamped; default applies when unset). */
+  maxConcurrentSubTasks?: number;
   /** Path to the .mcp.json file written for this coordinator. */
   mcpJsonPath: string;
   /** True if Parallel Code created .mcp.json from scratch; false if it was pre-existing. */

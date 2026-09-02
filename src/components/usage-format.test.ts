@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { UsageState } from '../store/types';
-import { formatFetchedAt, formatReset, remainingPercent, usageVisible } from './usage-format';
+import { formatFetchedAt, formatReset, remainingPercent } from './usage-format';
 
 const NOON = new Date(2026, 8, 2, 12, 0, 0).getTime();
 
@@ -42,25 +41,5 @@ describe('formatFetchedAt', () => {
     expect(formatFetchedAt(NOON - 2 * 24 * 60 * 60_000, NOON)).toMatch(
       /^[A-Za-z]{2,4}\.? \d{1,2}:\d{2}/,
     );
-  });
-});
-
-describe('usageVisible', () => {
-  const idle: UsageState = {
-    fiveHour: null,
-    sevenDay: null,
-    fetchedAt: null,
-    status: 'idle',
-    error: null,
-  };
-
-  it('hides idle and unavailable providers without a snapshot', () => {
-    expect(usageVisible(idle)).toBe(false);
-    expect(usageVisible({ ...idle, status: 'unavailable', error: 'no login' })).toBe(false);
-  });
-
-  it('shows a provider with any window, and an error even without one', () => {
-    expect(usageVisible({ ...idle, sevenDay: { usedPercent: 1, resetsAt: null } })).toBe(true);
-    expect(usageVisible({ ...idle, status: 'error', error: 'HTTP 401' })).toBe(true);
   });
 });

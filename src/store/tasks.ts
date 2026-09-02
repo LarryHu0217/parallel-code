@@ -286,6 +286,12 @@ export async function createTask(opts: CreateTaskOptions): Promise<string> {
   // Generate agentId early so we can derive the Docker container name before StartMCPServer.
   const agentId = crypto.randomUUID();
 
+  // Single clamped value shared by the preamble text and the backend's hard
+  // enforcement so the two can never drift apart.
+  const effectiveMaxConcurrentTasks = clampCoordinatorConcurrentTasks(
+    opts.maxConcurrentTasks ?? DEFAULT_COORDINATOR_CONCURRENT_TASKS,
+  );
+
   // Start MCP server BEFORE adding task to store — the store update triggers
   // a reactive render of TerminalView which spawns the PTY immediately.
   // If MCP launch args aren't set yet, the coordinator agent starts without MCP wiring.
@@ -306,6 +312,7 @@ export async function createTask(opts: CreateTaskOptions): Promise<string> {
         worktreePath: gitIsolation === 'worktree' ? worktreePath : undefined,
         skipPermissions: skipPermissions ?? false,
         propagateSkipPermissions: opts.propagateSkipPermissions ?? false,
+        maxConcurrentTasks: effectiveMaxConcurrentTasks,
         agentCommand: agentDef.command,
         agentArgs: agentDef.args,
         agentEnvFile: store.agentEnvFiles[agentDef.id],
@@ -360,11 +367,7 @@ export async function createTask(opts: CreateTaskOptions): Promise<string> {
       opts.coordinatorMode && effectivePrompt
         ? COORDINATOR_PREAMBLE.replace(
             /\{\{MAX_CONCURRENT\}\}/g,
-            String(
-              clampCoordinatorConcurrentTasks(
-                opts.maxConcurrentTasks ?? DEFAULT_COORDINATOR_CONCURRENT_TASKS,
-              ),
-            ),
+            String(effectiveMaxConcurrentTasks),
           ) +
           coordinatorBaseBranchInstruction +
           effectivePrompt
@@ -380,6 +383,7 @@ export async function createTask(opts: CreateTaskOptions): Promise<string> {
     propagateSkipPermissions: opts.coordinatorMode
       ? (opts.propagateSkipPermissions ?? false)
       : undefined,
+    maxConcurrentTasks: opts.coordinatorMode ? effectiveMaxConcurrentTasks : undefined,
     controlledBy: opts.coordinatorMode ? 'coordinator' : undefined,
     mcpConfigPath,
     mcpLaunchArgs,

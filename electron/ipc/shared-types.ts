@@ -172,21 +172,18 @@ export interface StepEntry {
   timestamp: string;
 }
 
-/** Agents whose subscription rate limits the app can read. */
-export type UsageProvider = 'claude' | 'codex';
-
-export interface UsageWindow {
+export interface ClaudeUsageWindow {
   /** Percent of the window consumed, 0–100. */
   usedPercent: number;
   /** Unix ms when the window resets, null when the API omits it. */
   resetsAt: number | null;
 }
 
-export type UsageResult =
+export type ClaudeUsageResult =
   | {
       status: 'ok';
-      fiveHour: UsageWindow | null;
-      sevenDay: UsageWindow | null;
+      fiveHour: ClaudeUsageWindow | null;
+      sevenDay: ClaudeUsageWindow | null;
       fetchedAt: number;
     }
   /** No subscription login to read — the status bar hides itself. */

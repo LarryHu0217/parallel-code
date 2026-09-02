@@ -2,6 +2,8 @@ export type {
   AgentDef,
   BranchPrDetectionResult,
   ChangedFile,
+  ClaudeUsageResult,
+  ClaudeUsageWindow,
   CommitInfo,
   CoverageFileSummary,
   CoverageMetricSummary,
@@ -21,9 +23,6 @@ export type {
   PrReviewDecision,
   PtyOutput,
   StepEntry,
-  UsageProvider,
-  UsageResult,
-  UsageWindow,
   WorktreeStatus,
 } from '../../electron/ipc/shared-types';
 

@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { expectDefined, type MockStoreHarness } from './test-helpers';
 
-const { mockMarkAgentSpawned, mockRefreshUsage } = vi.hoisted(() => ({
+const { mockMarkAgentSpawned, mockRefreshClaudeUsage } = vi.hoisted(() => ({
   mockMarkAgentSpawned: vi.fn(),
-  mockRefreshUsage: vi.fn(),
+  mockRefreshClaudeUsage: vi.fn(),
 }));
 const core = vi.hoisted(() => ({
   harness: undefined as MockStoreHarness<{ agents: Record<string, AgentLike> }> | undefined,
@@ -56,10 +56,7 @@ vi.mock('./taskStatus', () => ({
 
 vi.mock('./persistence', () => ({ saveState: vi.fn() }));
 vi.mock('../lib/ipc', () => ({ invoke: vi.fn() }));
-vi.mock('./usage', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('./usage')>()),
-  refreshUsage: mockRefreshUsage,
-}));
+vi.mock('./claudeUsage', () => ({ refreshClaudeUsage: mockRefreshClaudeUsage }));
 
 import { markAgentExited, restartAgent, switchAgent } from './agents';
 
@@ -156,26 +153,15 @@ describe('markAgentExited', () => {
       exitCode: 0,
       lastOutput: ['bye'],
     });
-    expect(mockRefreshUsage).toHaveBeenCalledTimes(1);
-    expect(mockRefreshUsage).toHaveBeenCalledWith('claude');
+    expect(mockRefreshClaudeUsage).toHaveBeenCalledTimes(1);
   });
 
-  it('refreshes Codex usage for a Codex agent', () => {
+  it('leaves Claude usage alone when another agent exits', () => {
     mockAgents = { 'agent-1': exitedAgent({ status: 'running' }) };
 
     markAgentExited('agent-1', exitInfo);
 
-    expect(mockRefreshUsage).toHaveBeenCalledWith('codex');
-  });
-
-  it('leaves usage alone when an agent without a tracked meter exits', () => {
-    mockAgents = {
-      'agent-1': exitedAgent({ status: 'running', def: { ...codexDef, id: 'gemini' } }),
-    };
-
-    markAgentExited('agent-1', exitInfo);
-
     expect(mockAgents['agent-1'].status).toBe('exited');
-    expect(mockRefreshUsage).not.toHaveBeenCalled();
+    expect(mockRefreshClaudeUsage).not.toHaveBeenCalled();
   });
 });

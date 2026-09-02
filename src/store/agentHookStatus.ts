@@ -24,6 +24,8 @@ export interface AgentHookStatus {
   since: number;
   updatedAt: number;
   toolName?: string;
+  /** The tool call a `waiting` dialog belongs to; kept across same-state events. */
+  toolUseId?: string;
   detail?: string;
   lastAssistantMessage?: string;
   /** The turn ended while the task was not on screen and nobody has looked since. */
@@ -102,15 +104,27 @@ function isSuppressedToolEvent(event: AgentHookEventPayload): boolean {
   return TOOL_EVENTS.has(event.event);
 }
 
+const TOOL_RESULT_EVENTS: ReadonlySet<string> = new Set(['PostToolUse', 'PostToolUseFailure']);
+
+/** Claude runs sibling tool calls in parallel, so a result for some other call
+ *  says nothing about the dialog the agent is parked on; only the matching
+ *  result (or a non-tool event) ends the wait. Unknown ids fall back to
+ *  treating any result as the end. */
+function isUnrelatedToolResult(
+  prev: AgentHookStatus | undefined,
+  event: AgentHookEventPayload,
+): boolean {
+  if (prev?.state !== 'waiting' || !TOOL_RESULT_EVENTS.has(event.event)) return false;
+  if (prev.toolUseId === undefined || event.toolUseId === undefined) return false;
+  return prev.toolUseId !== event.toolUseId;
+}
+
 export function applyAgentHookEvent(event: AgentHookEventPayload): void {
-  // Only a process this store is running can report. Anything else is a stray
-  // from another app instance sharing the endpoint file, or an event still in
-  // flight when its process exited — and `done` entries never expire.
-  if (store.agents[event.agentId]?.status !== 'running') return;
   // Any real event during the settle window means the keypress was not an interrupt.
   clearTimer(interruptTimers, event.agentId);
   if (isSuppressedToolEvent(event)) return;
   const prev = statuses().get(event.agentId);
+  if (isUnrelatedToolResult(prev, event)) return;
   const sameState = prev?.state === event.state;
   const finished = event.event === 'Stop' || event.event === 'StopFailure';
   setStatus(event.agentId, {
@@ -119,6 +133,8 @@ export function applyAgentHookEvent(event: AgentHookEventPayload): void {
     since: sameState ? prev.since : event.at,
     updatedAt: event.at,
     toolName: event.toolName,
+    toolUseId:
+      event.toolUseId ?? (sameState && event.state === 'waiting' ? prev.toolUseId : undefined),
     detail: event.detail,
     prompt: event.prompt ?? (sameState && event.state === 'waiting' ? prev.prompt : undefined),
     // A later idle-prompt notification must not wipe the final message Stop carried,

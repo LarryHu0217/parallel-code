@@ -28,8 +28,12 @@ import {
   mockGetDiffBaseSha,
   mockGitMergeTask,
   mockCreateBackendTask,
+  mockFsMkdir,
+  mockOnAgentHookEvent,
   mockWin,
   getExitHandler,
+  getHookEventHandler,
+  getInterruptHandler,
   getSpawnHandler,
   getOutputCb,
   getAgentId,
@@ -5887,5 +5891,298 @@ describe('MCP client waitForSignalDone — timeout under flapping', () => {
     }
 
     vi.restoreAllMocks();
+  });
+});
+
+// ─── createTask — enforced sub-task concurrency limit ─────────────────────────
+
+describe('Coordinator createTask — concurrency enforcement', () => {
+  let coordinator: InstanceType<typeof Coordinator>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockOnAgentHookEvent.mockReturnValue(() => {});
+    mockExistsSync.mockReturnValue(false);
+    let counter = 0;
+    mockCreateBackendTask.mockImplementation(async () => {
+      counter += 1;
+      return {
+        id: `task-${counter}`,
+        branch_name: `task/t${counter}`,
+        worktree_path: `/tmp/t${counter}`,
+      };
+    });
+    coordinator = new Coordinator();
+    coordinator.setWindow(mockWin);
+    coordinator.setDefaultProject('proj-1', '/tmp/project');
+    coordinator.registerCoordinator('coord-1', 'proj-1', { maxConcurrentTasks: 2 });
+  });
+
+  it('rejects create_task beyond the limit with a wait_for_signal_done hint', async () => {
+    await coordinator.createTask({ name: 'a', coordinatorTaskId: 'coord-1' });
+    await coordinator.createTask({ name: 'b', coordinatorTaskId: 'coord-1' });
+    await expect(
+      coordinator.createTask({ name: 'c', coordinatorTaskId: 'coord-1' }),
+    ).rejects.toThrow(/concurrency limit.*wait_for_signal_done/s);
+  });
+
+  it('frees a slot when a sub-task exits', async () => {
+    const first = await coordinator.createTask({ name: 'a', coordinatorTaskId: 'coord-1' });
+    await coordinator.createTask({ name: 'b', coordinatorTaskId: 'coord-1' });
+    getExitHandler()(first.agentId, { exitCode: 0 });
+    await expect(
+      coordinator.createTask({ name: 'c', coordinatorTaskId: 'coord-1' }),
+    ).resolves.toBeDefined();
+  });
+
+  it('counts parallel not-yet-completed creations against the limit', async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let counter = 0;
+    mockCreateBackendTask.mockImplementation(async () => {
+      await gate;
+      counter += 1;
+      return {
+        id: `task-p${counter}`,
+        branch_name: `task/p${counter}`,
+        worktree_path: `/tmp/p${counter}`,
+      };
+    });
+
+    const first = coordinator.createTask({ name: 'a', coordinatorTaskId: 'coord-1' });
+    const second = coordinator.createTask({ name: 'b', coordinatorTaskId: 'coord-1' });
+    // Reservation is taken synchronously, so the third create must fail even
+    // though the first two have not finished creating their worktrees yet.
+    await expect(
+      coordinator.createTask({ name: 'c', coordinatorTaskId: 'coord-1' }),
+    ).rejects.toThrow(/concurrency limit/);
+
+    release();
+    await expect(first).resolves.toBeDefined();
+    await expect(second).resolves.toBeDefined();
+  });
+
+  it('does not count a task twice while its creation is still finishing', async () => {
+    // Limit 2: a task already in this.tasks but still writing its preamble
+    // (the first await after registration is the settings-dir mkdir) must
+    // leave one free slot, not zero — the reservation is released as soon as
+    // the task is registered.
+    let openGate: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      openGate = resolve;
+    });
+    mockFsMkdir.mockImplementationOnce(() => gate);
+
+    const first = coordinator.createTask({ name: 'a', coordinatorTaskId: 'coord-1' });
+    for (let i = 0; i < 50 && mockFsMkdir.mock.calls.length === 0; i += 1) {
+      await new Promise((r) => setTimeout(r, 1));
+    }
+    expect(mockFsMkdir).toHaveBeenCalledTimes(1);
+    expect(mockSpawnAgent).not.toHaveBeenCalled();
+
+    await expect(
+      coordinator.createTask({ name: 'b', coordinatorTaskId: 'coord-1' }),
+    ).resolves.toMatchObject({ status: 'running' });
+
+    openGate();
+    await first;
+    await expect(
+      coordinator.createTask({ name: 'c', coordinatorTaskId: 'coord-1' }),
+    ).rejects.toThrow(/concurrency limit/);
+  });
+
+  it('applies the default limit when the coordinator registers without one', async () => {
+    coordinator.registerCoordinator('coord-default', 'proj-1');
+    for (let i = 0; i < 3; i++) {
+      await coordinator.createTask({ name: `t${i}`, coordinatorTaskId: 'coord-default' });
+    }
+    await expect(
+      coordinator.createTask({ name: 'over', coordinatorTaskId: 'coord-default' }),
+    ).rejects.toThrow(/concurrency limit/);
+  });
+});
+
+// ─── Hook events — authoritative sub-task state ───────────────────────────────
+
+type CoordinatorHookEvent = Parameters<ReturnType<typeof getHookEventHandler>>[0];
+
+function hookEvent(
+  agentId: string,
+  overrides: Partial<CoordinatorHookEvent> = {},
+): CoordinatorHookEvent {
+  return {
+    agentId,
+    taskId: '',
+    state: 'working',
+    event: 'UserPromptSubmit',
+    at: Date.now(),
+    ...overrides,
+  };
+}
+
+describe('Coordinator hook-driven task state', () => {
+  let coordinator: InstanceType<typeof Coordinator>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockOnAgentHookEvent.mockReturnValue(() => {});
+    mockExistsSync.mockReturnValue(false);
+    let counter = 0;
+    mockCreateBackendTask.mockImplementation(async () => {
+      counter += 1;
+      return {
+        id: `task-h${counter}`,
+        branch_name: `task/h${counter}`,
+        worktree_path: `/tmp/h${counter}`,
+      };
+    });
+    coordinator = new Coordinator();
+    coordinator.setWindow(mockWin);
+    coordinator.setDefaultProject('proj-1', '/tmp/project');
+    coordinator.registerCoordinator('coord-1', 'proj-1');
+  });
+
+  it('subscribes to hook events on construction', () => {
+    expect(mockOnAgentHookEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks a running task idle on a hook Stop event', async () => {
+    const task = await coordinator.createTask({ name: 'a', coordinatorTaskId: 'coord-1' });
+    expect(task.status).toBe('running');
+
+    getHookEventHandler()(hookEvent(task.agentId, { event: 'Stop', state: 'done' }));
+    expect(task.status).toBe('idle');
+  });
+
+  it('flips an idle task back to running on a working hook event', async () => {
+    const task = await coordinator.createTask({ name: 'a', coordinatorTaskId: 'coord-1' });
+    getHookEventHandler()(hookEvent(task.agentId, { event: 'Stop', state: 'done' }));
+    expect(task.status).toBe('idle');
+
+    getHookEventHandler()(hookEvent(task.agentId, { event: 'PreToolUse', toolName: 'Bash' }));
+    expect(task.status).toBe('running');
+  });
+
+  it('ignores regex prompt-idle detection once hooks are live for the agent', async () => {
+    const task = await coordinator.createTask({ name: 'a', coordinatorTaskId: 'coord-1' });
+    getHookEventHandler()(hookEvent(task.agentId, { event: 'UserPromptSubmit' }));
+    expect(task.status).toBe('running');
+
+    // A ❯ frame mid-turn (e.g. a rendered sub-prompt) must not flip the task
+    // idle anymore — only the hook Stop event may.
+    emitWorkThenIdle(getOutputCb());
+    expect(task.status).toBe('running');
+
+    getHookEventHandler()(hookEvent(task.agentId, { event: 'Stop', state: 'done' }));
+    expect(task.status).toBe('idle');
+  });
+
+  it('drops hook events for unknown agents without effect', async () => {
+    const task = await coordinator.createTask({ name: 'a', coordinatorTaskId: 'coord-1' });
+    getHookEventHandler()(hookEvent('not-a-task-agent', { event: 'Stop', state: 'done' }));
+    expect(task.status).toBe('running');
+  });
+
+  it('ignores late hook events from an exited session', async () => {
+    const task = await coordinator.createTask({ name: 'a', coordinatorTaskId: 'coord-1' });
+    getExitHandler()(task.agentId, { exitCode: 0 });
+    expect(task.status).toBe('exited');
+
+    // A Stop hook still in flight when the PTY died must not revive the task
+    // or re-arm hook ownership for the next session on this agent id.
+    getHookEventHandler()(hookEvent(task.agentId, { event: 'Stop', state: 'done' }));
+    expect(task.status).toBe('exited');
+  });
+
+  it('hands idle detection back to the regex path after a user interrupt', async () => {
+    const task = await coordinator.createTask({ name: 'a', coordinatorTaskId: 'coord-1' });
+    getHookEventHandler()(hookEvent(task.agentId, { event: 'UserPromptSubmit' }));
+    emitWorkThenIdle(getOutputCb());
+    expect(task.status).toBe('running'); // hooks own state: ❯ frame ignored
+
+    // Esc/Ctrl+C: Claude fires no Stop, so the ❯ repaint must count again.
+    getInterruptHandler()(task.agentId);
+    emitWorkThenIdle(getOutputCb());
+    expect(task.status).toBe('idle');
+  });
+
+  it('ignores tool hooks of the interrupted turn so they cannot re-arm ownership', async () => {
+    const task = await coordinator.createTask({ name: 'a', coordinatorTaskId: 'coord-1' });
+    getHookEventHandler()(hookEvent(task.agentId, { event: 'PreToolUse', toolName: 'Bash' }));
+    getInterruptHandler()(task.agentId);
+    emitWorkThenIdle(getOutputCb());
+    expect(task.status).toBe('idle');
+
+    // The killed tool's result lands a moment later; no Stop will follow it.
+    getHookEventHandler()(hookEvent(task.agentId, { event: 'PostToolUseFailure' }));
+    expect(task.status).toBe('idle');
+    emitWorkThenIdle(getOutputCb());
+    expect(task.status).toBe('idle');
+
+    // A real turn boundary re-arms hook ownership.
+    getHookEventHandler()(hookEvent(task.agentId, { event: 'UserPromptSubmit' }));
+    expect(task.status).toBe('running');
+    emitWorkThenIdle(getOutputCb());
+    expect(task.status).toBe('running');
+  });
+
+  it('does not treat a hook done as ❯-ready for the initial prompt', async () => {
+    vi.useFakeTimers();
+    try {
+      const task = await coordinator.createTask({
+        name: 'a',
+        prompt: 'do a',
+        coordinatorTaskId: 'coord-1',
+      });
+      const writesFor = (agentId: string) =>
+        mockWriteToAgent.mock.calls.filter((c) => c[0] === agentId).map((c) => String(c[1]));
+
+      // SessionStart reports done before the TUI has drawn its prompt.
+      getHookEventHandler()(hookEvent(task.agentId, { event: 'SessionStart', state: 'done' }));
+      getOutputCb()(Buffer.from('Loading...').toString('base64'));
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(writesFor(task.agentId)).toEqual([]);
+
+      emitWorkThenIdle(getOutputCb());
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(writesFor(task.agentId).some((w) => w.includes('do a'))).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps a task running while it awaits input (permission prompt)', async () => {
+    const task = await coordinator.createTask({ name: 'a', coordinatorTaskId: 'coord-1' });
+    getHookEventHandler()(hookEvent(task.agentId, { event: 'Stop', state: 'done' }));
+    expect(task.status).toBe('idle');
+
+    getHookEventHandler()(
+      hookEvent(task.agentId, { event: 'PermissionRequest', state: 'waiting', toolName: 'Bash' }),
+    );
+    expect(task.status).toBe('running');
+  });
+
+  it('resumes regex idle detection after the agent exits and is respawned', async () => {
+    const task = await coordinator.createTask({ name: 'a', coordinatorTaskId: 'coord-1' });
+    getHookEventHandler()(hookEvent(task.agentId, { event: 'UserPromptSubmit' }));
+    getExitHandler()(task.agentId, { exitCode: 1 });
+    expect(task.status).toBe('exited');
+
+    // The replacement PTY is a fresh Claude session with no hook history.
+    getSpawnHandler()(task.agentId);
+    expect(task.status).toBe('running');
+    emitWorkThenIdle(getOutputCb());
+    expect(task.status).toBe('idle');
+  });
+
+  it('resolves waitForIdle waiters on a hook Stop event', async () => {
+    const task = await coordinator.createTask({ name: 'a', coordinatorTaskId: 'coord-1' });
+    getHookEventHandler()(hookEvent(task.agentId, { event: 'UserPromptSubmit' }));
+    const waiter = coordinator.waitForIdle(task.id, 10_000);
+
+    getHookEventHandler()(hookEvent(task.agentId, { event: 'Stop', state: 'done' }));
+    await expect(waiter).resolves.toEqual({ reason: 'idle' });
   });
 });

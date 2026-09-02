@@ -6,6 +6,12 @@ import { startRemoteAccess } from './remote';
 import { effectiveAgentId } from './agent-select';
 import { randomPastelColor } from './projects';
 import { markAgentSpawned } from './taskStatus';
+import { clampCoordinatorConcurrentTasks } from '../lib/coordinator-limits';
+
+// Hand-edited state files may hold anything; the IPC layer rejects non-integers.
+function restoredMaxConcurrentTasks(value: unknown): number | undefined {
+  return typeof value === 'number' ? clampCoordinatorConcurrentTasks(value) : undefined;
+}
 import { getLocalDateKey } from '../lib/date';
 import type {
   Agent,
@@ -159,6 +165,7 @@ function toPersistedTask(task: Task, agentDefs: AgentDef[], collapsed?: boolean)
     ...(collapsed ? { collapsed: true } : {}),
     coordinatorMode: task.coordinatorMode,
     propagateSkipPermissions: task.propagateSkipPermissions,
+    maxConcurrentTasks: task.maxConcurrentTasks,
     coordinatedBy: task.coordinatedBy,
     controlledBy: task.controlledBy,
     mcpConfigPath: task.mcpConfigPath,
@@ -707,6 +714,7 @@ export async function loadState(): Promise<void> {
           branchOfferDismissed: validBranch(pt.branchOfferDismissed),
           coordinatorMode: pt.coordinatorMode,
           propagateSkipPermissions: pt.propagateSkipPermissions,
+          maxConcurrentTasks: restoredMaxConcurrentTasks(pt.maxConcurrentTasks),
           coordinatedBy: pt.coordinatedBy,
           controlledBy:
             pt.controlledBy ?? (pt.coordinatorMode || pt.coordinatedBy ? 'coordinator' : undefined),
@@ -817,6 +825,7 @@ export async function loadState(): Promise<void> {
           savedAgentDefs: agentDefs.length > 0 ? agentDefs : undefined,
           coordinatorMode: pt.coordinatorMode,
           propagateSkipPermissions: pt.propagateSkipPermissions,
+          maxConcurrentTasks: restoredMaxConcurrentTasks(pt.maxConcurrentTasks),
           coordinatedBy: pt.coordinatedBy,
           controlledBy:
             pt.controlledBy ?? (pt.coordinatorMode || pt.coordinatedBy ? 'coordinator' : undefined),

@@ -244,6 +244,55 @@ describe('landing state persistence', () => {
   });
 });
 
+describe('coordinator concurrency limit persistence', () => {
+  function stateWithTasks(tasks: Record<string, unknown>): string {
+    return JSON.stringify({
+      projects: [{ id: 'project-1', name: 'Repo', path: '/repo', color: 'hsl(0, 70%, 75%)' }],
+      lastProjectId: 'project-1',
+      lastAgentId: null,
+      taskOrder: Object.keys(tasks),
+      collapsedTaskOrder: [],
+      tasks,
+      activeTaskId: 'task-1',
+      sidebarVisible: true,
+    });
+  }
+
+  it('round-trips maxConcurrentTasks through load and save', async () => {
+    const def = agentDef();
+    mockInvoke.mockResolvedValueOnce(
+      stateWithTasks({ 'task-1': { ...persistedTask(def), maxConcurrentTasks: 5 } }),
+    );
+    await loadState();
+    expect(store.tasks['task-1'].maxConcurrentTasks).toBe(5);
+
+    mockInvoke.mockResolvedValueOnce(undefined);
+    await saveState();
+    const lastCall = mockInvoke.mock.calls[mockInvoke.mock.calls.length - 1];
+    const saved = JSON.parse(lastCall[1].json);
+    expect(saved.tasks['task-1'].maxConcurrentTasks).toBe(5);
+  });
+
+  it('clamps out-of-range values and drops non-numbers from hand-edited state', async () => {
+    const def = agentDef();
+    mockInvoke.mockResolvedValueOnce(
+      stateWithTasks({
+        'task-1': { ...persistedTask(def), maxConcurrentTasks: 99 },
+        'task-2': {
+          ...persistedTask(def),
+          id: 'task-2',
+          branchName: 'task/task-2',
+          worktreePath: '/repo/.worktrees/task-2',
+          maxConcurrentTasks: 'lots',
+        },
+      }),
+    );
+    await loadState();
+    expect(store.tasks['task-1'].maxConcurrentTasks).toBe(20);
+    expect(store.tasks['task-2'].maxConcurrentTasks).toBeUndefined();
+  });
+});
+
 describe('PR URL persistence', () => {
   it('persists task PR URLs', async () => {
     setStore('taskOrder', ['task-1']);

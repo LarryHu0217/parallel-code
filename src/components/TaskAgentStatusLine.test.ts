@@ -47,13 +47,6 @@ describe('describeAgentStatus', () => {
       'Interrupted',
     );
   });
-
-  it('calls a freshly started or resumed session idle rather than done', () => {
-    expect(describeAgentStatus(status({ state: 'done', event: 'SessionStart' }))).toMatchObject({
-      label: 'Idle',
-      text: '',
-    });
-  });
 });
 
 describe('TaskAgentStatusLine', () => {

@@ -126,7 +126,6 @@
   "GetMCPStatus": "get_mcp_status",
   "GetMCPLogs": "get_mcp_logs",
   "GetClaudeUsage": "get_claude_usage",
-  "GetCodexUsage": "get_codex_usage",
   "MCP_TaskCreated": "mcp_task_created",
   "MCP_TaskClosed": "mcp_task_closed",
   "MCP_TaskStateSync": "mcp_task_state_sync",

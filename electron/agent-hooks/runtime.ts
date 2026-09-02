@@ -3,6 +3,7 @@ import path from 'path';
 import { IPC } from '../ipc/channels.js';
 import { setAgentHookRuntime } from '../ipc/pty.js';
 import { error as logError, info as logInfo } from '../log.js';
+import { emitAgentHookEvent } from './events.js';
 import { startAgentHookServer, type AgentHookServer } from './server.js';
 import type { AgentHookEventPayload } from './status.js';
 
@@ -19,8 +20,10 @@ export async function startAgentHookRuntime(getWindow: () => BrowserWindow | nul
   // Claude launch can race it, and the window may be recreated later.
   const forward = (event: AgentHookEventPayload): void => {
     const win = getWindow();
-    if (!win || win.isDestroyed()) return;
-    win.webContents.send(IPC.AgentHookEvent, event);
+    if (win && !win.isDestroyed()) win.webContents.send(IPC.AgentHookEvent, event);
+    // Main-process consumers (the MCP coordinator) get the event regardless of
+    // window state — a coordinated sub-task keeps running with no window.
+    emitAgentHookEvent(event);
   };
   try {
     server = await startAgentHookServer({ dir, onEvent: forward });

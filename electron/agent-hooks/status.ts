@@ -22,6 +22,8 @@ export interface AgentHookStatusUpdate {
   prompt?: AgentHookPrompt;
   /** Tool in flight (`working`) or the tool a prompt is about (`waiting`). */
   toolName?: string;
+  /** Claude's id for that tool call; lets a result be matched to the prompt it ends. */
+  toolUseId?: string;
   /** Short human summary — a command, a file path, or the question asked. */
   detail?: string;
   /** Claude's final text for the turn; only present on turn boundaries. */
@@ -64,6 +66,7 @@ function clip(text: string | undefined, max: number): string | undefined {
   return single.length > max ? `${single.slice(0, max - 1)}…` : single;
 }
 
+/** Vendors spell the ask-the-user tool differently; compare without punctuation. */
 const HOOK_STATES: ReadonlySet<string> = new Set<AgentHookStatusState>([
   'working',
   'waiting',
@@ -89,7 +92,6 @@ export function isPlanApprovalTool(toolName: string | undefined): boolean {
   return toolName?.replace(/[^a-z0-9]/gi, '').toLowerCase() === 'exitplanmode';
 }
 
-/** Vendors spell the ask-the-user tool differently; compare without punctuation. */
 export function isAskUserQuestionTool(toolName: string | undefined): boolean {
   const normalized = toolName?.replace(/[^a-z0-9]/gi, '').toLowerCase();
   return normalized === 'askuserquestion' || normalized === 'requestuserinput';
@@ -117,18 +119,20 @@ function summarizeQuestions(toolInput: unknown): string | undefined {
 
 function mapPreToolUse(body: Record<string, unknown>, toolName: string | undefined) {
   const event = 'PreToolUse';
+  const toolUseId = asString(body.tool_use_id);
   if (isAskUserQuestionTool(toolName)) {
     const detail = summarizeQuestions(body.tool_input);
-    return { state: 'waiting', event, toolName, detail, prompt: 'question' } as const;
+    return { state: 'waiting', event, toolName, toolUseId, detail, prompt: 'question' } as const;
   }
   if (isPlanApprovalTool(toolName)) {
     const detail = 'Plan ready for approval';
-    return { state: 'waiting', event, toolName, detail, prompt: 'permission' } as const;
+    return { state: 'waiting', event, toolName, toolUseId, detail, prompt: 'permission' } as const;
   }
   return {
     state: 'working',
     event,
     toolName,
+    toolUseId,
     detail: summarizeToolInput(body.tool_input),
   } as const;
 }
@@ -155,6 +159,7 @@ export function mapClaudeHookPayload(payload: unknown): AgentHookStatusUpdate | 
   if (!body || !event) return null;
 
   const toolName = asString(body.tool_name);
+  const toolUseId = asString(body.tool_use_id);
 
   switch (event) {
     case 'SessionStart':
@@ -166,10 +171,10 @@ export function mapClaudeHookPayload(payload: unknown): AgentHookStatusUpdate | 
       return mapPreToolUse(body, toolName);
     case 'PostToolUse':
     case 'PostToolUseFailure':
-      return { state: 'working', event };
+      return { state: 'working', event, toolUseId };
     case 'PermissionRequest': {
       const detail = summarizeToolInput(body.tool_input);
-      return { state: 'waiting', event, toolName, detail, prompt: 'permission' };
+      return { state: 'waiting', event, toolName, toolUseId, detail, prompt: 'permission' };
     }
     case 'Notification':
       return mapNotification(body);

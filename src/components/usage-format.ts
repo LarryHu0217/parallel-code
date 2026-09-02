@@ -1,10 +1,9 @@
-import type { UsageWindow } from '../ipc/types';
-import type { UsageState } from '../store/types';
+import type { ClaudeUsageWindow } from '../ipc/types';
 
 /** Past this share of a window, the meter turns amber. */
 export const USAGE_WARN_PERCENT = 80;
 
-export function remainingPercent(window: UsageWindow): number {
+export function remainingPercent(window: ClaudeUsageWindow): number {
   return Math.max(0, Math.round(100 - window.usedPercent));
 }
 
@@ -27,14 +26,4 @@ export function formatFetchedAt(fetchedAt: number, now = Date.now()): string {
   const time = date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
   if (date.toDateString() === new Date(now).toDateString()) return time;
   return `${date.toLocaleDateString(undefined, { weekday: 'short' })} ${time}`;
-}
-
-export function hasUsageSnapshot(state: UsageState): boolean {
-  return state.fiveHour !== null || state.sevenDay !== null;
-}
-
-/** A provider shows once it has a snapshot, and stays up through refresh errors
- *  so the user sees why the meter stopped moving. */
-export function usageVisible(state: UsageState): boolean {
-  return hasUsageSnapshot(state) || state.status === 'error';
 }

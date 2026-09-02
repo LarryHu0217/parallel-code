@@ -4,14 +4,9 @@ import type { AgentHookEventPayload } from '../../electron/agent-hooks/status';
 
 let mockActiveTaskId: string | null = null;
 let mockTasks: Record<string, unknown> = {};
-let mockAgents: Record<string, unknown> = {};
 const core = vi.hoisted(() => ({
   harness: undefined as
-    | MockStoreHarness<{
-        activeTaskId: string | null;
-        tasks: Record<string, unknown>;
-        agents: Record<string, unknown>;
-      }>
+    | MockStoreHarness<{ activeTaskId: string | null; tasks: Record<string, unknown> }>
     | undefined,
 }));
 vi.mock('./core', async () => {
@@ -28,12 +23,6 @@ vi.mock('./core', async () => {
     },
     set tasks(next) {
       mockTasks = next;
-    },
-    get agents() {
-      return mockAgents;
-    },
-    set agents(next) {
-      mockAgents = next;
     },
   });
   return core.harness.moduleMock();
@@ -85,22 +74,11 @@ describe('agentHookStatus', () => {
     vi.setSystemTime(1_000_000);
     mockActiveTaskId = 't1';
     mockTasks = { t1: { agentIds: ['a1', 'a2'] } };
-    mockAgents = { a1: { status: 'running' }, a2: { status: 'running' } };
   });
 
   afterEach(() => {
     for (const id of ['a1', 'a2']) clearAgentHookStatus(id);
     vi.useRealTimers();
-  });
-
-  it('ignores events from agents this store is not running', () => {
-    // A stray from another app instance sharing the endpoint file.
-    applyAgentHookEvent(event({ agentId: 'stray' }));
-    expect(getAgentHookStatus('stray')).toBeNull();
-    // An event still in flight when its process exited.
-    mockAgents = { ...mockAgents, a1: { status: 'exited' } };
-    applyAgentHookEvent(event({ state: 'done', event: 'Stop' }));
-    expect(getAgentHookStatus('a1')).toBeNull();
   });
 
   it('records the state and keeps `since` across same-state events', () => {
@@ -191,6 +169,44 @@ describe('agentHookStatus', () => {
     );
     noteAgentTerminalInput('a1', '\r');
     expect(getAgentHookStatus('a1')?.state).toBe('waiting');
+  });
+
+  it('keeps a dialog open when a sibling tool call finishes first', () => {
+    applyAgentHookEvent(
+      event({
+        state: 'waiting',
+        event: 'PreToolUse',
+        prompt: 'question',
+        toolUseId: 'ask-1',
+        at: 10,
+      }),
+    );
+    applyAgentHookEvent(
+      event({ state: 'working', event: 'PostToolUse', toolUseId: 'read-2', at: 11 }),
+    );
+    expect(getAgentHookStatus('a1')).toMatchObject({
+      state: 'waiting',
+      prompt: 'question',
+      toolUseId: 'ask-1',
+      since: 10,
+    });
+
+    // A follow-up notification carries no id; the wait keeps the one it had.
+    applyAgentHookEvent(event({ state: 'waiting', event: 'Notification', at: 12 }));
+    expect(getAgentHookStatus('a1')?.toolUseId).toBe('ask-1');
+
+    applyAgentHookEvent(
+      event({ state: 'working', event: 'PostToolUse', toolUseId: 'ask-1', at: 13 }),
+    );
+    expect(getAgentHookStatus('a1')?.state).toBe('working');
+  });
+
+  it('lets any tool result end a wait whose call id is unknown', () => {
+    applyAgentHookEvent(event({ state: 'waiting', event: 'PermissionRequest', at: 10 }));
+    applyAgentHookEvent(
+      event({ state: 'working', event: 'PostToolUse', toolUseId: 'read-2', at: 11 }),
+    );
+    expect(getAgentHookStatus('a1')?.state).toBe('working');
   });
 
   it('drops a stale working claim but keeps done forever', () => {

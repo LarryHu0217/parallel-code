@@ -42,8 +42,8 @@ import {
   resetGlobalScale,
   startTaskStatusPolling,
   stopTaskStatusPolling,
-  startUsagePolling,
-  stopUsagePolling,
+  startClaudeUsagePolling,
+  stopClaudeUsagePolling,
   navigateRow,
   navigateColumn,
   navigateTask,
@@ -424,6 +424,7 @@ function App() {
           worktreePath: task.gitIsolation === 'worktree' ? task.worktreePath : undefined,
           skipPermissions: task.skipPermissions ?? false,
           propagateSkipPermissions: task.propagateSkipPermissions ?? false,
+          maxConcurrentTasks: task.maxConcurrentTasks,
           agentCommand: agentDef?.command ?? 'claude',
           agentArgs: agentDef?.args ?? [],
           agentEnvFile: agentDef ? store.agentEnvFiles[agentDef.id] : undefined,
@@ -532,7 +533,7 @@ function App() {
     await captureWindowState();
     setupAutosave();
     startTaskStatusPolling();
-    startUsagePolling();
+    startClaudeUsagePolling();
     const stopMCPListeners = initMCPListeners();
     const stopNotificationWatcher = startDesktopNotificationWatcher(windowFocused);
     const stopPrChecksSubscription = startPrChecksSubscription();
@@ -731,7 +732,7 @@ function App() {
       unlistenCloseRequested();
       cleanupShortcuts();
       stopTaskStatusPolling();
-      stopUsagePolling();
+      stopClaudeUsagePolling();
       stopMCPListeners();
       stopNotificationWatcher();
       stopPrChecksSubscription();

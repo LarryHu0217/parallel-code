@@ -7,11 +7,26 @@ import {
   fetchClaudeUsage,
   parseAccessToken,
   parseClaudeUsageResponse,
+  parseResetsAt,
   readKeychainCredentials,
   type KeychainExec,
 } from './claude-usage.js';
 
 const NOW = 1_700_000_000_000;
+
+describe('parseResetsAt', () => {
+  it('treats small numbers as epoch seconds and large ones as milliseconds', () => {
+    expect(parseResetsAt(1_738_425_600)).toBe(1_738_425_600_000);
+    expect(parseResetsAt(1_738_425_600_000)).toBe(1_738_425_600_000);
+  });
+
+  it('parses ISO strings and rejects junk', () => {
+    expect(parseResetsAt('2025-02-01T16:00:00Z')).toBe(Date.parse('2025-02-01T16:00:00Z'));
+    expect(parseResetsAt('soon')).toBeNull();
+    expect(parseResetsAt(undefined)).toBeNull();
+    expect(parseResetsAt(Number.NaN)).toBeNull();
+  });
+});
 
 describe('parseClaudeUsageResponse', () => {
   it('reads both field spellings and clamps percentages', () => {

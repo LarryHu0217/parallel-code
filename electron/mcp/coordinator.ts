@@ -42,6 +42,12 @@ import {
   getAgentScrollback,
   onPtyEvent,
 } from '../ipc/pty.js';
+import { onAgentHookEvent } from '../agent-hooks/events.js';
+import type { AgentHookEventPayload } from '../agent-hooks/status.js';
+import {
+  clampCoordinatorConcurrentTasks,
+  DEFAULT_COORDINATOR_CONCURRENT_TASKS,
+} from '../shared/coordinator-limits.js';
 import {
   getChangedFiles,
   getAllFileDiffs,
@@ -78,6 +84,16 @@ const INITIAL_PROMPT_READY_DELAY_MS = 1_500;
 const MAX_PENDING_PROMPTS = 32;
 const MAX_PROMPT_BYTES = 64 * 1024;
 const PROMPT_ECHO_IDLE_SUPPRESSION_MS = 2_000;
+// Tool hooks of an interrupted turn can still land shortly after the Esc; no
+// Stop follows them, so they must not re-arm hook ownership (mirrors the
+// renderer's INTERRUPT_SUPPRESS_MS).
+const HOOK_INTERRUPT_SUPPRESS_MS = 5_000;
+const HOOK_TOOL_EVENTS: ReadonlySet<string> = new Set([
+  'PreToolUse',
+  'PostToolUse',
+  'PostToolUseFailure',
+  'PermissionRequest',
+]);
 const FOCUS_IN = '\x1b[I';
 const BRACKETED_PASTE_START = '\x1b[200~';
 const BRACKETED_PASTE_END = '\x1b[201~';
@@ -158,6 +174,16 @@ export class Coordinator {
   private bracketedPasteAgentIds = new Set<string>();
   private closingTaskIds = new Set<string>();
   private activeSignalWaitCounts = new Map<string, number>();
+  // Agents that have delivered at least one hook event this session. Hooks own
+  // idle/running transitions for these; the output-regex path only feeds
+  // prompt-injection readiness. Cleared on PTY exit/respawn (fresh session)
+  // and on a user interrupt (no Stop hook follows one).
+  private hookLiveAgentIds = new Set<string>();
+  // When each agent was last interrupted; see HOOK_INTERRUPT_SUPPRESS_MS.
+  private interruptedAt = new Map<string, number>();
+  // Sub-task creations past the concurrency check but not yet in this.tasks,
+  // so parallel create_task calls can't overshoot the limit.
+  private pendingCreateCounts = new Map<string, number>();
   private recentlyDelivered = new ReplayCache<WaitForSignalDoneResult>();
   private win: BrowserWindow | null = null;
   private projectRoot: string | null = null;
@@ -181,6 +207,8 @@ export class Coordinator {
     // The singleton guard in enableCoordinatorMode (if (coordinator) return) ensures
     // this constructor is called at most once per app lifetime; no teardown needed.
     onPtyEvent('exit', (agentId, data) => {
+      this.hookLiveAgentIds.delete(agentId);
+      this.interruptedAt.delete(agentId);
       for (const task of this.tasks.values()) {
         if (task.agentId === agentId) {
           const { exitCode } = (data ?? {}) as { exitCode?: number };
@@ -226,6 +254,7 @@ export class Coordinator {
     onPtyEvent('spawn', (agentId) => {
       const outputCb = this.subscribers.get(agentId);
       if (!outputCb) return; // not a coordinated agent, or initial spawn (not yet subscribed)
+      this.hookLiveAgentIds.delete(agentId); // a replaced PTY is a fresh hook session
       this.tailBuffers.set(agentId, ''); // replaced PTYs should not inherit old prompt text
       for (const task of this.tasks.values()) {
         if (task.agentId === agentId && task.status === 'exited') {
@@ -238,6 +267,65 @@ export class Coordinator {
       }
       subscribeToAgent(agentId, outputCb);
     });
+
+    // A bare Esc/Ctrl+C ends the turn without a Stop hook, so hand idle
+    // detection back to the ❯-regex path until the next hook event.
+    onPtyEvent('interrupt', (agentId) => {
+      this.hookLiveAgentIds.delete(agentId);
+      this.interruptedAt.set(agentId, Date.now());
+    });
+
+    // Hook events (Claude Code lifecycle hooks) are the authoritative state
+    // channel for agents that emit them; see handleAgentHookEvent.
+    onAgentHookEvent((evt) => this.handleAgentHookEvent(evt));
+  }
+
+  private findTaskByAgentId(agentId: string): CoordinatedTask | undefined {
+    for (const task of this.tasks.values()) {
+      if (task.agentId === agentId) return task;
+    }
+    return undefined;
+  }
+
+  /** True for a tool hook that belongs to a turn the user has already interrupted.
+   *  Turn boundaries (UserPromptSubmit, SessionStart, Stop) end the window early. */
+  private isToolHookOfInterruptedTurn(evt: AgentHookEventPayload): boolean {
+    const since = this.interruptedAt.get(evt.agentId);
+    if (since === undefined) return false;
+    if (!HOOK_TOOL_EVENTS.has(evt.event) || evt.at - since >= HOOK_INTERRUPT_SUPPRESS_MS) {
+      this.interruptedAt.delete(evt.agentId);
+      return false;
+    }
+    return true;
+  }
+
+  private handleAgentHookEvent(evt: AgentHookEventPayload): void {
+    const task = this.findTaskByAgentId(evt.agentId);
+    if (!task) return;
+    // A hook fired by a session that already exited must not revive its task.
+    if (task.status === 'exited' || task.status === 'error') return;
+    if (this.isToolHookOfInterruptedTurn(evt)) return;
+    this.hookLiveAgentIds.add(evt.agentId);
+    if (evt.state === 'done') {
+      // Stop/StopFailure/SessionStart cannot be prompt echo, so clear (not
+      // consume) the echo-suppression window before the shared idle
+      // transition. The idle_prompt notification fires ~60 s after the previous
+      // turn and can race a prompt sent just now, so it stays subject to it.
+      // stableAgentPrompt=false: Stop fires before the TUI repaints its input
+      // prompt, so queued prompts go through the delayed, ❯-checked flush.
+      if (evt.event !== 'Notification') {
+        task.suppressIdleUntil = undefined;
+        task.lastPromptEchoText = undefined;
+      }
+      this.handlePromptDetected(task, false, 'hook');
+      return;
+    }
+    // 'working' and 'waiting' both mean the agent is mid-turn.
+    this.promptReadySeenAt.delete(task.id);
+    if (task.status === 'idle') {
+      task.status = 'running';
+      this.suppressPendingNotificationForTask(task);
+    }
   }
 
   setTaskControl(taskId: string, who: 'coordinator' | 'human'): void {
@@ -458,15 +546,24 @@ export class Coordinator {
       }
       if (hasAgentPrompt) {
         this.handlePromptDetected(task, stableAgentPrompt);
-      } else if (task.status === 'idle') {
+      } else if (task.status === 'idle' && !this.hookLiveAgentIds.has(task.agentId)) {
+        // Hook-live agents flip back to running only on hook evidence — TUI
+        // repaints and status-line noise must not override a hook-reported idle.
         task.status = 'running';
         this.suppressPendingNotificationForTask(task);
       }
     };
   }
 
-  private handlePromptDetected(task: CoordinatedTask, stableAgentPrompt: boolean): void {
-    this.scheduleInitialPromptDelivery(task, INITIAL_PROMPT_READY_DELAY_MS, true);
+  private handlePromptDetected(
+    task: CoordinatedTask,
+    stableAgentPrompt: boolean,
+    source: 'regex' | 'hook' = 'regex',
+  ): void {
+    // Only a rendered ❯ proves the agent can take input: a hook `done` fires
+    // before the TUI repaints, and marking the initial prompt ready on it would
+    // skip the startup blockers (MCP boot, trust dialog) readiness checks for.
+    this.scheduleInitialPromptDelivery(task, INITIAL_PROMPT_READY_DELAY_MS, source === 'regex');
     if (
       !task.initialPrompt &&
       task.assignedPromptDelivered &&
@@ -478,6 +575,12 @@ export class Coordinator {
       } else {
         this.scheduleQueuedPromptFlush(task);
       }
+      return;
+    }
+    // Once hooks report state for this agent, only hook Stop events may drive
+    // the idle transition — the ❯-regex above still schedules prompt delivery
+    // but must not race a mid-turn TUI frame into a false idle.
+    if (source === 'regex' && this.hookLiveAgentIds.has(task.agentId)) {
       return;
     }
     if (task.suppressIdleUntil !== undefined && this.suppressPromptEchoIdleIfNeeded(task)) {
@@ -807,6 +910,74 @@ export class Coordinator {
       );
     }
 
+    // Hard concurrency gate — the preamble instructs the model to stay under
+    // the limit, but instructions drift; this enforces it.
+    const maxConcurrent = clampCoordinatorConcurrentTasks(
+      coordinatorState.maxConcurrentSubTasks ?? DEFAULT_COORDINATOR_CONCURRENT_TASKS,
+    );
+    const inFlight =
+      this.countInFlightSubTasks(coordinatorId) +
+      (this.pendingCreateCounts.get(coordinatorId) ?? 0);
+    if (inFlight >= maxConcurrent) {
+      throw new Error(
+        `Sub-task concurrency limit reached (${inFlight}/${maxConcurrent} in flight). ` +
+          'Use wait_for_signal_done, then review and merge or close finished sub-tasks before creating more.',
+      );
+    }
+    this.pendingCreateCounts.set(
+      coordinatorId,
+      (this.pendingCreateCounts.get(coordinatorId) ?? 0) + 1,
+    );
+    // The reservation is released as soon as the task is in this.tasks (where
+    // countInFlightSubTasks sees it) — holding it longer would count the task
+    // twice while its worktree/agent spawn finishes.
+    let reserved = true;
+    const releaseReservation = () => {
+      if (!reserved) return;
+      reserved = false;
+      const pending = (this.pendingCreateCounts.get(coordinatorId) ?? 1) - 1;
+      if (pending <= 0) this.pendingCreateCounts.delete(coordinatorId);
+      else this.pendingCreateCounts.set(coordinatorId, pending);
+    };
+    try {
+      return await this.createTaskUnchecked(opts, {
+        coordinatorId,
+        coordinatorState,
+        onInserted: releaseReservation,
+      });
+    } finally {
+      releaseReservation();
+    }
+  }
+
+  private countInFlightSubTasks(coordinatorId: string): number {
+    let count = 0;
+    for (const task of this.tasks.values()) {
+      if (task.coordinatorTaskId !== coordinatorId) continue;
+      if (task.status === 'exited' || task.status === 'error') continue;
+      count++;
+    }
+    return count;
+  }
+
+  private async createTaskUnchecked(
+    opts: {
+      name: string;
+      prompt?: string;
+      projectId?: string;
+      projectRoot?: string;
+      agentCommand?: string;
+      agentArgs?: string[];
+      baseBranch?: string;
+    },
+    ctx: {
+      coordinatorId: string;
+      coordinatorState: CoordinatorState;
+      /** Called once the task is registered in this.tasks. */
+      onInserted: () => void;
+    },
+  ): Promise<CoordinatedTask> {
+    const { coordinatorId, coordinatorState, onInserted } = ctx;
     const root = opts.projectRoot ?? coordinatorState.projectRoot ?? this.projectRoot;
     const projId = opts.projectId ?? coordinatorState.projectId ?? this.projectId;
     if (!root || !projId) throw new Error('No project configured for coordinator');
@@ -863,6 +1034,7 @@ export class Coordinator {
     };
 
     this.tasks.set(task.id, task);
+    onInserted();
     this.tailBuffers.set(agentId, '');
 
     // Subscribe to PTY output for prompt detection
@@ -994,6 +1166,9 @@ export class Coordinator {
       if (subTaskMcpConfigPath && !task.mcpConfigPath) {
         fsUnlink(subTaskMcpConfigPath).catch(() => {});
       }
+      // If cleanup fails the task stays in this.tasks; as 'error' it no longer
+      // occupies a concurrency slot and hook events cannot revive it.
+      task.status = 'error';
       this.cleanupTask(task.id).catch(() => {});
       throw err;
     }
@@ -2032,12 +2207,20 @@ export class Coordinator {
   registerCoordinator(
     coordinatorTaskId: string,
     projectId: string,
-    opts?: { branchName?: string; worktreePath?: string; skipPermissions?: boolean },
+    opts?: {
+      branchName?: string;
+      worktreePath?: string;
+      skipPermissions?: boolean;
+      maxConcurrentTasks?: number;
+    },
   ): void {
     const existing = this.coordinators.get(coordinatorTaskId);
     if (existing) {
       if (opts?.branchName) existing.branchName = opts.branchName;
       if (opts?.worktreePath) existing.worktreePath = opts.worktreePath;
+      if (opts?.maxConcurrentTasks !== undefined) {
+        existing.maxConcurrentSubTasks = clampCoordinatorConcurrentTasks(opts.maxConcurrentTasks);
+      }
       return;
     }
     // Snapshot the current global project root and defaults so each coordinator gets
@@ -2057,6 +2240,10 @@ export class Coordinator {
       ackedBatchIds: [],
       restageTimer: null,
       propagateSkipPermissions: Boolean(opts?.skipPermissions),
+      maxConcurrentSubTasks:
+        opts?.maxConcurrentTasks !== undefined
+          ? clampCoordinatorConcurrentTasks(opts.maxConcurrentTasks)
+          : undefined,
       mcpJsonPath: '',
       createdMcpJson: false,
     });

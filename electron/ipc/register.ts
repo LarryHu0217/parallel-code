@@ -96,7 +96,6 @@ import { askAboutCode, cancelAskAboutCode } from './ask-code.js';
 import { setMinimaxApiKey } from './ask-code-minimax.js';
 import { getSystemMonospaceFonts } from './system-fonts.js';
 import { fetchClaudeUsage } from './claude-usage.js';
-import { fetchCodexUsage } from './codex-usage.js';
 import path from 'path';
 import {
   assertString,
@@ -206,6 +205,8 @@ export function validateStartMCPServerArgs(args: Record<string, unknown>): void 
   assertOptionalString(args.agentEnvFile, 'agentEnvFile');
   assertOptionalBoolean(args.skipPermissions, 'skipPermissions');
   assertOptionalBoolean(args.propagateSkipPermissions, 'propagateSkipPermissions');
+  if (args.maxConcurrentTasks !== undefined)
+    assertInt(args.maxConcurrentTasks, 'maxConcurrentTasks');
   if (args.dockerContainerName !== undefined) {
     assertString(args.dockerContainerName, 'dockerContainerName');
     if (!/^[a-zA-Z0-9_.-]+$/.test(args.dockerContainerName as string)) {
@@ -1624,6 +1625,7 @@ export function registerAllHandlers(win: BrowserWindow): void {
         agentEnvFile?: string;
         dockerContainerName?: string;
         dockerImage?: string;
+        maxConcurrentTasks?: number;
       },
     ) => {
       validateStartMCPServerArgs(args as unknown as Record<string, unknown>);
@@ -1664,6 +1666,7 @@ export function registerAllHandlers(win: BrowserWindow): void {
         branchName: args.coordinatorBranch,
         worktreePath: args.worktreePath,
         skipPermissions: Boolean(args.skipPermissions && args.propagateSkipPermissions),
+        maxConcurrentTasks: args.maxConcurrentTasks,
       });
 
       // Start remote server if not running
@@ -1867,7 +1870,6 @@ export function registerAllHandlers(win: BrowserWindow): void {
   ipcMain.handle(IPC.GetMCPLogs, () => getMCPLogs());
 
   ipcMain.handle(IPC.GetClaudeUsage, () => fetchClaudeUsage());
-  ipcMain.handle(IPC.GetCodexUsage, () => fetchCodexUsage());
 
   // --- Forward window events to renderer ---
   win.on('focus', () => {

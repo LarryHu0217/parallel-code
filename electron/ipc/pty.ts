@@ -43,9 +43,9 @@ function sendToChannel(win: BrowserWindow, channelId: string, msg: unknown): voi
   }
 }
 
-// --- PTY event bus for spawn/exit notifications ---
+// --- PTY event bus for spawn/exit/interrupt notifications ---
 
-type PtyEventType = 'spawn' | 'exit' | 'list-changed';
+type PtyEventType = 'spawn' | 'exit' | 'list-changed' | 'interrupt';
 type PtyEventListener = (agentId: string, data?: unknown) => void;
 const eventListeners = new Map<PtyEventType, Set<PtyEventListener>>();
 
@@ -612,10 +612,17 @@ export function spawnAgent(win: BrowserWindow, args: SpawnAgentArgs): void {
   emitPtyEvent('spawn', args.agentId);
 }
 
+// A bare Escape or Ctrl+C keystroke (xterm sends each as a single-byte chunk;
+// escape sequences like arrow keys arrive longer).
+const INTERRUPT_KEYSTROKES = new Set(['\x1b', '\x03']);
+
 export function writeToAgent(agentId: string, data: string): void {
   const session = sessions.get(agentId);
   if (!session) throw new Error(`Agent not found: ${agentId}`);
   session.proc.write(data);
+  // Claude Code fires no Stop hook for a user interrupt, so consumers that
+  // trust hook state (the coordinator) need to hear about the keystroke.
+  if (!session.isShell && INTERRUPT_KEYSTROKES.has(data)) emitPtyEvent('interrupt', agentId);
 }
 
 export function resizeAgent(agentId: string, cols: number, rows: number): void {
