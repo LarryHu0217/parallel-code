@@ -36,6 +36,7 @@ const toolbarBtnStyle = (highlighted: boolean): JSX.CSSProperties => ({
   'line-height': '1',
   display: 'flex',
   'align-items': 'center',
+  'flex-shrink': '0',
   gap: '4px',
 });
 
@@ -154,6 +155,8 @@ export function TaskShellSection(props: TaskShellSectionProps) {
           padding: '0 8px',
           background: 'transparent',
           gap: '4px',
+          'overflow-x': 'auto',
+          'overflow-y': 'hidden',
           outline: 'none',
         }}
       >
