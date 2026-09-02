@@ -39,6 +39,11 @@ import { dataTransferToShellArgs, escapePath } from '../lib/terminalDrop';
 import { cleanCopiedTerminalText } from '../lib/copy-text';
 import { hasTerminalUserActivity, nextTerminalInputPending } from '../lib/terminalInputPending';
 import { computeWrappedPathLinks, createTerminalHttpLinkHandler } from '../lib/terminalLinks';
+import {
+  initialWebglLossState,
+  recordWebglContextLoss,
+  WEBGL_REATTACH_DELAY_MS,
+} from '../lib/webglContextLoss';
 import type { PtyOutput } from '../ipc/types';
 
 let windowUnloading = false;
@@ -985,18 +990,40 @@ export function TerminalView(props: TerminalViewProps) {
       });
     }
 
-    // Load WebGL addon for all terminals. On context loss (e.g. too many
-    // WebGL contexts), the terminal gracefully falls back to the DOM renderer.
-    try {
-      webglAddon = new WebglAddon();
-      webglAddon.onContextLoss(() => {
-        webglAddon?.dispose();
-        webglAddon = undefined;
-      });
-      term.loadAddon(webglAddon);
-    } catch {
-      // WebGL2 not supported — DOM renderer used automatically
+    // Load WebGL addon for all terminals. On context loss (GPU process crash,
+    // sleep/wake, or context-cap eviction — see max-active-webgl-contexts in
+    // electron/main.ts) reattach after a short delay instead of permanently
+    // falling back to the much slower DOM renderer; the loss-window policy
+    // settles rapid loss loops onto the DOM renderer.
+    let webglLossState = initialWebglLossState();
+    let webglReattachTimer: number | undefined;
+
+    function attachWebgl() {
+      if (!term) return;
+      try {
+        const addon = new WebglAddon();
+        addon.onContextLoss(() => {
+          addon.dispose();
+          webglAddon = undefined;
+          const { state, retry } = recordWebglContextLoss(webglLossState, Date.now());
+          webglLossState = state;
+          if (retry && webglReattachTimer === undefined) {
+            webglReattachTimer = window.setTimeout(() => {
+              webglReattachTimer = undefined;
+              attachWebgl();
+            }, WEBGL_REATTACH_DELAY_MS);
+          }
+        });
+        term.loadAddon(addon);
+        webglAddon = addon;
+        // A freshly attached canvas starts blank — repaint so a recovered pane
+        // doesn't look frozen until the next output (no-op on initial mount).
+        redrawTerminal(agentId);
+      } catch {
+        // WebGL2 not supported — DOM renderer used automatically
+      }
     }
+    attachWebgl();
 
     let spawnTimer: number | undefined;
     let spawnStarted = false;
@@ -1079,6 +1106,7 @@ export function TerminalView(props: TerminalViewProps) {
       if (spawnTimer !== undefined) clearTimeout(spawnTimer);
       if (inputFlushTimer !== undefined) clearTimeout(inputFlushTimer);
       if (resizeFlushTimer !== undefined) clearTimeout(resizeFlushTimer);
+      if (webglReattachTimer !== undefined) clearTimeout(webglReattachTimer);
       if (outputRaf !== undefined) cancelAnimationFrame(outputRaf);
       onOutput.cleanup?.();
       webglAddon?.dispose();

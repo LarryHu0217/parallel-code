@@ -80,6 +80,13 @@ function fixEnv(): void {
 
 fixEnv();
 
+// Blink evicts the oldest WebGL context past 16 per renderer process, and every
+// mounted terminal pane holds one — hidden task/tab terminals included. Past 16
+// terminals the oldest panes silently lose their context and degrade to xterm's
+// slower DOM renderer (janky scrolling). Raise the cap well above realistic
+// layouts while keeping it bounded so genuine context leaks still surface.
+app.commandLine.appendSwitch('max-active-webgl-contexts', '128');
+
 // Verify that preload.cjs ALLOWED_CHANNELS stays in sync with the IPC enum.
 // Logs a warning in dev if they drift — catches mismatches before they hit users.
 //
