@@ -86,6 +86,10 @@ export function setTerminalFont(terminalFont: string): void {
   setStore('terminalFont', terminalFont);
 }
 
+export function setTerminalScreenReaderMode(enabled: boolean): void {
+  setStore('terminalScreenReaderMode', enabled);
+}
+
 export function applyAppearanceMode(): void {
   const isDark = osIsDark();
   const mode = store.appearanceMode;
@@ -179,6 +183,21 @@ export function setProjectsCollapsed(collapsed: boolean): void {
       setStore('sidebarFocusedProjectId', null);
     }
   });
+}
+
+export function setProjectTasksCollapsed(projectId: string, collapsed: boolean): void {
+  setStore(
+    produce((s) => {
+      const project = s.projects.find((entry) => entry.id === projectId);
+      if (!project) return;
+      project.tasksCollapsed = collapsed;
+
+      const focusedTaskId = s.sidebarFocusedTaskId;
+      if (collapsed && focusedTaskId && s.tasks[focusedTaskId]?.projectId === projectId) {
+        s.sidebarFocusedTaskId = null;
+      }
+    }),
+  );
 }
 
 export function setShowPromptInput(show: boolean): void {

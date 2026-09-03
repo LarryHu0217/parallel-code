@@ -1,5 +1,6 @@
 import type { BrowserWindow } from 'electron';
 import { vi } from 'vitest';
+import type { AgentHookEventPayload } from '../agent-hooks/status.js';
 
 export type BackendTaskFixture = {
   id: string;
@@ -42,6 +43,7 @@ const mocks = vi.hoisted(() => {
   const mockLogInfo = vi.fn();
   const mockLogWarn = vi.fn();
   const mockOnPtyEvent = vi.fn();
+  const mockOnAgentHookEvent = vi.fn();
   const mockSpawnAgent = vi.fn();
   const mockWriteToAgent = vi.fn();
   const mockKillAgent = vi.fn();
@@ -54,6 +56,8 @@ const mocks = vi.hoisted(() => {
   const mockGitMergeTask = vi.fn();
   const mockCreateBackendTask = vi.fn();
   const mockDeleteBackendTask = vi.fn();
+  const mockVerifyStart = vi.fn();
+  const mockVerifyCancel = vi.fn();
 
   return {
     mockExecFile,
@@ -75,6 +79,7 @@ const mocks = vi.hoisted(() => {
     mockLogInfo,
     mockLogWarn,
     mockOnPtyEvent,
+    mockOnAgentHookEvent,
     mockSpawnAgent,
     mockWriteToAgent,
     mockKillAgent,
@@ -87,6 +92,8 @@ const mocks = vi.hoisted(() => {
     mockGitMergeTask,
     mockCreateBackendTask,
     mockDeleteBackendTask,
+    mockVerifyStart,
+    mockVerifyCancel,
   };
 });
 
@@ -190,6 +197,10 @@ vi.mock('../ipc/pty.js', () => ({
   onPtyEvent: mocks.mockOnPtyEvent,
 }));
 
+vi.mock('../agent-hooks/events.js', () => ({
+  onAgentHookEvent: mocks.mockOnAgentHookEvent,
+}));
+
 vi.mock('../ipc/git.js', () => ({
   getChangedFiles: mocks.mockGetChangedFiles,
   getAllFileDiffs: mocks.mockGetAllFileDiffs,
@@ -200,6 +211,19 @@ vi.mock('../ipc/git.js', () => ({
 vi.mock('../ipc/tasks.js', () => ({
   createTask: mocks.mockCreateBackendTask,
   deleteTask: mocks.mockDeleteBackendTask,
+}));
+
+vi.mock('../ipc/verify.js', () => ({
+  verificationRunner: {
+    start: mocks.mockVerifyStart,
+    cancel: mocks.mockVerifyCancel,
+    isRunning: () => false,
+  },
+  buildVerifyEnv: (args: { taskId: string; branchName?: string; worktreePath: string }) => ({
+    PARALLEL_CODE_TASK_ID: args.taskId,
+    PARALLEL_CODE_BRANCH: args.branchName ?? '',
+    PARALLEL_CODE_WORKTREE: args.worktreePath,
+  }),
 }));
 
 vi.mock('../ipc/channels.js', () => ({
@@ -241,6 +265,7 @@ export const {
   mockLogInfo,
   mockLogWarn,
   mockOnPtyEvent,
+  mockOnAgentHookEvent,
   mockSpawnAgent,
   mockWriteToAgent,
   mockKillAgent,
@@ -253,6 +278,8 @@ export const {
   mockGitMergeTask,
   mockCreateBackendTask,
   mockDeleteBackendTask,
+  mockVerifyStart,
+  mockVerifyCancel,
 } = mocks;
 
 export const mockWin = {
@@ -319,6 +346,8 @@ export function resetCoordinatorMocks(): void {
   mockLogInfo.mockReset();
   mockLogWarn.mockReset();
   mockOnPtyEvent.mockReset();
+  mockOnAgentHookEvent.mockReset();
+  mockOnAgentHookEvent.mockReturnValue(() => {});
   mockSpawnAgent.mockReset();
   mockWriteToAgent.mockReset();
   mockWriteToAgent.mockImplementation((agentId: string, data: string) => ({ id: agentId, data }));
@@ -362,6 +391,8 @@ export async function setupCoordinatorHarness(options: CoordinatorHarnessOptions
     getAgentId,
     getSpawnHandler,
     getExitHandler,
+    getInterruptHandler,
+    getHookEventHandler,
     getAgentTextWrites,
     getSubtaskConfigWrites,
     getSettingsLocalWrites,
@@ -407,6 +438,18 @@ export function getExitHandler(): (agentId: string, data: unknown) => void {
   const call = mockOnPtyEvent.mock.calls.find((c) => c[0] === 'exit');
   if (!call) throw new Error('exit handler not registered');
   return call[1] as (agentId: string, data: unknown) => void;
+}
+
+export function getInterruptHandler(): (agentId: string) => void {
+  const call = mockOnPtyEvent.mock.calls.find((c) => c[0] === 'interrupt');
+  if (!call) throw new Error('interrupt handler not registered');
+  return call[1] as (agentId: string) => void;
+}
+
+export function getHookEventHandler(): (evt: AgentHookEventPayload) => void {
+  const call = mockOnAgentHookEvent.mock.calls[0];
+  if (!call) throw new Error('onAgentHookEvent not subscribed');
+  return call[0] as (evt: AgentHookEventPayload) => void;
 }
 
 export function encodeAgentOutput(s: string): string {

@@ -9,7 +9,7 @@ import { TerminalBookmarkGutter } from './TerminalBookmarks';
 import { invoke, fireAndForget, Channel } from '../lib/ipc';
 import { IPC } from '../../electron/ipc/channels';
 import { getTerminalFontFamily } from '../lib/fonts';
-import { TERMINAL_SCROLLBACK_LINES, base64ToUint8Array } from '../lib/terminalConstants';
+import { TERMINAL_SCROLL_OPTIONS, base64ToUint8Array } from '../lib/terminalConstants';
 import {
   getTerminalSearchDecorations,
   getTerminalTheme,
@@ -25,6 +25,7 @@ import {
   retryTaskMcpStartup,
   markTaskUserActivity,
   setTaskTerminalInputPending,
+  noteAgentTerminalInput,
 } from '../store/store';
 import { clearTerminalInputPendingFromQuestion } from '../store/tasks';
 import { isLandedTaskState } from '../store/landing';
@@ -39,6 +40,7 @@ import { dataTransferToShellArgs, escapePath } from '../lib/terminalDrop';
 import { cleanCopiedTerminalText } from '../lib/copy-text';
 import { hasTerminalUserActivity, nextTerminalInputPending } from '../lib/terminalInputPending';
 import { computeWrappedPathLinks, createTerminalHttpLinkHandler } from '../lib/terminalLinks';
+import { recordSharedWebglContextLoss, WEBGL_REATTACH_DELAY_MS } from '../lib/webglContextLoss';
 import type { PtyOutput } from '../ipc/types';
 
 let windowUnloading = false;
@@ -418,9 +420,10 @@ export function TerminalView(props: TerminalViewProps) {
       cursorBlink: true,
       fontSize: initialFontSize,
       fontFamily: getTerminalFontFamily(store.terminalFont),
+      screenReaderMode: store.terminalScreenReaderMode,
       theme: activeTerminalTheme(),
       allowProposedApi: true,
-      scrollback: TERMINAL_SCROLLBACK_LINES,
+      ...TERMINAL_SCROLL_OPTIONS,
       disableStdin: taskPtyDetached(),
       linkHandler: {
         activate: openTerminalHttpLinkWithModifier,
@@ -910,6 +913,7 @@ export function TerminalView(props: TerminalViewProps) {
     term.onData((data) => {
       if (!canForwardInput()) return;
       noteUserTerminalInput(data);
+      if (!props.isShell) noteAgentTerminalInput(agentId, data);
       if (props.onPromptDetected) {
         for (const ch of data) {
           if (ch === '\r') {
@@ -984,18 +988,40 @@ export function TerminalView(props: TerminalViewProps) {
       });
     }
 
-    // Load WebGL addon for all terminals. On context loss (e.g. too many
-    // WebGL contexts), the terminal gracefully falls back to the DOM renderer.
-    try {
-      webglAddon = new WebglAddon();
-      webglAddon.onContextLoss(() => {
-        webglAddon?.dispose();
-        webglAddon = undefined;
-      });
-      term.loadAddon(webglAddon);
-    } catch {
-      // WebGL2 not supported — DOM renderer used automatically
+    // Load WebGL addon for all terminals. On context loss (GPU process crash,
+    // sleep/wake, or context-cap eviction — see max-active-webgl-contexts in
+    // electron/main.ts) reattach after a short delay instead of permanently
+    // falling back to the much slower DOM renderer. The loss window is shared
+    // app-wide so an eviction rotation (each reattach evicting another pane)
+    // trips the brake even though every hop lands on a different pane.
+    let webglReattachTimer: number | undefined;
+
+    function attachWebgl() {
+      if (!term) return;
+      try {
+        const addon = new WebglAddon();
+        addon.onContextLoss(() => {
+          addon.dispose();
+          webglAddon = undefined;
+          if (recordSharedWebglContextLoss()) {
+            webglReattachTimer = window.setTimeout(() => {
+              webglReattachTimer = undefined;
+              attachWebgl();
+            }, WEBGL_REATTACH_DELAY_MS);
+          }
+        });
+        term.loadAddon(addon);
+        webglAddon = addon;
+        // No manual repaint here: loadAddon → RenderService.setRenderer
+        // already forces a full refresh of this pane. redrawTerminal would
+        // additionally clear the glyph atlas xterm SHARES across panes
+        // without invalidating the other owners' render models, garbling
+        // glyphs in every healthy terminal.
+      } catch {
+        // WebGL2 not supported — DOM renderer used automatically
+      }
     }
+    attachWebgl();
 
     let spawnTimer: number | undefined;
     let spawnStarted = false;
@@ -1078,6 +1104,7 @@ export function TerminalView(props: TerminalViewProps) {
       if (spawnTimer !== undefined) clearTimeout(spawnTimer);
       if (inputFlushTimer !== undefined) clearTimeout(inputFlushTimer);
       if (resizeFlushTimer !== undefined) clearTimeout(resizeFlushTimer);
+      if (webglReattachTimer !== undefined) clearTimeout(webglReattachTimer);
       if (outputRaf !== undefined) cancelAnimationFrame(outputRaf);
       onOutput.cleanup?.();
       webglAddon?.dispose();
@@ -1108,6 +1135,12 @@ export function TerminalView(props: TerminalViewProps) {
     if (!term || !fitAddon) return;
     term.options.fontFamily = getTerminalFontFamily(font);
     markDirty(props.agentId);
+  });
+
+  createEffect(() => {
+    const screenReaderMode = store.terminalScreenReaderMode;
+    if (!term) return;
+    term.options.screenReaderMode = screenReaderMode;
   });
 
   createEffect(() => {
@@ -1204,10 +1237,10 @@ export function TerminalView(props: TerminalViewProps) {
           <button
             style={{
               padding: '6px 16px',
-              background: '#3b82f6',
-              color: '#fff',
+              background: 'var(--accent)',
+              color: 'var(--accent-text)',
               border: 'none',
-              'border-radius': '4px',
+              'border-radius': 'var(--radius-xs)',
               'font-size': '13px',
               cursor: 'pointer',
             }}

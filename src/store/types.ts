@@ -1,4 +1,11 @@
-import type { AgentDef, StepEntry, WorktreeStatus } from '../ipc/types';
+import type {
+  AgentDef,
+  StepEntry,
+  UsageProvider,
+  UsageWindow,
+  VerificationRun,
+  WorktreeStatus,
+} from '../ipc/types';
 import type { DockerSource } from '../lib/docker';
 import type { LookPreset, AppearanceMode } from '../lib/look';
 import type { KeyBinding } from '../lib/keybindings';
@@ -78,8 +85,13 @@ export interface Project {
   defaultBaseBranch?: string;
   /** Coverage artifact path relative to the repo root. */
   coverageReportPath?: string;
+  /** Shell command the app runs in a task worktree to verify it (exit 0 = pass).
+   *  Lives in app state on purpose: a repo file could make opening a hostile
+   *  clone run arbitrary commands on the host. */
+  verifyCommand?: string;
   terminalBookmarks?: TerminalBookmark[];
   isGitRepo?: boolean; // undefined treated as true for backward compat
+  tasksCollapsed?: boolean; // sidebar task group, defaults to expanded
 }
 
 export interface Agent {
@@ -120,6 +132,16 @@ export interface Task {
   closingError?: string;
   gitIsolation: GitIsolationMode;
   baseBranch?: string;
+  /** Worktree branch the user declined to adopt as the task branch (the
+   *  adoption banner's Undo). Persisted — auto-adoption must not re-apply a
+   *  choice the user reverted, even across restarts while the worktree still
+   *  sits on that branch. */
+  branchOfferDismissed?: string;
+  /** Branch tracked before the app auto-adopted the one the agent switched
+   *  the worktree to (the adopted branch is `branchName` itself — the field
+   *  is cleared on any later branch change). Drives the info banner on the
+   *  task; persisted so a restart doesn't hide that the branch changed. */
+  branchAdoptedFrom?: string;
   externalWorktree?: boolean;
   skipPermissions?: boolean;
   dockerMode?: boolean;
@@ -145,6 +167,7 @@ export interface Task {
   // Coordinator fields
   coordinatorMode?: boolean;
   propagateSkipPermissions?: boolean;
+  maxConcurrentTasks?: number;
   coordinatedBy?: string;
   controlledBy?: 'coordinator' | 'human';
   automationWriteInFlight?: boolean;
@@ -157,6 +180,9 @@ export interface Task {
   signalDoneConsumed?: boolean;
   needsReview?: boolean;
   verification?: SubtaskVerification;
+  /** Latest app-run verify command result. Distinct from `verification`,
+   *  which is the agent's self-report through land_self. */
+  verificationRun?: VerificationRun;
   landingState?: LandingState;
   landingReason?: string;
   landingSummary?: string;
@@ -204,9 +230,12 @@ export interface PersistedTask {
   savedPromptedAgentIndexes?: number[];
   planFileName?: string;
   stepsEnabled?: boolean;
+  branchAdoptedFrom?: string;
+  branchOfferDismissed?: string;
   // Coordinator fields
   coordinatorMode?: boolean;
   propagateSkipPermissions?: boolean;
+  maxConcurrentTasks?: number;
   coordinatedBy?: string;
   controlledBy?: 'coordinator' | 'human';
   mcpConfigPath?: string;
@@ -217,6 +246,7 @@ export interface PersistedTask {
   signalDoneConsumed?: boolean;
   needsReview?: boolean;
   verification?: SubtaskVerification;
+  verificationRun?: VerificationRun;
   landingState?: LandingState;
   landingReason?: string;
   landingSummary?: string;
@@ -256,6 +286,7 @@ export interface PersistedState {
   mergedLinesAdded?: number;
   mergedLinesRemoved?: number;
   terminalFont?: string;
+  terminalScreenReaderMode?: boolean;
   themePreset?: LookPreset;
   showPromptInput?: boolean;
   fontSmoothing?: boolean;
@@ -297,6 +328,16 @@ export interface MCPStatus {
   port: number | null;
   coordinatorTaskId: string | null;
   mcpConfigPath: string | null;
+}
+
+export interface UsageState {
+  fiveHour: UsageWindow | null;
+  sevenDay: UsageWindow | null;
+  /** When the current windows were fetched; null until the first success. */
+  fetchedAt: number | null;
+  /** `unavailable` means no subscription login — the bar hides. `error` keeps the last snapshot. */
+  status: 'idle' | 'ok' | 'error' | 'unavailable';
+  error: string | null;
 }
 
 // Panel cell IDs. Shell terminals use "shell:0", "shell:1", etc.
@@ -358,6 +399,7 @@ export interface AppStore {
   mergedLinesAdded: number;
   mergedLinesRemoved: number;
   terminalFont: string;
+  terminalScreenReaderMode: boolean;
   themePreset: LookPreset;
   showPromptInput: boolean;
   fontSmoothing: boolean;
@@ -406,4 +448,5 @@ export interface AppStore {
   defaultSkipPermissions: boolean;
   defaultPropagateSkipPermissions: boolean;
   mcpStatus: MCPStatus;
+  usage: Record<UsageProvider, UsageState>;
 }

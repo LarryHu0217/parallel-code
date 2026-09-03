@@ -4,11 +4,14 @@ import { expectDefined, type MockStoreHarness } from './test-helpers';
 type MockStore = {
   activeTaskId: string | null;
   focusMode: boolean;
-  tasks: Record<string, { id: string }>;
+  tasks: Record<string, { id: string; projectId: string }>;
   focusedPanel: Record<string, string>;
   panelUserSize: Record<string, number>;
+  projects: Array<{ id: string; tasksCollapsed?: boolean }>;
   projectsCollapsed: boolean;
   sidebarFocusedProjectId: string | null;
+  sidebarFocusedTaskId: string | null;
+  terminalScreenReaderMode: boolean;
 };
 
 let mockStore: MockStore;
@@ -62,7 +65,9 @@ import {
   getPanelUserSize,
   setPanelUserSize,
   deletePanelUserSize,
+  setProjectTasksCollapsed,
   setProjectsCollapsed,
+  setTerminalScreenReaderMode,
 } from './ui';
 
 beforeEach(() => {
@@ -71,13 +76,16 @@ beforeEach(() => {
     activeTaskId: 'task-1',
     focusMode: false,
     tasks: {
-      'task-1': { id: 'task-1' },
-      'task-2': { id: 'task-2' },
+      'task-1': { id: 'task-1', projectId: 'project-1' },
+      'task-2': { id: 'task-2', projectId: 'project-2' },
     },
     focusedPanel: {},
     panelUserSize: {},
+    projects: [{ id: 'project-1' }, { id: 'project-2' }],
     projectsCollapsed: false,
     sidebarFocusedProjectId: null,
+    sidebarFocusedTaskId: null,
+    terminalScreenReaderMode: false,
   });
 
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
@@ -193,5 +201,37 @@ describe('setProjectsCollapsed', () => {
 
     expect(mockStore.projectsCollapsed).toBe(true);
     expect(mockStore.sidebarFocusedProjectId).toBeNull();
+  });
+});
+
+describe('setProjectTasksCollapsed', () => {
+  it('collapses only the requested project task group and clears hidden task focus', () => {
+    mockStore.sidebarFocusedTaskId = 'task-1';
+
+    setProjectTasksCollapsed('project-1', true);
+
+    expect(mockStore.projects).toEqual([
+      { id: 'project-1', tasksCollapsed: true },
+      { id: 'project-2' },
+    ]);
+    expect(mockStore.sidebarFocusedTaskId).toBeNull();
+  });
+
+  it('preserves focus when expanding a project task group', () => {
+    mockStore.projects[0].tasksCollapsed = true;
+    mockStore.sidebarFocusedTaskId = 'task-1';
+
+    setProjectTasksCollapsed('project-1', false);
+
+    expect(mockStore.projects[0].tasksCollapsed).toBe(false);
+    expect(mockStore.sidebarFocusedTaskId).toBe('task-1');
+  });
+});
+
+describe('setTerminalScreenReaderMode', () => {
+  it('updates the global terminal accessibility option', () => {
+    setTerminalScreenReaderMode(true);
+
+    expect(mockStore.terminalScreenReaderMode).toBe(true);
   });
 });
