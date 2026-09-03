@@ -55,7 +55,7 @@ export function TaskAgentStatusLine(props: TaskAgentStatusLineProps) {
               'align-items': 'center',
               gap: '5px',
               'min-width': '0',
-              padding: '1px 0 0 12px',
+              padding: '0 0 0 12px',
               color: theme.fgMuted,
               'font-size': sf(11),
               'line-height': '1.4',
@@ -63,7 +63,7 @@ export function TaskAgentStatusLine(props: TaskAgentStatusLineProps) {
               'white-space': 'nowrap',
             }}
           >
-            <span style={{ color: described().color, 'font-weight': '600', 'flex-shrink': '0' }}>
+            <span style={{ color: described().color, 'font-weight': '500', 'flex-shrink': '0' }}>
               {described().label}
             </span>
             <Show when={described().text}>

@@ -1074,6 +1074,26 @@ textarea::placeholder {
   line-height: 1.35;
 }
 
+/* Status lines under a task name are reference detail, not the row's identity:
+   keep them quiet and give them air so the sidebar scans as a list of names.
+   Hovering a row is the signal that its detail is wanted. */
+.task-item .task-agent-status,
+.task-item .task-current-state-sidebar {
+  margin-top: 4px;
+  opacity: 0.45;
+  transition: opacity 0.13s ease;
+}
+
+/* The two status lines belong together — only the pair is offset from the title. */
+.task-item .task-agent-status + .task-current-state-sidebar {
+  margin-top: 1px;
+}
+
+.task-item:hover .task-agent-status,
+.task-item:hover .task-current-state-sidebar {
+  opacity: 1;
+}
+
 .sidebar-attention-tray {
   display: flex;
   flex-direction: column;
