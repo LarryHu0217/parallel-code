@@ -5,6 +5,7 @@ import {
   store,
   getProject,
   getPrChecks,
+  getVerifyCommand,
   mergeTask,
   sendPrompt,
   updateTaskBranch,
@@ -12,6 +13,7 @@ import {
 import { ConfirmDialog } from './ConfirmDialog';
 import { ChangedFilesList } from './ChangedFilesList';
 import { MergeReadinessPanel } from './MergeReadinessPanel';
+import { VerificationPanel } from './VerificationPanel';
 import { buildMergeReadiness } from './merge-readiness';
 import { isAdoptableBranch } from '../lib/branch-divergence';
 import { theme, bannerStyle } from '../lib/theme';
@@ -103,6 +105,8 @@ export function MergeDialog(props: MergeDialogProps) {
       worktreeStatus: worktreeStatus(),
       worktreeStatusLoading: worktreeStatus.loading,
       verification: props.task.verification,
+      verificationRun: props.task.verificationRun,
+      verifyCommandConfigured: Boolean(getVerifyCommand(props.task.id)),
       prChecks: getPrChecks(props.task.id),
       coverage: coverageComparison(),
     });
@@ -142,6 +146,12 @@ export function MergeDialog(props: MergeDialogProps) {
       message={
         <div>
           <MergeReadinessPanel readiness={mergeReadiness()} />
+          <VerificationPanel
+            task={props.task}
+            agentId={selectedAgentId()}
+            headSha={worktreeStatus()?.head_sha}
+            onSentToAgent={() => props.onDone()}
+          />
           <Show when={hasBranchMismatch()}>
             <div
               style={{

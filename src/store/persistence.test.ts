@@ -242,6 +242,44 @@ describe('landing state persistence', () => {
     expect(store.tasks['task-1'].landedMetadata?.landedCommit).toBe('abc123');
     expect(store.tasks['task-1'].verification?.checks[0].result).toBe('passed');
   });
+
+  it('keeps finished verification runs but drops one that was still running', async () => {
+    const def = agentDef();
+    const finished = {
+      command: 'npm test',
+      status: 'failed',
+      exitCode: 1,
+      headSha: 'abc123',
+      dirty: false,
+      startedAt: '2026-09-03T10:00:00Z',
+      finishedAt: '2026-09-03T10:01:00Z',
+      outputTail: '1 failed\n',
+    };
+    mockInvoke.mockResolvedValueOnce(
+      JSON.stringify({
+        projects: [{ id: 'project-1', name: 'Repo', path: '/repo', color: 'hsl(0, 70%, 75%)' }],
+        lastProjectId: 'project-1',
+        lastAgentId: null,
+        taskOrder: ['task-1', 'task-2'],
+        collapsedTaskOrder: [],
+        tasks: {
+          'task-1': { ...persistedTask(def), verificationRun: finished },
+          'task-2': {
+            ...persistedTask(def),
+            id: 'task-2',
+            verificationRun: { ...finished, status: 'running', exitCode: null, finishedAt: null },
+          },
+        },
+        activeTaskId: 'task-1',
+        sidebarVisible: true,
+      }),
+    );
+
+    await loadState();
+
+    expect(store.tasks['task-1'].verificationRun).toEqual(finished);
+    expect(store.tasks['task-2'].verificationRun).toBeUndefined();
+  });
 });
 
 describe('coordinator concurrency limit persistence', () => {

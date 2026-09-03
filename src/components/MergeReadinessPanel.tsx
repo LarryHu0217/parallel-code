@@ -18,7 +18,7 @@ function checkHelp(label: string): string | undefined {
     return 'Checks the task branch for conflicts with its base branch, branch mismatch, committed changes, and local uncommitted changes.';
   }
   if (label === 'Verification') {
-    return 'Uses structured verification reported by land_self, such as tests or typechecking. Without a report this needs attention; opening the dialog never runs commands.';
+    return "Runs the project's verify command in the task worktree when you click Run, when land_self is called, or when the coordinator merges. The result is pinned to the commit it ran at. Without a configured command this falls back to what the agent reported via land_self; opening the dialog never runs commands.";
   }
   if (label === 'PR checks') {
     return 'Uses checks reported for a detected GitHub pull request. Pull requests are optional, and unavailable check data is neutral.';

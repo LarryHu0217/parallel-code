@@ -114,6 +114,8 @@
   "RefreshPrChecksWatcher": "refresh_pr_checks_watcher",
   "PrChecksUpdate": "pr_checks_update",
   "GetEslintQualityFindings": "get_eslint_quality_findings",
+  "RunTaskVerification": "run_task_verification",
+  "CancelTaskVerification": "cancel_task_verification",
   "LogFromRenderer": "log_from_renderer",
   "CheckForUpdates": "check_for_updates",
   "DownloadUpdate": "download_update",

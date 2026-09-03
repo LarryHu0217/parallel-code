@@ -1365,6 +1365,37 @@ describe('MCP_TaskStateSync listener', () => {
     expect(mockTasks['task-1'].mcpStartupError).toBeUndefined();
   });
 
+  it('replaces the verification run outright and clears it on null', () => {
+    const base = {
+      command: 'npm test',
+      exitCode: null,
+      headSha: null,
+      dirty: false,
+      startedAt: '2026-09-03T10:00:00Z',
+      finishedAt: '2026-09-03T10:10:00Z',
+      outputTail: '',
+    };
+    taskStateSyncHandler({
+      taskId: 'task-1',
+      verificationRun: { ...base, status: 'timed_out', message: 'Timed out after 10 min.' },
+    });
+    expect(mockTasks['task-1'].verificationRun).toMatchObject({
+      status: 'timed_out',
+      message: 'Timed out after 10 min.',
+    });
+
+    // The next run arrives without a message key; it must not inherit the old one.
+    taskStateSyncHandler({
+      taskId: 'task-1',
+      verificationRun: { ...base, status: 'passed', exitCode: 0 },
+    });
+    expect(mockTasks['task-1'].verificationRun).toMatchObject({ status: 'passed' });
+    expect((mockTasks['task-1'].verificationRun as { message?: string }).message).toBeUndefined();
+
+    taskStateSyncHandler({ taskId: 'task-1', verificationRun: null });
+    expect(mockTasks['task-1'].verificationRun).toBeUndefined();
+  });
+
   it('stores automation write lock sync fields', () => {
     taskStateSyncHandler({
       taskId: 'task-1',

@@ -118,6 +118,8 @@ const ALLOWED_CHANNELS = new Set([
   'refresh_pr_checks_watcher',
   'pr_checks_update',
   'get_eslint_quality_findings',
+  'run_task_verification',
+  'cancel_task_verification',
   'log_from_renderer',
   'check_for_updates',
   'download_update',

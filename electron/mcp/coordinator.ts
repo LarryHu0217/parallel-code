@@ -60,7 +60,10 @@ import {
   getAgentPromptReadiness,
   AGENT_READY_TAIL_CHARS,
 } from '../shared/prompt-detect.js';
-import { SUB_TASK_PREAMBLE } from './sub-task-preamble.js';
+import { buildSubTaskPreamble } from './sub-task-preamble.js';
+import { buildVerifyEnv, verificationRunner } from '../ipc/verify.js';
+import { pendingVerificationRun } from '../shared/verification-run.js';
+import type { VerificationRun } from '../ipc/shared-types.js';
 import { info as logInfo, warn as logWarn } from '../log.js';
 import type {
   CoordinatedTask,
@@ -127,6 +130,18 @@ function isPassedVerification(verification: SubtaskVerification | undefined): bo
   return Boolean(
     verification?.checks.length && verification.checks.every((check) => check.result === 'passed'),
   );
+}
+
+const VERIFY_ESCALATION_TAIL_LINES = 40;
+
+/** Reason shown to the agent and the user; carries enough output to act on. */
+function describeVerificationFailure(run: VerificationRun): string {
+  const tail = run.outputTail.trim().split('\n').slice(-VERIFY_ESCALATION_TAIL_LINES).join('\n');
+  const head =
+    run.status === 'failed'
+      ? `Verification failed (exit ${run.exitCode ?? '?'}): \`${run.command}\``
+      : `Verification ${run.status.replace('_', ' ')}: \`${run.command}\`${run.message ? ` — ${run.message}` : ''}`;
+  return tail ? `${head}\n${tail}` : head;
 }
 
 function verificationFailureReason(verification: SubtaskVerification | undefined): string {
@@ -1029,7 +1044,9 @@ export class Coordinator {
       coordinatorTaskId: coordinatorId,
       status: 'creating',
       exitCode: null,
-      initialPrompt: opts.prompt ? SUB_TASK_PREAMBLE + opts.prompt : undefined,
+      initialPrompt: opts.prompt
+        ? buildSubTaskPreamble(this.coordinators.get(coordinatorId)?.verifyCommand) + opts.prompt
+        : undefined,
       dockerContainerName: this.coordinators.get(coordinatorId)?.dockerContainerName ?? null,
     };
 
@@ -1518,6 +1535,7 @@ export class Coordinator {
     this.notifyRenderer(IPC.MCP_TaskStateSync, {
       taskId: task.id,
       verification: task.verification,
+      verificationRun: task.verificationRun,
       landingState: task.landingState,
       landingReason: task.landingReason ?? null,
       landingSummary: task.landingSummary ?? null,
@@ -1537,6 +1555,45 @@ export class Coordinator {
     task.landingState = state;
     task.landingReason = reason;
     this.syncLandingState(task);
+  }
+
+  /** Runs the project's verify command in the task worktree, the same check the
+   *  merge dialog offers. Anything but a pass escalates so the user sees the
+   *  task flagged, and throws so the calling agent sees the output. */
+  private async verifyBeforeLanding(task: CoordinatedTask): Promise<void> {
+    const command = this.coordinators.get(task.coordinatorTaskId)?.verifyCommand;
+    const worktreePath = task.worktreePath;
+    if (!command || !worktreePath) return;
+    const pending = pendingVerificationRun(command);
+    this.syncVerificationRun(task, pending);
+    const run = await verificationRunner
+      .start({
+        key: task.id,
+        worktreePath,
+        command,
+        env: buildVerifyEnv({ taskId: task.id, branchName: task.branchName, worktreePath }),
+      })
+      // A rejected start means the runner could not even spawn. Report it as an
+      // error run so it escalates like any failure instead of leaving the task
+      // stuck at "running".
+      .catch(
+        (err: unknown): VerificationRun => ({
+          ...pending,
+          status: 'error',
+          finishedAt: new Date().toISOString(),
+          message: err instanceof Error ? err.message : String(err),
+        }),
+      );
+    this.syncVerificationRun(task, run);
+    if (run.status === 'passed') return;
+    const reason = describeVerificationFailure(run);
+    this.escalateLanding(task, 'landing_escalated', reason);
+    throw new Error(reason);
+  }
+
+  private syncVerificationRun(task: CoordinatedTask, run: VerificationRun): void {
+    task.verificationRun = run;
+    this.notifyRenderer(IPC.MCP_TaskStateSync, { taskId: task.id, verificationRun: run });
   }
 
   private async prepareCleanSelfLandingWorktree(task: CoordinatedTask): Promise<void> {
@@ -1786,6 +1843,7 @@ export class Coordinator {
       this.escalateLanding(task, 'landing_escalated', reason);
       throw err;
     }
+    await this.verifyBeforeLanding(task);
 
     let mergeResult: { mainBranch: string; linesAdded: number; linesRemoved: number };
     try {
@@ -1867,7 +1925,7 @@ export class Coordinator {
 
   async mergeTask(
     taskId: string,
-    opts?: { squash?: boolean; message?: string; cleanup?: boolean },
+    opts?: { squash?: boolean; message?: string; cleanup?: boolean; skipVerification?: boolean },
   ): Promise<{ mainBranch: string; linesAdded: number; linesRemoved: number }> {
     const task = this.tasks.get(taskId);
     if (!task) throw new Error(`Task not found: ${taskId}`);
@@ -1896,6 +1954,9 @@ export class Coordinator {
         // Nothing to commit — swallow silently
       }
     }
+    // skipVerification is the coordinator's way past a failure the task cannot
+    // fix, such as a suite that is already red on the base branch.
+    if (!opts?.skipVerification) await this.verifyBeforeLanding(task);
 
     const result = await this.runGitMerge(task, opts);
 
@@ -1984,6 +2045,8 @@ export class Coordinator {
     this.suppressPendingNotificationForTask(task);
 
     this.unsubscribeAgentOutput(task.agentId);
+    // A verify run still going would keep writing into the worktree we delete.
+    verificationRunner.cancel(taskId);
 
     // Kill the agent. For Docker sub-tasks, killAgent also calls docker stop on the
     // sub-task's own container (via stopDockerContainer in pty.ts), which cleanly
@@ -2212,6 +2275,8 @@ export class Coordinator {
       worktreePath?: string;
       skipPermissions?: boolean;
       maxConcurrentTasks?: number;
+      /** Empty string clears a previously configured command. */
+      verifyCommand?: string;
     },
   ): void {
     const existing = this.coordinators.get(coordinatorTaskId);
@@ -2220,6 +2285,9 @@ export class Coordinator {
       if (opts?.worktreePath) existing.worktreePath = opts.worktreePath;
       if (opts?.maxConcurrentTasks !== undefined) {
         existing.maxConcurrentSubTasks = clampCoordinatorConcurrentTasks(opts.maxConcurrentTasks);
+      }
+      if (opts?.verifyCommand !== undefined) {
+        existing.verifyCommand = opts.verifyCommand.trim() || undefined;
       }
       return;
     }
@@ -2244,6 +2312,7 @@ export class Coordinator {
         opts?.maxConcurrentTasks !== undefined
           ? clampCoordinatorConcurrentTasks(opts.maxConcurrentTasks)
           : undefined,
+      verifyCommand: opts?.verifyCommand?.trim() || undefined,
       mcpJsonPath: '',
       createdMcpJson: false,
     });

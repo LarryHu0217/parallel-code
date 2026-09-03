@@ -24,6 +24,8 @@ export type {
   UsageProvider,
   UsageResult,
   UsageWindow,
+  VerificationRun,
+  VerificationRunStatus,
   WorktreeStatus,
 } from '../../electron/ipc/shared-types';
 

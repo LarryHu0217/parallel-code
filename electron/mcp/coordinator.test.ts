@@ -28,6 +28,8 @@ import {
   mockGetDiffBaseSha,
   mockGitMergeTask,
   mockCreateBackendTask,
+  mockVerifyStart,
+  mockVerifyCancel,
   mockFsMkdir,
   mockOnAgentHookEvent,
   mockWin,
@@ -1547,6 +1549,138 @@ describe('Coordinator land_self', () => {
     expect(coordinator.getTask('task-1')?.landingState).toBe('landing_escalated');
   });
 
+  describe('verify command', () => {
+    const passedRun = {
+      command: 'npm test',
+      status: 'passed' as const,
+      exitCode: 0,
+      headSha: 'sha-1',
+      dirty: false,
+      startedAt: '2026-09-03T10:00:00.000Z',
+      finishedAt: '2026-09-03T10:01:00.000Z',
+      outputTail: 'ok\n',
+    };
+
+    it('runs the command in the task worktree and lands when it passes', async () => {
+      coordinator.registerCoordinator('coord-1', 'proj-1', { verifyCommand: 'npm test' });
+      mockVerifyStart.mockResolvedValueOnce(passedRun);
+
+      await coordinator.landSelf('task-1', { verification, summary: 'done' });
+
+      expect(mockVerifyStart).toHaveBeenCalledWith(
+        expect.objectContaining({
+          key: 'task-1',
+          worktreePath: '/tmp/test',
+          command: 'npm test',
+          env: expect.objectContaining({
+            PARALLEL_CODE_TASK_ID: 'task-1',
+            PARALLEL_CODE_BRANCH: 'task/test',
+          }),
+        }),
+      );
+      expect(vi.mocked(mergeTask)).toHaveBeenCalled();
+      const syncedStatuses = mockNotifyRenderer.mock.calls
+        .filter(([channel]) => channel === 'mcp_task_state_sync')
+        .map(
+          ([, payload]) =>
+            (payload as { verificationRun?: { status: string } }).verificationRun?.status,
+        )
+        .filter(Boolean);
+      expect(syncedStatuses.slice(0, 2)).toEqual(['running', 'passed']);
+    });
+
+    it('escalates with the output tail and refuses to merge when it fails', async () => {
+      coordinator.registerCoordinator('coord-1', 'proj-1', { verifyCommand: 'npm test' });
+      mockVerifyStart.mockResolvedValueOnce({
+        ...passedRun,
+        status: 'failed',
+        exitCode: 1,
+        outputTail: '11 passed\n1 failed: adds numbers\n',
+      });
+
+      const error = await coordinator.landSelf('task-1', { verification }).catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain('Verification failed (exit 1): `npm test`');
+      expect((error as Error).message).toContain('1 failed: adds numbers');
+      expect(vi.mocked(mergeTask)).not.toHaveBeenCalled();
+      expect(coordinator.getTask('task-1')).toMatchObject({
+        landingState: 'landing_escalated',
+        landingReason: expect.stringContaining('1 failed: adds numbers'),
+        verificationRun: expect.objectContaining({ status: 'failed', exitCode: 1 }),
+      });
+    });
+
+    it('skips the check when the coordinator has no verify command', async () => {
+      await coordinator.landSelf('task-1', { verification, summary: 'done' });
+
+      expect(mockVerifyStart).not.toHaveBeenCalled();
+      expect(vi.mocked(mergeTask)).toHaveBeenCalled();
+    });
+
+    it('clears the command when re-registered with an empty string', async () => {
+      coordinator.registerCoordinator('coord-1', 'proj-1', { verifyCommand: 'npm test' });
+      coordinator.registerCoordinator('coord-1', 'proj-1', { verifyCommand: '' });
+
+      await coordinator.landSelf('task-1', { verification, summary: 'done' });
+
+      expect(mockVerifyStart).not.toHaveBeenCalled();
+    });
+
+    it('names the command in the sub-task preamble', async () => {
+      coordinator.registerCoordinator('coord-1', 'proj-1', { verifyCommand: 'npm test' });
+      mockCreateBackendTask.mockResolvedValue({
+        id: 'task-2',
+        branch_name: 'task/two',
+        worktree_path: '/tmp/two',
+      });
+
+      await coordinator.createTask({
+        name: 'two',
+        prompt: 'do more',
+        coordinatorTaskId: 'coord-1',
+      });
+
+      expect(coordinator.getTask('task-2')?.initialPrompt).toContain(
+        'You do not need to run `npm test` yourself: land_self runs it',
+      );
+      expect(coordinator.getTask('task-1')?.initialPrompt).not.toContain('npm test');
+    });
+
+    it('escalates as an error run when the runner cannot start at all', async () => {
+      coordinator.registerCoordinator('coord-1', 'proj-1', { verifyCommand: 'npm test' });
+      mockVerifyStart.mockRejectedValueOnce(new Error('spawn ENOTDIR'));
+
+      await expect(coordinator.landSelf('task-1', { verification })).rejects.toThrow(
+        'Verification error: `npm test` — spawn ENOTDIR',
+      );
+
+      expect(vi.mocked(mergeTask)).not.toHaveBeenCalled();
+      expect(coordinator.getTask('task-1')).toMatchObject({
+        landingState: 'landing_escalated',
+        verificationRun: expect.objectContaining({ status: 'error', message: 'spawn ENOTDIR' }),
+      });
+    });
+
+    it('lets merge_task skip the check after an escalation', async () => {
+      coordinator.registerCoordinator('coord-1', 'proj-1', { verifyCommand: 'npm test' });
+      mockVerifyStart.mockResolvedValueOnce({ ...passedRun, status: 'failed', exitCode: 1 });
+      await coordinator.landSelf('task-1', { verification }).catch(() => undefined);
+      expect(coordinator.getTask('task-1')?.landingState).toBe('landing_escalated');
+
+      await coordinator.mergeTask('task-1', { skipVerification: true });
+
+      expect(mockVerifyStart).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(mergeTask)).toHaveBeenCalled();
+    });
+
+    it('cancels an in-flight run when the task is cleaned up', async () => {
+      await coordinator.closeTask('task-1');
+
+      expect(mockVerifyCancel).toHaveBeenCalledWith('task-1');
+    });
+  });
+
   it('rejects dirty non-preamble worktrees before merging', async () => {
     mockGit(' M src/file.ts\n');
 
@@ -2685,6 +2819,30 @@ describe('Coordinator mergeTask active ownership guard', () => {
     });
 
     expect(vi.mocked(mergeTask)).toHaveBeenCalled();
+  });
+
+  it('runs the verify command before a coordinator-driven merge and escalates on failure', async () => {
+    coordinator.registerCoordinator('coord-1', 'proj-1', { verifyCommand: 'npm test' });
+    await coordinator.createTask({ name: 'test', prompt: 'do', coordinatorTaskId: 'coord-1' });
+    coordinator.signalDone('task-1');
+    mockVerifyStart.mockResolvedValueOnce({
+      command: 'npm test',
+      status: 'timed_out',
+      exitCode: null,
+      headSha: null,
+      dirty: false,
+      startedAt: '2026-09-03T10:00:00.000Z',
+      finishedAt: '2026-09-03T10:10:00.000Z',
+      outputTail: '',
+      message: 'Timed out after 10 min.',
+    });
+
+    await expect(coordinator.mergeTask('task-1')).rejects.toThrow(
+      'Verification timed out: `npm test` — Timed out after 10 min.',
+    );
+
+    expect(vi.mocked(mergeTask)).not.toHaveBeenCalled();
+    expect(coordinator.getTask('task-1')?.landingState).toBe('landing_escalated');
   });
 });
 

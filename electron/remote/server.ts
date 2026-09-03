@@ -590,12 +590,15 @@ function handleMergeTask(ctx: CoordinatorRouteContext, taskId: string): void {
         return ctx.jsonReply(400, { error: 'message must be a string' });
       if (body.cleanup !== undefined && typeof body.cleanup !== 'boolean')
         return ctx.jsonReply(400, { error: 'cleanup must be a boolean' });
+      if (body.skipVerification !== undefined && typeof body.skipVerification !== 'boolean')
+        return ctx.jsonReply(400, { error: 'skipVerification must be a boolean' });
       if (!ctx.requireTask(taskId)) return;
       mcpLog('info', `merge_task id=${taskId} squash=${body.squash ?? false}`);
       const result = await ctx.orch.mergeTask(taskId, {
         squash: body.squash as boolean | undefined,
         message: body.message as string | undefined,
         cleanup: body.cleanup as boolean | undefined,
+        skipVerification: body.skipVerification as boolean | undefined,
       });
       mcpLog('info', `merge_task OK id=${taskId}`);
       ctx.jsonReply(200, result);

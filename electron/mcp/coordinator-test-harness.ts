@@ -54,6 +54,8 @@ const mocks = vi.hoisted(() => {
   const mockGitMergeTask = vi.fn();
   const mockCreateBackendTask = vi.fn();
   const mockDeleteBackendTask = vi.fn();
+  const mockVerifyStart = vi.fn();
+  const mockVerifyCancel = vi.fn();
 
   return {
     mockExecFile,
@@ -86,6 +88,8 @@ const mocks = vi.hoisted(() => {
     mockGitMergeTask,
     mockCreateBackendTask,
     mockDeleteBackendTask,
+    mockVerifyStart,
+    mockVerifyCancel,
   };
 });
 
@@ -200,6 +204,19 @@ vi.mock('../ipc/tasks.js', () => ({
   deleteTask: mocks.mockDeleteBackendTask,
 }));
 
+vi.mock('../ipc/verify.js', () => ({
+  verificationRunner: {
+    start: mocks.mockVerifyStart,
+    cancel: mocks.mockVerifyCancel,
+    isRunning: () => false,
+  },
+  buildVerifyEnv: (args: { taskId: string; branchName?: string; worktreePath: string }) => ({
+    PARALLEL_CODE_TASK_ID: args.taskId,
+    PARALLEL_CODE_BRANCH: args.branchName ?? '',
+    PARALLEL_CODE_WORKTREE: args.worktreePath,
+  }),
+}));
+
 vi.mock('../ipc/channels.js', () => ({
   IPC: {
     MCP_TaskCreated: 'mcp_task_created',
@@ -250,6 +267,8 @@ export const {
   mockGitMergeTask,
   mockCreateBackendTask,
   mockDeleteBackendTask,
+  mockVerifyStart,
+  mockVerifyCancel,
 } = mocks;
 
 export const mockWin = {

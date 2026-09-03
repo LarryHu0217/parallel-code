@@ -1715,9 +1715,12 @@ export async function getWorktreeStatus(
 
   // Resolved base branch name, so the frontend can tell "agent switched to a
   // feature branch" (adoptable) apart from "agent is sitting on main" (not).
-  const [currentBranch, resolvedBaseBranch] = await Promise.all([
+  const [currentBranch, resolvedBaseBranch, headSha] = await Promise.all([
     getCurrentBranchName(worktreePath).catch(() => null),
     baseBranch ?? detectMainBranch(worktreePath).catch(() => null),
+    exec('git', ['rev-parse', 'HEAD'], { cwd: worktreePath })
+      .then(({ stdout }) => stdout.trim() || null)
+      .catch(() => null),
   ]);
 
   const mergeBase = await detectMergeBase(worktreePath, 'HEAD', resolvedBaseBranch ?? undefined);
@@ -1736,6 +1739,7 @@ export async function getWorktreeStatus(
     has_uncommitted_changes: hasUncommittedChanges,
     current_branch: currentBranch,
     base_branch: resolvedBaseBranch,
+    head_sha: headSha,
   };
 }
 

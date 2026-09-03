@@ -1,5 +1,6 @@
 import { produce } from 'solid-js/store';
 import { invoke, Channel } from '../lib/ipc';
+import { asStoreVerificationRun } from '../lib/verification-run';
 import { IPC } from '../../electron/ipc/channels';
 import { store, setStore, cleanupPanelEntries } from './core';
 import { effectiveAgentId } from './agent-select';
@@ -313,6 +314,7 @@ export async function createTask(opts: CreateTaskOptions): Promise<string> {
         skipPermissions: skipPermissions ?? false,
         propagateSkipPermissions: opts.propagateSkipPermissions ?? false,
         maxConcurrentTasks: effectiveMaxConcurrentTasks,
+        verifyCommand: getProject(projectId)?.verifyCommand,
         agentCommand: agentDef.command,
         agentArgs: agentDef.args,
         agentEnvFile: store.agentEnvFiles[agentDef.id],
@@ -327,6 +329,7 @@ export async function createTask(opts: CreateTaskOptions): Promise<string> {
         projectId,
         coordinatorBranch: branchName || undefined,
         worktreePath,
+        verifyCommand: getProject(projectId)?.verifyCommand,
       });
     } catch (err) {
       console.warn('[MCP] Failed to start MCP server for coordinator:', err);
@@ -1285,6 +1288,7 @@ export function initMCPListeners(): () => void {
         signalDoneConsumed?: boolean;
         needsReview?: boolean;
         verification?: Task['verification'];
+        verificationRun?: Task['verificationRun'] | null;
         landingState?: Task['landingState'] | null;
         landingReason?: string | null;
         landingSummary?: string | null;
@@ -1314,6 +1318,13 @@ export function initMCPListeners(): () => void {
           setStore('tasks', evt.taskId, 'needsReview', evt.needsReview);
         if (evt.verification !== undefined)
           setStore('tasks', evt.taskId, 'verification', evt.verification);
+        if (evt.verificationRun !== undefined)
+          setStore(
+            'tasks',
+            evt.taskId,
+            'verificationRun',
+            evt.verificationRun ? asStoreVerificationRun(evt.verificationRun) : undefined,
+          );
         if (evt.landingState !== undefined)
           setStore('tasks', evt.taskId, 'landingState', evt.landingState ?? undefined);
         if (evt.landingReason !== undefined)
@@ -1438,6 +1449,7 @@ export function retryTaskMcpStartup(taskId: string): Promise<void> {
       worktreePath: task.gitIsolation === 'worktree' ? task.worktreePath : undefined,
       skipPermissions: task.skipPermissions ?? false,
       propagateSkipPermissions: task.propagateSkipPermissions ?? false,
+      verifyCommand: getProject(task.projectId)?.verifyCommand,
       agentCommand: agentDef?.command ?? 'claude',
       agentArgs: agentDef?.args ?? [],
       // Sub-tasks are spawned by the coordinator in the main process, which has

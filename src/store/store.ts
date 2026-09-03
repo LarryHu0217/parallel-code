@@ -182,6 +182,13 @@ export { getTaskAgentHookStatus, isTaskUnread, noteAgentTerminalInput } from './
 export type { TaskAgentHookStatus } from './agentHookStatus';
 export { showNotification, clearNotification } from './notification';
 export { startPrChecksSubscription, getPrChecks, type PrChecksState } from './pr-checks';
+export {
+  cancelTaskVerification,
+  getVerificationOutput,
+  getVerifyCommand,
+  runTaskVerification,
+  sendVerificationFailureToAgent,
+} from './verification';
 export { getMergedTasksTodayCount, getMergedLineTotals } from './completion';
 export {
   createTerminal,

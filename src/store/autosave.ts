@@ -77,6 +77,7 @@ export function persistedSnapshot(): string {
               signalDoneConsumed: t.signalDoneConsumed,
               needsReview: t.needsReview,
               verification: t.verification,
+              verificationRun: t.verificationRun,
               landingState: t.landingState,
               landingReason: t.landingReason,
               landingSummary: t.landingSummary,

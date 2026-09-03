@@ -75,6 +75,34 @@ export interface WorktreeStatus {
   /** Resolved base branch (explicit or detected main); null when the worktree
    *  is unreadable. */
   base_branch: string | null;
+  /** HEAD commit sha; lets consumers tell whether a verification run still
+   *  describes the current tree. Absent from older senders, null when unreadable. */
+  head_sha?: string | null;
+}
+
+export type VerificationRunStatus =
+  | 'running'
+  | 'passed'
+  | 'failed'
+  | 'cancelled'
+  | 'timed_out'
+  | 'error';
+
+/** One execution of a project's verify command inside a task worktree. */
+export interface VerificationRun {
+  command: string;
+  status: VerificationRunStatus;
+  exitCode: number | null;
+  /** HEAD sha when the run started; null outside a git checkout. */
+  headSha: string | null;
+  /** True when the worktree had uncommitted changes when the run started. */
+  dirty: boolean;
+  startedAt: string;
+  finishedAt: string | null;
+  /** Bounded tail of combined stdout and stderr, ANSI stripped. */
+  outputTail: string;
+  /** Human-readable reason for `error`, `timed_out` and `cancelled`. */
+  message?: string;
 }
 
 export interface ImportableWorktree {

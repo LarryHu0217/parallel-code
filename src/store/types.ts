@@ -1,4 +1,11 @@
-import type { AgentDef, StepEntry, UsageProvider, UsageWindow, WorktreeStatus } from '../ipc/types';
+import type {
+  AgentDef,
+  StepEntry,
+  UsageProvider,
+  UsageWindow,
+  VerificationRun,
+  WorktreeStatus,
+} from '../ipc/types';
 import type { DockerSource } from '../lib/docker';
 import type { LookPreset, AppearanceMode } from '../lib/look';
 import type { KeyBinding } from '../lib/keybindings';
@@ -73,6 +80,10 @@ export interface Project {
   defaultBaseBranch?: string;
   /** Coverage artifact path relative to the repo root. */
   coverageReportPath?: string;
+  /** Shell command the app runs in a task worktree to verify it (exit 0 = pass).
+   *  Lives in app state on purpose: a repo file could make opening a hostile
+   *  clone run arbitrary commands on the host. */
+  verifyCommand?: string;
   terminalBookmarks?: TerminalBookmark[];
   isGitRepo?: boolean; // undefined treated as true for backward compat
   tasksCollapsed?: boolean; // sidebar task group, defaults to expanded
@@ -163,6 +174,9 @@ export interface Task {
   signalDoneConsumed?: boolean;
   needsReview?: boolean;
   verification?: SubtaskVerification;
+  /** Latest app-run verify command result. Distinct from `verification`,
+   *  which is the agent's self-report through land_self. */
+  verificationRun?: VerificationRun;
   landingState?: LandingState;
   landingReason?: string;
   landingSummary?: string;
@@ -225,6 +239,7 @@ export interface PersistedTask {
   signalDoneConsumed?: boolean;
   needsReview?: boolean;
   verification?: SubtaskVerification;
+  verificationRun?: VerificationRun;
   landingState?: LandingState;
   landingReason?: string;
   landingSummary?: string;

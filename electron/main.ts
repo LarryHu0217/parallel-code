@@ -11,6 +11,7 @@ import { startAgentHookRuntime, stopAgentHookRuntime } from './agent-hooks/runti
 import { killAllAgents } from './ipc/pty.js';
 import { stopAllPlanWatchers } from './ipc/plans.js';
 import { stopAllStepsWatchers } from './ipc/steps.js';
+import { verificationRunner } from './ipc/verify.js';
 import { IPC } from './ipc/channels.js';
 import { resolveUserShell } from './user-shell.js';
 
@@ -283,6 +284,8 @@ app.on('before-quit', (event) => {
 // anything the user still had a chance to cancel.
 app.on('will-quit', () => {
   killAllAgents();
+  // Detached process groups would outlive Electron otherwise.
+  verificationRunner.cancelAll();
   stopAgentHookRuntime();
   stopAllPlanWatchers();
   stopAllStepsWatchers();

@@ -174,11 +174,21 @@ function toPersistedTask(task: Task, agentDefs: AgentDef[], collapsed?: boolean)
     signalDoneConsumed: task.signalDoneConsumed,
     needsReview: task.needsReview,
     verification: task.verification,
+    verificationRun: task.verificationRun,
     landingState: task.landingState,
     landingReason: task.landingReason,
     landingSummary: task.landingSummary,
     landedMetadata: task.landedMetadata,
   };
+}
+
+/** A run that was still in flight when the app quit has no process behind it
+ *  anymore, so it must not be restored as `running`. */
+function restoredVerificationRun(
+  run: PersistedTask['verificationRun'],
+): PersistedTask['verificationRun'] {
+  if (!run || run.status === 'running') return undefined;
+  return run;
 }
 
 export async function saveState(): Promise<void> {
@@ -728,6 +738,7 @@ export async function loadState(): Promise<void> {
           signalDoneConsumed: pt.signalDoneConsumed,
           needsReview: pt.needsReview,
           verification: pt.verification,
+          verificationRun: restoredVerificationRun(pt.verificationRun),
           landingState: pt.landingState,
           landingReason: pt.landingReason,
           landingSummary: pt.landingSummary,
@@ -837,6 +848,7 @@ export async function loadState(): Promise<void> {
           signalDoneConsumed: pt.signalDoneConsumed,
           needsReview: pt.needsReview,
           verification: pt.verification,
+          verificationRun: restoredVerificationRun(pt.verificationRun),
           landingState: pt.landingState,
           landingReason: pt.landingReason,
           landingSummary: pt.landingSummary,

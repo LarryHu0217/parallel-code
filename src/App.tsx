@@ -67,6 +67,7 @@ import {
   markTaskMcpPending,
   applyTaskMcpLaunchResult,
   markTaskMcpError,
+  getProject,
 } from './store/store';
 import { isGitHubUrl } from './lib/github-url';
 import { HoldToQuit } from './components/HoldToQuit';
@@ -425,6 +426,7 @@ function App() {
           skipPermissions: task.skipPermissions ?? false,
           propagateSkipPermissions: task.propagateSkipPermissions ?? false,
           maxConcurrentTasks: task.maxConcurrentTasks,
+          verifyCommand: getProject(task.projectId)?.verifyCommand,
           agentCommand: agentDef?.command ?? 'claude',
           agentArgs: agentDef?.args ?? [],
           agentEnvFile: agentDef ? store.agentEnvFiles[agentDef.id] : undefined,
