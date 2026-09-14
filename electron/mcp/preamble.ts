@@ -10,6 +10,7 @@ import {
   mkdir as fsMkdir,
 } from 'fs/promises';
 import { atomicWriteFile } from './atomic.js';
+import { isKimiCommand } from './agent-args.js';
 import { join } from 'path';
 import os from 'os';
 
@@ -85,7 +86,11 @@ export async function injectSubTaskPreamble(args: {
   queue: PreambleWriteQueue;
 }): Promise<InjectedSubTaskPreamble> {
   const agentCmd = args.agentCommand.toLowerCase();
-  if (agentCmd.includes('codex') || agentCmd.includes('opencode') || agentCmd.includes('kimi')) {
+  if (
+    agentCmd.includes('codex') ||
+    agentCmd.includes('opencode') ||
+    isKimiCommand(args.agentCommand)
+  ) {
     return injectMarkdownPreamble(args.queue, join(args.worktreePath, 'AGENTS.md'));
   }
   if (agentCmd.includes('gemini')) {
