@@ -1,5 +1,6 @@
 import type {
   AgentDef,
+  AutoDiscoveredMcpConfigState,
   StepEntry,
   UsageProvider,
   UsageWindow,
@@ -16,10 +17,7 @@ export type KeybindingOverride = Partial<Pick<KeyBinding, 'key' | 'modifiers'>> 
 
 export type GitIsolationMode = 'worktree' | 'direct' | 'none';
 
-export interface AutoDiscoveredMcpConfigState {
-  path: string;
-  writtenParallelCodeFingerprint: string;
-}
+export type { AutoDiscoveredMcpConfigState } from '../ipc/types';
 
 export interface StagedNotification {
   batchId: string;

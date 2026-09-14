@@ -1,11 +1,7 @@
-import type { VerificationRun } from '../ipc/shared-types.js';
+import type { AutoDiscoveredMcpConfigState, VerificationRun } from '../ipc/shared-types.js';
+export type { AutoDiscoveredMcpConfigState } from '../ipc/shared-types.js';
 
 // Shared types for the MCP coordinating-agent system.
-
-export interface AutoDiscoveredMcpConfigState {
-  path: string;
-  writtenParallelCodeFingerprint: string;
-}
 
 export interface CoordinatedTask {
   id: string;
