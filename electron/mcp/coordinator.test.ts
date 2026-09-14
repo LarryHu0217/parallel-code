@@ -1894,9 +1894,18 @@ describe('Coordinator land_self', () => {
     });
     mockExecFile.mockClear();
 
-    await expect(coordinator.landSelf('task-1', { verification })).rejects.toThrow(
-      'Unable to restore managed Kimi MCP config',
-    );
+    const editedConfig = currentConfig;
+    const failure = await coordinator
+      .landSelf('task-1', { verification })
+      .catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(Error);
+    const message = (failure as Error).message;
+    expect(message).toContain('Unable to restore managed Kimi MCP config');
+    expect(message).toContain(configPath);
+    expect(message).toContain('remove only that entry and retry');
+    expect(message).toContain('keep other MCP servers intact');
+    expect(message).not.toContain('subtask-token');
+    expect(currentConfig).toBe(editedConfig);
 
     expect(vi.mocked(mergeTask)).not.toHaveBeenCalled();
     expect(mockExecFile).not.toHaveBeenCalledWith(
@@ -1940,9 +1949,16 @@ describe('Coordinator land_self', () => {
     });
     mockExecFile.mockClear();
 
-    await expect(coordinator.mergeTask('task-1')).rejects.toThrow(
-      'Unable to restore managed Kimi MCP config',
-    );
+    const editedConfig = currentConfig;
+    const failure = await coordinator.mergeTask('task-1').catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(Error);
+    const message = (failure as Error).message;
+    expect(message).toContain('Unable to restore managed Kimi MCP config');
+    expect(message).toContain(configPath);
+    expect(message).toContain('remove only that entry and retry');
+    expect(message).toContain('Do not commit this config or its tokens');
+    expect(message).not.toContain('subtask-token');
+    expect(currentConfig).toBe(editedConfig);
 
     expect(mockExecFile).not.toHaveBeenCalledWith(
       'git',

@@ -2063,6 +2063,16 @@ export class Coordinator {
     }
   }
 
+  private kimiMcpRecoveryError(task: CoordinatedTask, operation: string): string {
+    const configPath =
+      task.autoDiscoveredMcpConfig?.path ?? join(task.worktreePath, '.kimi-code', 'mcp.json');
+    return (
+      `Unable to restore managed Kimi MCP config before ${operation}; refusing to validate, stage or merge a worktree that may contain ephemeral MCP tokens. ` +
+      `Inspect ${configPath}. If you edited mcpServers["parallel-code"], preserve any intentional changes securely outside the worktree, then remove only that entry and retry; keep other MCP servers intact. ` +
+      'If the entry was not edited, check that the config is valid JSON and its directory is writable before retrying. Do not commit this config or its tokens.'
+    );
+  }
+
   private refreshTaskMcpConfigAfterLandingFailure(task: CoordinatedTask): void {
     try {
       this.rewriteHydratedSubtaskMcpConfig(
@@ -2174,8 +2184,7 @@ export class Coordinator {
       // back. The write refuses to touch an entry it does not own, so a
       // fingerprint mismatch stays untouched; landing fails closed either way.
       this.refreshTaskMcpConfigAfterLandingFailure(task);
-      const reason =
-        'Unable to restore managed Kimi MCP config before self-landing; refusing to validate or merge a worktree that may contain ephemeral MCP tokens.';
+      const reason = this.kimiMcpRecoveryError(task, 'self-landing');
       this.escalateLanding(task, 'landing_escalated', reason);
       throw new Error(reason);
     }
@@ -2295,9 +2304,7 @@ export class Coordinator {
     const restoreMcpConfig = this.restoreTaskAutoDiscoveredMcpConfig(task);
     if (restoreMcpConfig.status === 'failed') {
       this.refreshTaskMcpConfigAfterLandingFailure(task);
-      throw new Error(
-        'Unable to restore managed Kimi MCP config before merge; refusing to stage or merge a worktree that may contain ephemeral MCP tokens.',
-      );
+      throw new Error(this.kimiMcpRecoveryError(task, 'merge'));
     }
     if (restoreMcpConfig.managedEntry !== undefined) {
       try {
