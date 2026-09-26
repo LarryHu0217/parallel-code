@@ -82,10 +82,15 @@ When you're happy with the result, merge the branch back to main from the sideba
 - Tiled panel layout with drag-to-reorder
 - **Focus mode** — single-task layout with a clean two-column view on wide screens (`Ctrl+Shift+F`)
 - Built-in diff viewer with inline review comments and per-commit navigation
+- **Guided change tour** — click **Generate tour of changes** at the bottom right of a task's Changed Files panel to generate in the background while you work. **Automatic** scope includes the whole feature branch against its configured or detected base, including uncommitted work; on `main`, `master`, and `develop`, it includes only uncommitted changes. Choose **Current diff** to explicitly use the commit selector (All, Uncommitted, or a single commit). Uncaptured context stays omitted when reading a captured tour. Hover or focus the button for an explanation and the configured provider/model. The button shows a spinner and progress, then a green checkmark and **Start tour** when ready. Click **Start tour** to open the diff captured for the tour; it never opens automatically. Completed tours remain available when you close and reopen the tour; clicking the loading button cancels generation. Uses your configured code Q&A provider, aiming for 4–6 concise stops in one request with a dedicated 500,000-character prompt budget; inline Q&A keeps its 50,000-character limit. This is an app guard, not an exact token limit—provider context limits still apply. Larger diffs use compact excerpts and a five-minute timeout per part. Claude tour prompts are piped through stdin to avoid command-line size limits. Verbose logs include request sizes, time to first output, and total request duration, without code or response contents. Tours describe the supplied diff and do not verify test execution. Each stop is a card with a role label and a tone that flags risky or uncertain changes; **Ask** and **Go deeper** answer follow-ups under a stop with the diff as context. Jump between stops from the progress strip, or with the arrow keys and Home/End while the tour has focus. The button shows **Resume tour** when you left midway.
+- **All tours** — click a progress segment to jump to that card (a dot marks cards with answered follow-ups), copy the tour with its answers as Markdown, or **Rework** it with your own instructions ("focus on error handling", "for a newcomer"), which regenerates it from the same context. Code references open at their line when your editor command is VS Code, Cursor, VSCodium, Windsurf, Zed or Sublime Text; other editors open the file.
+- **Understanding tours** — **Take Tour** beside **Review Plan** (and in the plan viewer's header) explains the plan; **Understand** on a changed-file row explains that file. Both open a short card tour: a gist, then 3–7 cards with **Ask** and **Go deeper**, which generate a small branch you return from. They use the same code Q&A provider setting as the change tour and inline Q&A, and run without tools: a plan tour sends the plan markdown, a file tour sends the file plus its direct imports (size-capped; anything omitted is listed on the gist card). Tours live in memory for as long as the task panel is open and are discarded when you switch tasks. A reopened file tour whose file has changed shows a **Regenerate** notice instead of silently going stale. Free-form subsystem questions ("how does X work?") are not supported yet.
 - **Steps tracking panel** — engineering-manager-style timeline of agent progress (writes to `.claude/steps.json`)
 - **Notes panel per task** — jot ideas, then send the notes straight to the agent as a prompt
 - **Canvas per task** — a Markdown file from the worktree rendered live as the agent writes it; edit it in place, or select a passage and send it to the agent with your question
+- **Browser preview in the canvas** — run a local app in the task shell, open **+ → Browser**, and pick elements to reference in your prompt ([usage and limits](docs/browser-preview.md))
 - **PR CI status watcher** — desktop notification when GitHub checks settle
+- **Super Productivity integration** — the task you focus is tracked in Super Productivity (a matching task is created there on first focus, in the Super Productivity project you link in project settings), titles stay in sync, and merging or closing a task marks it done there. A task Super Productivity is already tracking that isn't a Parallel Code task is never replaced — a banner offers to switch instead. Connect in Settings with the token from Super Productivity's Local REST API (Settings → Misc; the API must stay turned on). With Super Productivity's bundled **Parallel Code** plugin enabled, **Start in Parallel Code** on a task opens a pre-filled New Task form here; that link needs the macOS app or the `.deb` (an AppImage only handles it if it was integrated into your desktop).
 - Shell terminals per task, scoped to the worktree
 - **Direct mode** for working on the main branch without isolation, plus support for **folders without a git repo**
 - **Existing worktree import** — bring already-created worktrees into Parallel Code
@@ -157,6 +162,8 @@ npm run dev
 
 Requires [Node.js](https://nodejs.org/) v18+.
 
+Phone access uses port `8777` in development (`npm run dev`) and `7777` in the installed app, so both can run together. Run `npm run build:remote` after changing the mobile UI, then use **Connect Phone** in the development app to get its connection link or QR code.
+
 </details>
 
 <details>
@@ -172,7 +179,7 @@ Requires [Node.js](https://nodejs.org/) v18+.
 | `Ctrl+Enter`           | Send prompt                        |
 | `Ctrl+Shift+M`         | Merge task to main                 |
 | `Ctrl+Shift+P`         | Push to remote                     |
-| `Ctrl+W`               | Close focused terminal session     |
+| `Ctrl+W`               | Close focused panel or file        |
 | `Ctrl+Shift+W`         | Close active task                  |
 | **Navigation**         |                                    |
 | `Alt+Arrows`           | Focus pane/task in arrow direction |

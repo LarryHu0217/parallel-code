@@ -1,7 +1,13 @@
 // HTTP client wrapper for calling the remote server API.
 // Used by the MCP server to delegate tool calls to the Electron app.
 
+import type { MindMapDocument, MindMapUpdate } from '../shared/mindmap.js';
+import type { CanvasView } from '../shared/canvas-view.js';
+import type { AgentTourPayload } from '../shared/agent-tour.js';
+import type { ReasoningDocument } from '../shared/reasoning.js';
+import type { ReasoningUpdate } from '../shared/reasoning-state.js';
 import { randomUUID } from 'crypto';
+import type { SignalDoneInput, SignalDoneResult } from '../shared/completion-report.js';
 import type {
   ApiTaskSummary,
   ApiTaskDetail,
@@ -43,6 +49,10 @@ export class MCPClient {
     }
 
     return (await res.json()) as T;
+  }
+
+  async callSessionTool(name: string, params: Record<string, unknown>): Promise<unknown> {
+    return this.request<unknown>('POST', '/api/session/tools', { name, params });
   }
 
   async createTask(opts: {
@@ -111,8 +121,33 @@ export class MCPClient {
     await this.request<unknown>('DELETE', `/api/tasks/${encodeURIComponent(taskId)}`);
   }
 
-  async signalDone(taskId: string): Promise<void> {
-    await this.taskOwnerRequest('POST', `/api/tasks/${encodeURIComponent(taskId)}/done`, {});
+  async readMindMap(taskId: string): Promise<MindMapDocument> {
+    return this.taskOwnerRequest('GET', `/api/mindmaps/${encodeURIComponent(taskId)}`);
+  }
+  async readReasoning(taskId: string): Promise<ReasoningDocument> {
+    return this.taskOwnerRequest('GET', `/api/reasoning/${encodeURIComponent(taskId)}`);
+  }
+  async updateReasoning(taskId: string, update: ReasoningUpdate): Promise<ReasoningDocument> {
+    return this.taskOwnerRequest('POST', `/api/reasoning/${encodeURIComponent(taskId)}`, update);
+  }
+
+  async updateMindMap(taskId: string, update: MindMapUpdate): Promise<MindMapDocument> {
+    return this.taskOwnerRequest('POST', `/api/mindmaps/${encodeURIComponent(taskId)}`, update);
+  }
+
+  async openCanvas(taskId: string, view: CanvasView): Promise<{ ok: true; view: CanvasView }> {
+    return this.taskOwnerRequest('POST', `/api/canvas/${encodeURIComponent(taskId)}`, { view });
+  }
+
+  async publishTour(
+    taskId: string,
+    payload: AgentTourPayload,
+  ): Promise<{ ok: true; subject: string }> {
+    return this.taskOwnerRequest('POST', `/api/tours/${encodeURIComponent(taskId)}`, payload);
+  }
+
+  async signalDone(taskId: string, input: SignalDoneInput): Promise<SignalDoneResult> {
+    return this.taskOwnerRequest('POST', `/api/tasks/${encodeURIComponent(taskId)}/done`, input);
   }
 
   async landSelf(taskId: string, input: LandSelfInput): Promise<ApiLandSelfResult> {
@@ -123,7 +158,7 @@ export class MCPClient {
     );
   }
 
-  private async taskOwnerRequest<T>(method: string, path: string, body: unknown): Promise<T> {
+  private async taskOwnerRequest<T>(method: string, path: string, body?: unknown): Promise<T> {
     const url = `${this.baseUrl}${path}`;
     const headers: Record<string, string> = {
       Authorization: `Bearer ${this.token}`,
@@ -132,6 +167,7 @@ export class MCPClient {
     // Per-task done token is sent as X-Done-Token so the server can verify task ownership
     // without needing per-task bearer token classification.
     if (this.doneToken) headers['X-Done-Token'] = this.doneToken;
+    if (this.coordinatorId) headers['X-Coordinator-Id'] = this.coordinatorId;
     const res = await fetch(url, { method, headers, body: JSON.stringify(body) });
     if (!res.ok) {
       const text = await res.text().catch(() => '');

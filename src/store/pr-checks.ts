@@ -1,10 +1,10 @@
 import { createEffect, onCleanup } from 'solid-js';
-import { createStore, produce, unwrap } from 'solid-js/store';
 import { setStore, store } from './core';
 import { fireAndForget, invoke } from '../lib/ipc';
 import { IPC } from '../../electron/ipc/channels';
 import { parseGitHubUrl } from '../lib/github-url';
 import { saveState } from './persistence';
+import { removePrChecks, setPrChecks } from './pr-checks-state';
 import type {
   BranchPrDetectionResult,
   PrChecksOverall,
@@ -13,39 +13,12 @@ import type {
 } from '../ipc/types';
 import type { Task } from './types';
 
-export interface PrChecksState {
-  overall: PrChecksOverall;
-  isDraft?: boolean;
-  reviewDecision?: PrChecksUpdatePayload['reviewDecision'];
-  passing: number;
-  pending: number;
-  failing: number;
-  checks: PrCheckRun[];
-  checkedAt: string;
-}
-
-// createStore gives fine-grained per-key reactivity: updating one task's state
-// only re-runs accessors that read that task's key, not every PR-aware view.
-const [prChecks, setPrChecksStore] = createStore<Record<string, PrChecksState>>({});
+export { getPrChecks, type PrChecksState } from './pr-checks-state';
 const BRANCH_PR_DETECT_INTERVAL_MS = 60_000;
 const BRANCH_PR_DETECT_RETRY_MS = 2 * 60_000;
-
-export function getPrChecks(taskId: string): PrChecksState | undefined {
-  return prChecks[taskId];
-}
-
-function setPrChecks(taskId: string, next: PrChecksState): void {
-  setPrChecksStore(taskId, next);
-}
-
-function removePrChecks(taskId: string): void {
-  if (!(taskId in unwrap(prChecks))) return;
-  setPrChecksStore(
-    produce((s) => {
-      delete s[taskId];
-    }),
-  );
-}
+// Each probe spawns `git remote` + `gh pr list`; cap them so a startup scan
+// over many tasks doesn't burst dozens of processes and GitHub API calls.
+const MAX_CONCURRENT_BRANCH_PROBES = 4;
 
 function parsePrUrl(url: string | undefined): string | null {
   if (!url) return null;
@@ -129,6 +102,8 @@ export function startPrChecksSubscription(): () => void {
       })
       .finally(() => {
         pendingBranchProbes.delete(taskId);
+        // Hand the freed slot to a task the capped scan skipped.
+        scanForBranchPrs();
       });
   };
 
@@ -152,6 +127,7 @@ export function startPrChecksSubscription(): () => void {
       ) {
         continue;
       }
+      if (pendingBranchProbes.size >= MAX_CONCURRENT_BRANCH_PROBES) continue;
       branchProbeByTaskId.set(taskId, { key: candidate.key, attemptedAt: now });
       detectBranchPr(taskId, candidate);
     }

@@ -4,6 +4,25 @@ import { persistedSnapshot } from './autosave';
 import type { Task } from './types';
 
 describe('autosave snapshot includes new-task-default fields', () => {
+  it('preferUiMode changes the snapshot', () => {
+    setStore('preferUiMode', false);
+    const before = persistedSnapshot();
+    setStore('preferUiMode', true);
+    try {
+      expect(persistedSnapshot()).not.toBe(before);
+    } finally {
+      setStore('preferUiMode', false);
+    }
+  });
+
+  it('mcpOrchestrationEnabled changes the snapshot', () => {
+    setStore('mcpOrchestrationEnabled', true);
+    const before = persistedSnapshot();
+    setStore('mcpOrchestrationEnabled', false);
+    expect(persistedSnapshot()).not.toBe(before);
+    setStore('mcpOrchestrationEnabled', true);
+  });
+
   it('defaultStepsEnabled changes the snapshot', () => {
     setStore('defaultStepsEnabled', false);
     const before = persistedSnapshot();
@@ -20,6 +39,14 @@ describe('autosave snapshot includes new-task-default fields', () => {
     const after = persistedSnapshot();
     expect(before).not.toBe(after);
     setStore('defaultSkipPermissions', false);
+  });
+
+  it('canvasOwnershipBadges changes the snapshot', () => {
+    setStore('canvasOwnershipBadges', true);
+    const before = persistedSnapshot();
+    setStore('canvasOwnershipBadges', false);
+    expect(persistedSnapshot()).not.toBe(before);
+    setStore('canvasOwnershipBadges', true);
   });
 
   it('defaultPropagateSkipPermissions changes the snapshot', () => {
@@ -42,6 +69,37 @@ describe('autosave snapshot includes new-task-default fields', () => {
 
   it('showSteps is not tracked separately (migrated to defaultStepsEnabled)', () => {
     expect('showSteps' in store).toBe(false);
+  });
+
+  it('a Super Productivity link changes the snapshot', () => {
+    // Links are made in the background (first focus, title sync); if they were
+    // left out, a crash before the next unrelated save would lose the link and
+    // the next focus would create a duplicate task over there.
+    const taskId = 'autosave-sp-task';
+    setStore('tasks', taskId, {
+      id: taskId,
+      name: taskId,
+      projectId: 'p1',
+      branchName: 'task/sp',
+      worktreePath: '/tmp/autosave-sp-task',
+      agentIds: [],
+      shellAgentIds: [],
+      notes: '',
+      lastPrompt: '',
+      gitIsolation: 'worktree',
+    } as Task);
+    setStore('taskOrder', (order) => [...order, taskId]);
+    try {
+      const before = persistedSnapshot();
+      setStore('tasks', taskId, 'superProductivity', { taskId: 'sp-1', syncedTitle: 'x' });
+      const linked = persistedSnapshot();
+      expect(linked).not.toBe(before);
+      setStore('tasks', taskId, 'superProductivity', 'syncedTitle', 'y');
+      expect(persistedSnapshot()).not.toBe(linked);
+    } finally {
+      setStore('taskOrder', (order) => order.filter((id) => id !== taskId));
+      setStore('tasks', taskId, undefined as unknown as Task);
+    }
   });
 
   it('branch adoption banner fields change the snapshot', () => {
@@ -80,7 +138,15 @@ describe('autosave snapshot includes new-task-default fields', () => {
     }
   });
 
-  it('an unsent prompt draft changes the snapshot', () => {
+  it.each([
+    'promptDraft',
+    'browserUrl',
+    'promptHistory',
+    'autoMergeChildren',
+    'autoSendChildUpdates',
+    'propagateSkipPermissions',
+    'maxConcurrentTasks',
+  ] as const)('%s changes the snapshot', (field) => {
     const taskId = 'autosave-draft-task';
     const task: Task = {
       id: taskId,
@@ -98,7 +164,19 @@ describe('autosave snapshot includes new-task-default fields', () => {
     setStore('taskOrder', (order) => [...order, taskId]);
     try {
       const before = persistedSnapshot();
-      setStore('tasks', taskId, 'promptDraft', 'half-written thought');
+      if (field === 'promptHistory') {
+        setStore('tasks', taskId, 'promptHistory', [{ text: 'Repeated prompt', sentAt: 1 }]);
+      } else if (field === 'maxConcurrentTasks') {
+        setStore('tasks', taskId, field, 5);
+      } else if (
+        field === 'autoMergeChildren' ||
+        field === 'autoSendChildUpdates' ||
+        field === 'propagateSkipPermissions'
+      ) {
+        setStore('tasks', taskId, field, true);
+      } else {
+        setStore('tasks', taskId, field, 'changed persisted value');
+      }
       expect(persistedSnapshot()).not.toBe(before);
     } finally {
       setStore('taskOrder', (order) => order.filter((id) => id !== taskId));

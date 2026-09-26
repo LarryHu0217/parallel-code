@@ -2,7 +2,7 @@ import { Show } from 'solid-js';
 import { formatRelativeAge } from '../lib/relativeAge';
 import { sf } from '../lib/fontScale';
 import { theme } from '../lib/theme';
-import type { TaskAgentHookStatus } from '../store/agentHookStatus';
+import { formatAgentHookTooltip, type TaskAgentHookStatus } from '../store/agentHookStatus';
 
 interface TaskAgentStatusLineProps {
   status: TaskAgentHookStatus | null;
@@ -29,11 +29,24 @@ export function describeAgentStatus(status: TaskAgentHookStatus): AgentStatusDes
   if (status.event === 'Interrupt') {
     return { label: 'Interrupted', text: '', color: theme.fgMuted };
   }
-  // A session that just started or resumed is idle, not finished with anything.
   if (status.event === 'SessionStart') {
-    return { label: 'Idle', text: '', color: theme.fgMuted };
+    return { label: 'Session ready', text: '', color: theme.fgMuted };
   }
-  return { label: 'Done', text: status.lastAssistantMessage ?? '', color: theme.fgMuted };
+  if (status.event === 'StopFailure') {
+    return {
+      label: 'Turn failed',
+      text: status.detail ?? status.lastAssistantMessage ?? '',
+      color: theme.error,
+    };
+  }
+  if (status.event === 'Stop') {
+    return {
+      label: 'Turn finished',
+      text: status.lastAssistantMessage ?? '',
+      color: theme.fgMuted,
+    };
+  }
+  return { label: 'Ready for input', text: status.detail ?? '', color: theme.fgMuted };
 }
 
 /** Sidebar second line fed by hook events; nothing renders for agents without them. */
@@ -43,8 +56,7 @@ export function TaskAgentStatusLine(props: TaskAgentStatusLineProps) {
       {(status) => {
         const described = () => describeAgentStatus(status());
         const age = () => formatRelativeAge(status().since, props.nowMs);
-        const title = () =>
-          `${described().label}${described().text ? `: ${described().text}` : ''} (${age()})`;
+        const title = () => formatAgentHookTooltip(status(), props.nowMs);
         return (
           <div
             class="task-agent-status"

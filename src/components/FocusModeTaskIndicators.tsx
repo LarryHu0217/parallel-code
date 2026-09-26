@@ -1,5 +1,12 @@
 import { For, Show } from 'solid-js';
-import { getTaskAttentionState, getTaskDotStatus, setActiveTask, store } from '../store/store';
+import {
+  getTaskAttentionState,
+  getTaskDotStatus,
+  activateTaskFromPointer,
+  store,
+} from '../store/store';
+import { openPanelOrder } from '../store/navigation';
+import { documentAgentTaskId } from '../documents/task-id';
 import { StatusDot } from './StatusDot';
 
 /** Title-bar switcher: one named pill per open item. The active pill is
@@ -7,10 +14,16 @@ import { StatusDot } from './StatusDot';
  *  the bar doubles as an at-a-glance overview. */
 export function FocusModeTaskIndicators() {
   const items = () =>
-    store.taskOrder.map((id) => ({
+    openPanelOrder().map((id) => ({
       id,
       isTask: Boolean(store.tasks[id]),
-      name: store.tasks[id]?.name ?? store.terminals[id]?.name ?? 'Open item',
+      name:
+        (store.activeDocumentProjectId && id === documentAgentTaskId(store.activeDocumentProjectId)
+          ? store.projects.find((p) => p.id === store.activeDocumentProjectId)?.name
+          : undefined) ??
+        store.tasks[id]?.name ??
+        store.terminals[id]?.name ??
+        'Open item',
     }));
 
   return (
@@ -24,7 +37,7 @@ export function FocusModeTaskIndicators() {
                 type="button"
                 class={`focus-mode-task-indicator${isActive() ? ' active' : ''}`}
                 onMouseDown={(event) => event.stopPropagation()}
-                onClick={() => setActiveTask(item.id)}
+                onClick={() => activateTaskFromPointer(item.id)}
                 title={isActive() ? `${item.name} (current)` : `Switch to ${item.name}`}
                 aria-label={isActive() ? `${item.name}, current item` : `Switch to ${item.name}`}
                 aria-current={isActive() ? 'true' : undefined}
@@ -32,6 +45,7 @@ export function FocusModeTaskIndicators() {
                 <Show when={item.isTask}>
                   <StatusDot
                     status={getTaskDotStatus(item.id)}
+                    taskId={item.id}
                     size="sm"
                     attention={getTaskAttentionState(item.id)}
                   />

@@ -3,11 +3,10 @@ import {
   store,
   closeTerminal,
   updateTerminalName,
-  setActiveTask,
+  activateTaskFromPointer,
   reorderTask,
   registerFocusFn,
   unregisterFocusFn,
-  triggerFocus,
   setTaskFocusedPanel,
   isPanelFocused,
 } from '../store/store';
@@ -18,6 +17,7 @@ import { CloseIcon } from './icons';
 import { theme } from '../lib/theme';
 import { handleDragReorder } from '../lib/dragReorder';
 import type { Terminal } from '../store/types';
+import { scheduleTaskFocus } from '../store/focused-panel';
 
 interface TerminalPanelProps {
   terminal: Terminal;
@@ -43,7 +43,7 @@ export function TerminalPanel(props: TerminalPanelProps) {
   createEffect(() => {
     if (!props.isActive) return;
     const panel = store.focusedPanel[props.terminal.id] ?? 'terminal';
-    triggerFocus(`${props.terminal.id}:${panel}`);
+    scheduleTaskFocus(props.terminal.id, panel);
   });
 
   function handleTitleMouseDown(e: MouseEvent) {
@@ -51,7 +51,7 @@ export function TerminalPanel(props: TerminalPanelProps) {
       itemId: props.terminal.id,
       getTaskOrder: () => store.taskOrder,
       onReorder: reorderTask,
-      onTap: () => setActiveTask(props.terminal.id),
+      onTap: () => activateTaskFromPointer(props.terminal.id),
     });
   }
 
@@ -69,7 +69,7 @@ export function TerminalPanel(props: TerminalPanelProps) {
         overflow: 'clip',
         position: 'relative',
       }}
-      onClick={() => setActiveTask(props.terminal.id)}
+      onClick={() => activateTaskFromPointer(props.terminal.id)}
     >
       {/* Title bar */}
       <div

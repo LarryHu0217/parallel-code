@@ -11,39 +11,36 @@ import {
 import { theme } from '../lib/theme';
 import { sf } from '../lib/fontScale';
 import { useFocusRegistration } from '../lib/focus-registration';
+import { UnderstandButton } from './understanding/UnderstandButton';
+import { HoverHint } from './understanding/HoverHint';
+import {
+  planTourSubject,
+  type UnderstandingTourController,
+} from '../lib/create-understanding-tour';
 import type { Task } from '../store/types';
 
 interface TaskNotesBodyProps {
   task: Task;
   agentId: string;
   onPlanFullscreen: () => void;
+  understanding: UnderstandingTourController;
+  onPlanTour: () => void;
+  /** Opens the tour the agent published for this task, if there is one. */
+  onAgentTour?: () => void;
 }
 
-/** Inset of the floating controls from the notes panel's bottom-right corner. */
+/** Inset of the send button from the notes panel's bottom-right corner. */
 const OVERLAY_INSET = '6px';
 
-const overlayRowStyle: JSX.CSSProperties = {
+const sendButtonStyle: JSX.CSSProperties = {
   position: 'absolute',
   bottom: OVERLAY_INSET,
   right: OVERLAY_INSET,
-  display: 'flex',
-  'align-items': 'center',
-  gap: '6px',
   'z-index': '1',
 };
 
-// Opaque, so a long note runs behind the button rather than through it.
-const planButtonStyle: JSX.CSSProperties = {
-  padding: '4px 10px',
-  'font-size': sf(11),
-  'font-family': "'JetBrains Mono', monospace",
-  'line-height': '1',
-  background: `color-mix(in srgb, ${theme.accent} 12%, ${theme.bgInput})`,
-  color: theme.fg,
-  border: `1px solid color-mix(in srgb, ${theme.accent} 25%, ${theme.border})`,
-  'border-radius': 'var(--radius-sm)',
-  cursor: 'pointer',
-};
+/** What the footer bar adds: `.change-tour-action` min-height plus its border-top. */
+const TOUR_FOOTER_HEIGHT = 31;
 
 export function TaskNotesBody(props: TaskNotesBodyProps) {
   const [sendingNotes, setSendingNotes] = createSignal(false);
@@ -76,7 +73,14 @@ export function TaskNotesBody(props: TaskNotesBodyProps) {
 
   // Keep empty notes compact; plans open in the viewer from the button.
   const isEmpty = () => !props.task.notes?.trim();
-  const intrinsicHeight = () => (isEmpty() ? '56px' : store.focusMode ? '240px' : '140px');
+  const showPlanActions = () => !!(store.showPlans && props.task.planContent);
+  /** Worktree-relative, so the hint shows which of the plan folders it came from. */
+  const planFile = () => props.task.planPath ?? props.task.planFileName ?? 'plan.md';
+  const showTourFooter = () => showPlanActions() || !!props.task.agentTour;
+  const intrinsicHeight = () => {
+    const editor = isEmpty() ? 56 : store.focusMode ? 240 : 140;
+    return `${editor + (showTourFooter() ? TOUR_FOOTER_HEIGHT : 0)}px`;
+  };
 
   return (
     <div
@@ -120,7 +124,7 @@ export function TaskNotesBody(props: TaskNotesBodyProps) {
             outline: 'none',
           }}
         />
-        <div style={overlayRowStyle}>
+        <div style={sendButtonStyle}>
           <button
             class="send-notes-btn"
             type="button"
@@ -153,20 +157,68 @@ export function TaskNotesBody(props: TaskNotesBodyProps) {
               />
             </svg>
           </button>
-          <Show when={store.showPlans && props.task.planContent}>
-            <button
-              type="button"
-              class="btn-secondary review-plan-btn"
-              style={planButtonStyle}
-              title={props.task.planFileName ? `Review ${props.task.planFileName}` : 'Review plan'}
-              aria-haspopup="dialog"
-              onClick={() => props.onPlanFullscreen()}
-            >
-              Review Plan
-            </button>
-          </Show>
         </div>
       </div>
+      {/* The same flat bar the Changed Files panel uses for its Change Tour, so
+          these actions sit beside the note instead of covering the text in it. */}
+      <Show when={showTourFooter()}>
+        <div class="change-tour-footer notes-tour-footer">
+          <div class="change-tour-row">
+            <Show when={showPlanActions()}>
+              {/* Which file the app settled on is not obvious from the button, and
+                  a worktree can hold several candidates; the hint names it. */}
+              <HoverHint
+                hint={() => (
+                  <>
+                    <strong class="tour-hint-heading">Plan for this task</strong>
+                    <code class="tour-hint-subject" title={planFile()}>
+                      {planFile()}
+                    </code>
+                    <p class="tour-hint-body">
+                      Detected automatically: the most recently changed plan file in this worktree.
+                      Writing a newer one replaces it here.
+                    </p>
+                    <p class="tour-hint-action">Click to open it.</p>
+                  </>
+                )}
+              >
+                {(describedBy) => (
+                  <button
+                    type="button"
+                    class="change-tour-action"
+                    aria-haspopup="dialog"
+                    aria-describedby={describedBy()}
+                    onClick={() => props.onPlanFullscreen()}
+                  >
+                    <span class="change-tour-action-label">Review Plan</span>
+                  </button>
+                )}
+              </HoverHint>
+              <UnderstandButton
+                label="Take Tour"
+                tour={props.understanding}
+                kind="plan"
+                subject={planTourSubject(props.task)}
+                onClick={() => props.onPlanTour()}
+                modelMenu
+              />
+            </Show>
+            {/* The agent publishes a tour on request; the button keeps it reachable
+                after the viewer is closed. */}
+            <Show when={props.task.agentTour}>
+              {(agentTour) => (
+                <UnderstandButton
+                  label="Agent Tour"
+                  tour={props.understanding}
+                  kind="agent"
+                  subject={agentTour().payload.subject}
+                  onClick={() => props.onAgentTour?.()}
+                />
+              )}
+            </Show>
+          </div>
+        </div>
+      </Show>
     </div>
   );
 }

@@ -1,4 +1,14 @@
-import { createSignal, createEffect, on, Show, onMount, onCleanup, untrack, batch } from 'solid-js';
+import {
+  createSignal,
+  createEffect,
+  createMemo,
+  on,
+  Show,
+  onMount,
+  onCleanup,
+  untrack,
+  batch,
+} from 'solid-js';
 import { fireAndForget, invoke } from '../lib/ipc';
 import { IPC } from '../../electron/ipc/channels';
 import {
@@ -29,7 +39,12 @@ import {
   setTaskTerminalInputPending,
   showNotification,
 } from '../store/store';
-import { clearStagedNotification, setTaskTerminalInputPendingFromQuestion } from '../store/tasks';
+import {
+  clearStagedNotification,
+  setStagedNotificationUserEdited,
+  setTaskTerminalInputPendingFromQuestion,
+} from '../store/tasks';
+import { taskUsesAgentChat } from '../store/agent-chat';
 import { isLandedTaskState } from '../store/landing';
 import { processAutoFireTick } from './autofire-tick';
 import {
@@ -59,7 +74,7 @@ interface PromptInputProps {
   taskName: string;
   agentId: string;
   coordinatedBy?: string;
-  coordinatorMode?: boolean;
+  autoSendChildUpdates?: boolean;
   controlledBy?: 'human' | 'coordinator';
   stagedNotification?: StagedNotification;
   nowMs?: () => number;
@@ -128,6 +143,17 @@ export function PromptInput(props: PromptInputProps) {
   // restarts a fresh attempt rather than treating the prompt as delivered.
   const [autoSendRetry, setAutoSendRetry] = createSignal(0);
   let cleanupAutoSend: (() => void) | undefined;
+  // Re-read only when the agent (re)starts: a send in this session also marks the
+  // agent prompted and must not block its own retry, while a failed resume that
+  // falls back to a fresh session (resumed=false) must get the prompt again.
+  const deliveredBeforeRestart = createMemo(() => {
+    void store.agents[props.agentId]?.generation;
+    return untrack(
+      () =>
+        store.agents[props.agentId]?.resumed === true &&
+        (store.tasks[props.taskId]?.promptedAgentIds?.includes(props.agentId) ?? false),
+    );
+  });
 
   // Debug: log whenever controlledBy changes (verbose-gated; forwards to /tmp/out via main process)
   createEffect(() => {
@@ -177,6 +203,7 @@ export function PromptInput(props: PromptInputProps) {
       !shouldRendererAutoSendInitialPrompt({
         coordinatedBy: props.coordinatedBy,
         initialPrompt: props.initialPrompt,
+        deliveredBeforeRestart: deliveredBeforeRestart(),
       })
     ) {
       return;
@@ -430,16 +457,34 @@ export function PromptInput(props: PromptInputProps) {
 
   // --- Staged coordinator notification auto-fire ---
   let autoFireInterval: number | undefined;
+  let autoFireAbortController: AbortController | undefined;
+  createEffect(() => {
+    if (!props.autoSendChildUpdates || !store.mcpOrchestrationEnabled) {
+      autoFireAbortController?.abort();
+    }
+  });
+  onCleanup(() => autoFireAbortController?.abort());
   function executeAutoFire(staged: NonNullable<typeof props.stagedNotification>) {
+    if (!props.autoSendChildUpdates || !store.mcpOrchestrationEnabled) return;
     if (autoFireInterval !== undefined) {
       clearInterval(autoFireInterval);
       autoFireInterval = undefined;
     }
     const taskId = props.taskId;
     const agentId = props.agentId;
+    autoFireAbortController?.abort();
+    const controller = new AbortController();
+    autoFireAbortController = controller;
+    const holdCanceledBatch = () => {
+      if (props.stagedNotification?.batchId === staged.batchId) {
+        setStagedNotificationUserEdited(taskId);
+      }
+    };
+    controller.signal.addEventListener('abort', holdCanceledBatch, { once: true });
     void (async () => {
       try {
-        await sendPrompt(taskId, agentId, staged.text);
+        await sendPrompt(taskId, agentId, staged.text, { signal: controller.signal });
+        if (controller.signal.aborted) return;
         await invoke(IPC.MCP_CoordinatorNotificationAck, {
           coordinatorTaskId: taskId,
           batchId: staged.batchId,
@@ -449,8 +494,13 @@ export function PromptInput(props: PromptInputProps) {
         setTaskPromptDraftActive(taskId, false);
         logWarn('autofire', 'auto-fire succeeded', { taskId });
       } catch (e) {
+        holdCanceledBatch();
+        if (controller.signal.aborted) return;
         logWarn('autofire', 'auto-fire failed', { taskId, err: String(e) });
         console.error('[coordinator] Auto-fire failed:', e);
+      } finally {
+        controller.signal.removeEventListener('abort', holdCanceledBatch);
+        if (autoFireAbortController === controller) autoFireAbortController = undefined;
       }
     })();
   }
@@ -464,7 +514,7 @@ export function PromptInput(props: PromptInputProps) {
       autoFireInterval = undefined;
     }
 
-    if (!notification) return;
+    if (!notification || !props.autoSendChildUpdates || !store.mcpOrchestrationEnabled) return;
     if (notification.userEdited) {
       logWarn('autofire', 'notification staged but userEdited=true — skipping', {
         taskId: props.taskId,
@@ -487,7 +537,7 @@ export function PromptInput(props: PromptInputProps) {
       // Use untrack — we intentionally read current values on each tick
       // without subscribing to changes (the outer createEffect handles re-runs).
       const staged = untrack(() => props.stagedNotification);
-      if (!staged || staged.userEdited) {
+      if (!staged || staged.userEdited || !store.mcpOrchestrationEnabled) {
         logWarn('autofire', 'interval: notification gone or userEdited — cancelling', {
           taskId: props.taskId,
           gone: !staged,
@@ -509,7 +559,7 @@ export function PromptInput(props: PromptInputProps) {
         staged,
         now: Date.now(),
         controlledBy: untrack(() => store.tasks[props.taskId]?.controlledBy),
-        allowPromptlessGrace: props.coordinatorMode || props.controlledBy === 'coordinator',
+        allowPromptlessGrace: props.autoSendChildUpdates || props.controlledBy === 'coordinator',
         questionActive: untrack(() => questionActive()),
         promptDraftActive: hasUserPromptDraft(staged),
         terminalInputPending:
@@ -585,13 +635,20 @@ export function PromptInput(props: PromptInputProps) {
       [() => props.controlledBy, () => props.stagedNotification] as const,
       ([cb, staged], prev) => {
         const prevCb = prev?.[0];
-        if (cb === 'coordinator' && prevCb === 'human' && staged && !staged.userEdited) {
+        if (
+          props.autoSendChildUpdates &&
+          store.mcpOrchestrationEnabled &&
+          cb === 'coordinator' &&
+          prevCb === 'human' &&
+          staged &&
+          !staged.userEdited
+        ) {
           const tail = stripAnsi(untrack(() => getAgentOutputTail(props.agentId)));
           const tick = processAutoFireTick({
             staged,
             now: Date.now(),
             controlledBy: cb,
-            allowPromptlessGrace: props.coordinatorMode || cb === 'coordinator',
+            allowPromptlessGrace: props.autoSendChildUpdates || cb === 'coordinator',
             questionActive: untrack(() => questionActive()),
             promptDraftActive: hasUserPromptDraft(staged),
             terminalInputPending:
@@ -613,7 +670,8 @@ export function PromptInput(props: PromptInputProps) {
   // Uses the parent-provided nowMs signal if available (avoids a duplicate interval).
   const autoFireCountdownText = () => {
     const notification = props.stagedNotification;
-    if (!notification || notification.userEdited) return null;
+    if (!props.autoSendChildUpdates || !notification || notification.userEdited) return null;
+    if (!store.mcpOrchestrationEnabled) return 'Agent orchestration is off — ready for review';
     const now = props.nowMs ? props.nowMs() : Date.now();
     if (hasUserPromptDraft(notification)) return 'Queued — waiting for your draft';
     if (store.tasks[props.taskId]?.terminalInputPending) {
@@ -690,18 +748,26 @@ export function PromptInput(props: PromptInputProps) {
   let textareaRef: HTMLTextAreaElement | undefined;
 
   function hasUserPromptDraft(staged = props.stagedNotification): boolean {
-    return hasUserPromptDraftText(text(), staged?.text);
+    return hasUserPromptDraftText(text(), props.autoSendChildUpdates ? staged?.text : undefined);
   }
 
   onMount(() => {
     props.handle?.({ getText: text, setText });
+  });
+
+  // This element is built even in chat mode, where it is never shown. AgentChatView claims
+  // the same keys for the composer the user can actually see, so stand aside while it does.
+  createEffect(() => {
+    if (taskUsesAgentChat(store.tasks[props.taskId])) return;
     const focusKey = `${props.taskId}:prompt`;
     const actionKey = `${props.taskId}:send-prompt`;
-    registerFocusFn(focusKey, () => textareaRef?.focus());
-    registerAction(actionKey, () => handleSend());
+    const focus = () => textareaRef?.focus();
+    const send = () => handleSend();
+    registerFocusFn(focusKey, focus);
+    registerAction(actionKey, send);
     onCleanup(() => {
-      unregisterFocusFn(focusKey);
-      unregisterAction(actionKey);
+      unregisterFocusFn(focusKey, focus);
+      unregisterAction(actionKey, send);
     });
   });
 
@@ -786,7 +852,7 @@ export function PromptInput(props: PromptInputProps) {
           retryCount: untrack(autoSendRetry),
           maxRetries: AUTO_SEND_MAX_RETRIES,
         });
-        if (outcome !== 'deliver') {
+        if (outcome === 'retry' || outcome === 'giveup') {
           // The echo was never confirmed — Codex likely received the prompt
           // during a mid-startup redraw and discarded it.  `sendPrompt` already
           // cleared the queued `initialPrompt`, so on a retry we restore it and
@@ -795,8 +861,7 @@ export function PromptInput(props: PromptInputProps) {
           // "Waiting to send prompt…" status; batching the two tracked writes
           // re-runs the effect exactly once.  On giveup we clear it for good so
           // a stray effect re-run can't fire again.  Either way the text stays
-          // in the field so the user can send manually.  An aborted send was
-          // superseded — leave all state untouched.
+          // in the field so the user can send manually.
           if (outcome === 'retry') {
             batch(() => {
               if (initialPromptSnapshot) setInitialPrompt(props.taskId, initialPromptSnapshot);
@@ -807,10 +872,13 @@ export function PromptInput(props: PromptInputProps) {
           }
           return;
         }
+        // 'aborted' falls through: the box unmounted after `sendPrompt` had
+        // already written the prompt, so it is cleared like a delivered one.
       }
 
-      if (signal.aborted) return;
-
+      // No abort check here: `sending()` rules out a superseding send, so the
+      // only abort is unmount, and the prompt is already delivered — the stored
+      // draft must still be cleared or it reappears when the box reopens.
       setTaskPromptDraftActive(props.taskId, false);
       if (initialPromptSnapshot && val === initialPromptSnapshot) {
         setAutoSentInitialPrompt(initialPromptSnapshot);
@@ -819,7 +887,7 @@ export function PromptInput(props: PromptInputProps) {
         invoke(IPC.MCP_CoordinatedTaskPromptDelivered, { taskId: props.taskId }).catch(() => {});
       }
       // If the user manually sent the staged notification text exactly, ack it
-      const staged = props.stagedNotification;
+      const staged = props.autoSendChildUpdates ? props.stagedNotification : undefined;
       if (staged && !staged.userEdited && val === staged.text) {
         const ackTaskId = props.taskId;
         invoke(IPC.MCP_CoordinatorNotificationAck, {
@@ -858,7 +926,13 @@ export function PromptInput(props: PromptInputProps) {
       }}
     >
       <div style={{ position: 'relative', flex: '1', display: 'flex' }}>
-        <Show when={!!props.stagedNotification && !props.stagedNotification.userEdited}>
+        <Show
+          when={
+            props.autoSendChildUpdates &&
+            !!props.stagedNotification &&
+            !props.stagedNotification.userEdited
+          }
+        >
           <div
             style={{
               position: 'absolute',
@@ -873,7 +947,7 @@ export function PromptInput(props: PromptInputProps) {
               'z-index': '1',
             }}
           >
-            Staged for auto-send
+            {store.mcpOrchestrationEnabled ? 'Staged for auto-send' : 'Ready for review'}
           </div>
         </Show>
         <textarea
@@ -911,12 +985,16 @@ export function PromptInput(props: PromptInputProps) {
             flex: '1',
             background: theme.bgInput,
             border:
-              props.stagedNotification && !props.stagedNotification.userEdited
+              props.autoSendChildUpdates &&
+              props.stagedNotification &&
+              !props.stagedNotification.userEdited
                 ? `1px solid ${theme.accent}60`
                 : `1px solid ${theme.border}`,
             'border-radius': 'var(--radius-lg)',
             padding:
-              props.stagedNotification && !props.stagedNotification.userEdited
+              props.autoSendChildUpdates &&
+              props.stagedNotification &&
+              !props.stagedNotification.userEdited
                 ? '20px 36px 6px 10px'
                 : '6px 36px 6px 10px',
             color: theme.fg,
@@ -963,6 +1041,7 @@ export function PromptInput(props: PromptInputProps) {
         </button>
         <Show
           when={
+            props.autoSendChildUpdates &&
             !!props.stagedNotification?.userEdited &&
             (props.stagedNotification?.hiddenCompletionCount ?? 0) > 0
           }

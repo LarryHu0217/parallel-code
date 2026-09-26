@@ -42,17 +42,24 @@ describe('describeAgentStatus', () => {
       describeAgentStatus(
         status({ state: 'done', event: 'Stop', lastAssistantMessage: 'Shipped' }),
       ),
-    ).toMatchObject({ label: 'Done', text: 'Shipped' });
+    ).toMatchObject({ label: 'Turn finished', text: 'Shipped' });
     expect(describeAgentStatus(status({ state: 'done', event: 'Interrupt' })).label).toBe(
       'Interrupted',
     );
   });
 
-  it('calls a freshly started or resumed session idle rather than done', () => {
+  it('distinguishes session and idle readiness from a finished turn', () => {
     expect(describeAgentStatus(status({ state: 'done', event: 'SessionStart' }))).toMatchObject({
-      label: 'Idle',
+      label: 'Session ready',
       text: '',
     });
+    expect(describeAgentStatus(status({ state: 'done', event: 'Notification' }))).toMatchObject({
+      label: 'Ready for input',
+      text: '',
+    });
+    expect(
+      describeAgentStatus(status({ state: 'done', event: 'StopFailure', detail: 'Agent error' })),
+    ).toMatchObject({ label: 'Turn failed', text: 'Agent error' });
   });
 });
 
@@ -64,7 +71,20 @@ describe('TaskAgentStatusLine', () => {
     expect(html).toContain('Working');
     expect(html).toContain('src/a.ts');
     expect(html).toContain('3m');
-    expect(html).toContain('title="Working: Read src/a.ts (3m)"');
+    expect(html).toContain(
+      'Agent a1 · Working: src/a.ts · hook report (UserPromptSubmit) · observed just now',
+    );
+  });
+
+  it('discloses terminal input inference instead of attributing it to hooks', () => {
+    const html = renderToString(() =>
+      TaskAgentStatusLine({
+        status: status({ source: 'terminal', event: 'PermissionAnswered' }),
+        nowMs: NOW,
+      }),
+    );
+    expect(html).toContain('Activity inferred from terminal input (PermissionAnswered)');
+    expect(html).not.toContain('hook report');
   });
 
   it('renders nothing without hook status', () => {

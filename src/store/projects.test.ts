@@ -17,7 +17,7 @@ import { produce } from 'solid-js/store';
 import { IPC } from '../../electron/ipc/channels';
 import { invoke } from '../lib/ipc';
 import { setStore, store } from './core';
-import { relinkProject, updateProject } from './projects';
+import { relinkProject, updateProject, updateProjectCoordination } from './projects';
 import { openDialog } from '../lib/dialog';
 import type { Task } from './types';
 
@@ -124,6 +124,97 @@ describe('relinkProject document terminals', () => {
   });
 });
 
+// Moving a project starts the pane on a fresh conversation (`resumed = false`),
+// which means the relaunch passes `--session-id`. Claude rejects that flag for
+// a session that already exists, so carrying the old id across the move would
+// stop the pane launching at all.
+describe('relinkProject session ids', () => {
+  afterEach(() => {
+    setStore({ projects: [], tasks: {}, agents: {}, activeDocumentProjectId: null });
+    vi.clearAllMocks();
+  });
+
+  function seed(command: string, sessionId: string | undefined) {
+    setStore('projects', [
+      {
+        id: 'docs',
+        name: 'Docs',
+        path: '/old',
+        color: '',
+        kind: 'document',
+        documentPath: 'notes.md',
+      },
+    ]);
+    setStore('tasks', 'doc-agent-docs', {
+      id: 'doc-agent-docs',
+      projectId: 'docs',
+      name: 'Docs',
+      worktreePath: '/old',
+      branchName: '',
+      agentIds: ['a'],
+      shellAgentIds: [],
+      notes: '',
+      lastPrompt: '',
+      agentSessionIds: sessionId ? { a: sessionId } : undefined,
+    } as unknown as Task);
+    setStore('agents', 'a', {
+      id: 'a',
+      taskId: 'doc-agent-docs',
+      def: {
+        id: 'claude',
+        name: 'Claude',
+        command,
+        args: [],
+        resume_args: [],
+        skip_permissions_args: [],
+        description: '',
+      },
+      resumed: true,
+      generation: 1,
+      status: 'exited',
+      exitCode: 1,
+      signal: null,
+      lastOutput: [],
+    });
+    vi.mocked(openDialog).mockResolvedValue('/new');
+    vi.mocked(invoke).mockResolvedValue(true);
+  }
+
+  it('replaces the id the pane already used', async () => {
+    const used = 'fb4f2bc6-62d9-4b29-a795-240caf2fc459';
+    seed('claude', used);
+    expect(await relinkProject('docs')).toBe(true);
+    const after = store.tasks['doc-agent-docs'].agentSessionIds?.a;
+    expect(after).toEqual(expect.any(String));
+    expect(after).not.toBe(used);
+  });
+
+  it('gives a pane that had no id one to use', async () => {
+    seed('claude', undefined);
+    expect(await relinkProject('docs')).toBe(true);
+    expect(store.tasks['doc-agent-docs'].agentSessionIds?.a).toEqual(expect.any(String));
+  });
+
+  it('drops the prompts sent to the conversation it replaced', async () => {
+    seed('claude', undefined);
+    setStore('tasks', 'doc-agent-docs', {
+      lastPrompt: 'old',
+      promptHistory: [{ text: 'old', agentId: 'a' }],
+    });
+    expect(await relinkProject('docs')).toBe(true);
+    expect(store.tasks['doc-agent-docs'].promptHistory).toBeUndefined();
+    expect(store.tasks['doc-agent-docs'].lastPrompt).toBe('');
+  });
+
+  // Codex assigns its own, so an id invented here would name a session that
+  // never existed.
+  it('leaves a Codex pane without one', async () => {
+    seed('codex', undefined);
+    expect(await relinkProject('docs')).toBe(true);
+    expect(store.tasks['doc-agent-docs'].agentSessionIds?.a).toBeUndefined();
+  });
+});
+
 describe('updateProject', () => {
   afterEach(() => {
     setStore('projects', []);
@@ -226,4 +317,28 @@ describe('updateProject verify command', () => {
 
     expect(invoke).not.toHaveBeenCalled();
   });
+});
+
+it('changes project peer permission only after backend acknowledgment', async () => {
+  setStore('projects', [
+    {
+      id: 'consent',
+      name: 'Consent',
+      path: '/repo',
+      color: '',
+      allowPeerAccess: false,
+    },
+  ]);
+  vi.mocked(invoke).mockRejectedValueOnce(new Error('Permission update failed'));
+  await expect(updateProjectCoordination('consent', true)).rejects.toThrow(
+    'Permission update failed',
+  );
+  expect(store.projects[0].allowPeerAccess).toBe(false);
+  vi.mocked(invoke).mockResolvedValueOnce({});
+  await updateProjectCoordination('consent', true);
+  expect(invoke).toHaveBeenLastCalledWith(IPC.DelegationRequest, {
+    action: 'projectPolicy',
+    policy: { projectId: 'consent', allowPeerAccess: true },
+  });
+  expect(store.projects[0].allowPeerAccess).toBe(true);
 });

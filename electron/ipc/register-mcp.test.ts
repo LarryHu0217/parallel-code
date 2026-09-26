@@ -18,11 +18,11 @@ import * as atomic from '../mcp/atomic.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   buildCoordinatorMCPConfig,
-  getDockerMcpServerDestPath,
   selectMcpJsonDir,
   validateStartMCPServerArgs,
   writeCoordinatorMcpJson,
 } from './register.js';
+import { getDockerMcpServerDestPath } from './mcp-paths.js';
 import { getMCPRemoteServerUrl } from '../mcp/config.js';
 import { startRemoteServer } from '../remote/server.js';
 

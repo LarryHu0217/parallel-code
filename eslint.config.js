@@ -95,6 +95,14 @@ export default [
     },
   },
 
+  // Showcase and benchmark scripts are command-line tools that report on stdout.
+  {
+    files: ['scripts/showcase/**/*.ts', 'scripts/bench/**/*.ts'],
+    rules: {
+      'no-console': 'off',
+    },
+  },
+
   // CJS files (electron/preload.cjs): allow require(), CommonJS globals
   {
     files: ['**/*.cjs'],

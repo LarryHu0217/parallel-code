@@ -71,6 +71,22 @@ describe('branch adoption against real git', () => {
     expect(status.base_branch).toBe('main');
   });
 
+  it('getWorktreeStatus does not rewrite the index an agent may be locking', async () => {
+    const { worktreePath } = makeRepo('no-index-write');
+    const indexPath = path.resolve(
+      worktreePath,
+      run(worktreePath, ['rev-parse', '--git-path', 'index']).trim(),
+    );
+    // Stat-dirty but content-clean: plain `git status` would refresh and rewrite the index.
+    const future = new Date(Date.now() + 60_000);
+    fs.utimesSync(path.join(worktreePath, 'README.md'), future, future);
+    const inodeBefore = fs.statSync(indexPath).ino;
+
+    const status = await getWorktreeStatus(worktreePath);
+    expect(status.has_uncommitted_changes).toBe(false);
+    expect(fs.statSync(indexPath).ino).toBe(inodeBefore);
+  });
+
   it('close after adoption: explicit worktreePath removes worktree and adopted branch', async () => {
     const { root, worktreePath } = makeRepo('close-fixed');
     agentSwitchesBranch(worktreePath);

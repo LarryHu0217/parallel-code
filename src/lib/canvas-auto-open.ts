@@ -5,6 +5,7 @@
  * that never completes (denied permission) is dropped when the map fills.
  */
 import { isPlanApprovalTool } from '../../electron/agent-hooks/status';
+import { isMarkdownPath } from './canvas-tabs';
 
 interface HookEventLike {
   event: string;
@@ -18,10 +19,10 @@ export function isPlanApprovalEvent(event: HookEventLike): boolean {
   return event.event === 'PreToolUse' && isPlanApprovalTool(event.toolName);
 }
 
-const WRITE_TOOLS = new Set(['write', 'edit', 'multiedit', 'notebookedit']);
+// Only whole-file writes: Claude writes new docs (plans, notes, reports) with
+// Write and touches up existing ones with Edit, which is not worth a canvas.
+const WRITE_TOOLS = new Set(['write']);
 const PENDING_CAP = 50;
-
-const isMarkdown = (p: string): boolean => /\.(md|markdown)$/i.test(p);
 
 /** Worktree-relative form of a path the hook reported, or null when it is not
  *  a Markdown file inside the worktree (or was clipped by the hook summary). */
@@ -37,7 +38,16 @@ export function worktreeMarkdownPath(reported: string, worktreePath: string): st
   const segments = rel.split('/');
   if (segments.some((s) => s === '' || s === '..')) return null;
   if (/^\.(parallel|worktrees|git|claude)(\/|$)/.test(rel)) return null;
-  return isMarkdown(rel) ? rel : null;
+  return isMarkdownPath(rel) ? rel : null;
+}
+
+// Repo boilerplate agents routinely rewrite while doing other work.
+const BOILERPLATE_NAME =
+  /^(readme|changelog|changes|history|agents|claude|gemini|contributing|code_of_conduct|license|security|support)\.(md|markdown)$/i;
+const NOISE_DIR = /(^|\/)(\.github|tests?|__tests__|fixtures|__fixtures__|__snapshots__)\//i;
+
+function isBoilerplateDoc(rel: string): boolean {
+  return NOISE_DIR.test(rel) || BOILERPLATE_NAME.test(rel.slice(rel.lastIndexOf('/') + 1));
 }
 
 /**
@@ -55,7 +65,7 @@ export function nextCanvasOpen(
   if (event.event === 'PreToolUse') {
     if (!WRITE_TOOLS.has((event.toolName ?? '').toLowerCase()) || !event.detail) return null;
     const rel = worktreeMarkdownPath(event.detail, worktreePath);
-    if (!rel) return null;
+    if (!rel || isBoilerplateDoc(rel)) return null;
     if (pending.size >= PENDING_CAP) {
       const oldest = pending.keys().next().value;
       if (oldest !== undefined) pending.delete(oldest);

@@ -5,7 +5,7 @@ export interface AutoDiscoveredMcpConfigState {
 }
 
 export type PtyOutput =
-  | { type: 'Data'; data: string } // base64-encoded
+  | { type: 'Data'; data: Uint8Array } // raw terminal bytes
   | {
       type: 'Exit';
       data: { exit_code: number | null; signal: string | null; last_output: string[] };
@@ -227,3 +227,25 @@ export type UsageResult =
   | { status: 'unavailable'; reason: string }
   /** Transient failure — the renderer keeps its last good snapshot. */
   | { status: 'error'; message: string };
+
+export type UpdatePhase =
+  | 'unsupported'
+  | 'idle'
+  | 'checking'
+  | 'up-to-date'
+  | 'available'
+  | 'downloading'
+  | 'downloaded'
+  | 'error';
+
+export interface UpdateStatus {
+  phase: UpdatePhase;
+  /** Version this app is currently running. */
+  currentVersion: string;
+  /** Version offered by the latest check, when newer than `currentVersion`. */
+  latestVersion: string | null;
+  /** 0–100 while `phase` is `downloading`. */
+  downloadPercent: number;
+  /** Human-readable message when `phase` is `error`. */
+  error: string | null;
+}

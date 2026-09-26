@@ -1,4 +1,5 @@
 import { colord } from 'colord';
+import { isLightPreset } from './look';
 import type { LookPreset } from './look';
 import { CSS_VARS } from './custom-theme';
 import type { CssVar } from './custom-theme';
@@ -52,7 +53,7 @@ export const theme = {
 // GitHub-light-ish xterm palette (text, cursor, selection + 16 ANSI colors)
 // for light terminal backgrounds, so colored output (claude prompts,
 // ls --color, git status) stays legible on white. Shared by the built-in
-// islands-light preset and any custom theme with a light background.
+// light presets and any custom theme with a light background.
 export const LIGHT_TERMINAL_THEME = {
   foreground: '#1f2329',
   cursor: '#1f2329',
@@ -76,6 +77,82 @@ export const LIGHT_TERMINAL_THEME = {
   brightWhite: '#1f2329',
 } as const;
 
+// Obsidian's muted pastels carried into ANSI, so agent and shell output
+// matches the UI instead of xterm's saturated defaults. Bright black stays
+// at AA contrast because CLIs use it for secondary text.
+const OBSIDIAN_TERMINAL_THEME = {
+  foreground: '#e4e4e4',
+  cursor: '#c4a77d',
+  cursorAccent: '#1e1e1e',
+  selectionBackground: '#4a4339',
+  black: '#2e2e2e',
+  red: '#e08c96',
+  green: '#98c9ae',
+  yellow: '#dfc18e',
+  blue: '#8fb3dc',
+  magenta: '#c1b0e8',
+  cyan: '#8ec9c9',
+  white: '#c9c9c9',
+  brightBlack: '#858585',
+  brightRed: '#eaa0aa',
+  brightGreen: '#addcc1',
+  brightYellow: '#ead3a8',
+  brightBlue: '#a8c5e8',
+  brightMagenta: '#d2c4f0',
+  brightCyan: '#a6dada',
+  brightWhite: '#ededed',
+} as const;
+
+// Islands Dark carries its cool blue accent and semantic colors into ANSI.
+// Keep bright black readable because terminal programs use it for muted text.
+const ISLANDS_DARK_TERMINAL_THEME = {
+  foreground: '#bcbec4',
+  cursor: '#6d9df8',
+  cursorAccent: '#181a1d',
+  selectionBackground: '#28416c',
+  black: '#30343a',
+  red: '#f75464',
+  green: '#6aab73',
+  yellow: '#e8a33e',
+  blue: '#6d9df8',
+  magenta: '#bd9ae8',
+  cyan: '#70b9c7',
+  white: '#bcbec4',
+  brightBlack: '#8a8d94',
+  brightRed: '#ff7885',
+  brightGreen: '#87c58e',
+  brightYellow: '#f4be69',
+  brightBlue: '#92b7ff',
+  brightMagenta: '#d1b1f3',
+  brightCyan: '#91d2dc',
+  brightWhite: '#eef0f4',
+} as const;
+
+// Noir's cool, violet-tinted neutrals and semantic colors carried into ANSI.
+// Magenta leans pink so agent output never reads as the lilac focus accent.
+const NOIR_TERMINAL_THEME = {
+  foreground: '#e8e8ef',
+  cursor: '#b7a5f5',
+  cursorAccent: '#15151b',
+  selectionBackground: '#393247',
+  black: '#3b3a48',
+  red: '#f08f8a',
+  green: '#98c9ae',
+  yellow: '#dfba83',
+  blue: '#8fbddd',
+  magenta: '#e3a3d6',
+  cyan: '#8ccfd0',
+  white: '#c4c3d0',
+  brightBlack: '#90909e',
+  brightRed: '#f5a8a4',
+  brightGreen: '#addcc1',
+  brightYellow: '#ead0a5',
+  brightBlue: '#a9cdea',
+  brightMagenta: '#eebde5',
+  brightCyan: '#a6dcdc',
+  brightWhite: '#f2f2f7',
+} as const;
+
 /**
  * Returns an xterm-compatible theme object for the given preset.
  * For light-background presets we override xterm's defaults (white text,
@@ -83,8 +160,17 @@ export const LIGHT_TERMINAL_THEME = {
  */
 export function getTerminalTheme(preset: LookPreset) {
   const background = readCssVarsForPreset(preset)['--task-panel-bg'] ?? '#000000';
-  if (preset === 'islands-light') {
+  if (isLightPreset(preset)) {
     return { background, ...LIGHT_TERMINAL_THEME };
+  }
+  if (preset === 'obsidian') {
+    return { background, ...OBSIDIAN_TERMINAL_THEME };
+  }
+  if (preset === 'noir') {
+    return { background, ...NOIR_TERMINAL_THEME };
+  }
+  if (preset === 'islands-dark') {
+    return { background, ...ISLANDS_DARK_TERMINAL_THEME };
   }
   return { background };
 }

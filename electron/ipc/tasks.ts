@@ -1,8 +1,9 @@
 import { randomUUID } from 'crypto';
-import { createWorktree, removeWorktree } from './git.js';
+import { createWorktree, removeWorktree, worktreePathFor } from './git.js';
 import { killAgent, notifyAgentListChanged } from './pty.js';
 import { stopPlanWatcher } from './plans.js';
 import { stopStepsWatcher } from './steps.js';
+import { recordWorktreeIntent } from './worktree-intents.js';
 
 const MAX_SLUG_LEN = 72;
 
@@ -36,11 +37,23 @@ export async function createTask(
   symlinkDirs: string[],
   branchPrefix: string,
   baseBranch?: string,
+  snapshotCommit?: string,
 ): Promise<{ id: string; branch_name: string; worktree_path: string }> {
   const id = randomUUID();
   const prefix = sanitizeBranchPrefix(branchPrefix);
   const branchName = `${prefix}/${slug(name)}-${id.slice(0, 6)}`;
-  const worktree = await createWorktree(projectRoot, branchName, symlinkDirs, baseBranch);
+  // Before provisioning, so a crash before the task is saved leaves a trace.
+  recordWorktreeIntent({
+    worktreePath: worktreePathFor(projectRoot, branchName),
+    branchName,
+    projectRoot,
+  });
+  const worktree = await createWorktree(
+    projectRoot,
+    branchName,
+    symlinkDirs,
+    snapshotCommit ?? baseBranch,
+  );
   return {
     id,
     branch_name: worktree.branch,

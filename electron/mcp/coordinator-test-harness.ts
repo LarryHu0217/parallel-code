@@ -1,4 +1,4 @@
-import type { BrowserWindow } from 'electron';
+import type { Notify } from '../ipc/notify.js';
 import { vi } from 'vitest';
 import type { AgentHookEventPayload } from '../agent-hooks/status.js';
 
@@ -50,6 +50,8 @@ const mocks = vi.hoisted(() => {
   const mockSubscribeToAgent = vi.fn();
   const mockUnsubscribeFromAgent = vi.fn();
   const mockGetAgentScrollback = vi.fn();
+  const mockGetActiveAgentIds = vi.fn();
+  const mockGetAgentMeta = vi.fn();
   const mockGetChangedFiles = vi.fn();
   const mockGetAllFileDiffs = vi.fn();
   const mockGetDiffBaseSha = vi.fn();
@@ -86,6 +88,8 @@ const mocks = vi.hoisted(() => {
     mockSubscribeToAgent,
     mockUnsubscribeFromAgent,
     mockGetAgentScrollback,
+    mockGetActiveAgentIds,
+    mockGetAgentMeta,
     mockGetChangedFiles,
     mockGetAllFileDiffs,
     mockGetDiffBaseSha,
@@ -155,7 +159,7 @@ vi.mock('../shared/prompt-detect.js', () => ({
       .slice(-1000)
       .split(/\r\n?|\n/)
       .some((line) =>
-        /(?:^|\s)[❯›]\s*$|^\s*--\s*INSERT\s*--\s*$|^\s*>\s*(?:Type your message|$)/i.test(
+        /(?:^|\s)❯\s*$|^\s*❯\s+Try\s+"[^"]*(?:"|…)\s*$|^\s*--\s*INSERT\s*--\s*$|^\s*[›>]\s*(?:Type your message|Ask Codex to do anything|$)/i.test(
           line.trim(),
         ),
       );
@@ -180,7 +184,7 @@ vi.mock('../shared/prompt-detect.js', () => ({
     return tail
       .split(/\r\n?|\n/)
       .some((line) =>
-        /(?:^|\s)[❯›]\s*$|^\s*--\s*INSERT\s*--\s*$|^\s*>\s*(?:Type your message|$)/i.test(
+        /(?:^|\s)❯\s*$|^\s*❯\s+Try\s+"[^"]*(?:"|…)\s*$|^\s*--\s*INSERT\s*--\s*$|^\s*[›>]\s*(?:Type your message|Ask Codex to do anything|$)/i.test(
           line.trim(),
         ),
       );
@@ -194,6 +198,8 @@ vi.mock('../ipc/pty.js', () => ({
   subscribeToAgent: mocks.mockSubscribeToAgent,
   unsubscribeFromAgent: mocks.mockUnsubscribeFromAgent,
   getAgentScrollback: mocks.mockGetAgentScrollback,
+  getActiveAgentIds: mocks.mockGetActiveAgentIds,
+  getAgentMeta: mocks.mockGetAgentMeta,
   onPtyEvent: mocks.mockOnPtyEvent,
 }));
 
@@ -272,6 +278,8 @@ export const {
   mockSubscribeToAgent,
   mockUnsubscribeFromAgent,
   mockGetAgentScrollback,
+  mockGetActiveAgentIds,
+  mockGetAgentMeta,
   mockGetChangedFiles,
   mockGetAllFileDiffs,
   mockGetDiffBaseSha,
@@ -282,10 +290,7 @@ export const {
   mockVerifyCancel,
 } = mocks;
 
-export const mockWin = {
-  isDestroyed: () => false,
-  webContents: { send: mockNotifyRenderer },
-} as unknown as BrowserWindow;
+export const mockNotify: Notify = (channel, payload) => mockNotifyRenderer(channel, payload);
 
 export function createCoordinatorTask(
   overrides: Partial<BackendTaskFixture> = {},
@@ -354,6 +359,8 @@ export function resetCoordinatorMocks(): void {
   mockKillAgent.mockReset();
   mockSubscribeToAgent.mockReset();
   mockUnsubscribeFromAgent.mockReset();
+  mockGetActiveAgentIds.mockReset().mockReturnValue([]);
+  mockGetAgentMeta.mockReset().mockReturnValue(null);
   mockGetAgentScrollback.mockReset();
   mockGetAgentScrollback.mockReturnValue(null);
 
@@ -380,7 +387,7 @@ export async function setupCoordinatorHarness(options: CoordinatorHarnessOptions
   return {
     Coordinator,
     coordinator,
-    mockWin,
+    mockNotify,
     resetCoordinatorMocks,
     mockNextTask,
     registerDefaultCoordinator,
@@ -410,7 +417,7 @@ export function registerDefaultCoordinator(
     register = false,
   }: CoordinatorHarnessOptions = {},
 ) {
-  coordinator.setWindow(mockWin);
+  coordinator.setNotify(mockNotify);
   coordinator.setDefaultProject(projectId, projectPath);
   if (register) coordinator.registerCoordinator(coordinatorId, projectId);
   return coordinator;
@@ -428,10 +435,10 @@ export function getAgentId(index = 0): string {
   return call[0] as string;
 }
 
-export function getSpawnHandler(): (agentId: string) => void {
+export function getSpawnHandler(): (agentId: string, data?: unknown) => void {
   const call = mockOnPtyEvent.mock.calls.find((c) => c[0] === 'spawn');
   if (!call) throw new Error('spawn handler not registered');
-  return call[1] as (agentId: string) => void;
+  return call[1] as (agentId: string, data?: unknown) => void;
 }
 
 export function getExitHandler(): (agentId: string, data: unknown) => void {

@@ -35,6 +35,11 @@ describe('StatusDot', () => {
 
     expect(html).toContain('title="Waiting for input"');
   });
+
+  it('adds activity provenance separately from the aggregate task status', () => {
+    const html = renderToString(() => StatusDot({ status: 'review', taskId: 'missing' }));
+    expect(html).toContain('Ready for review\nActivity evidence unavailable');
+  });
 });
 
 describe('status glyph shapes', () => {

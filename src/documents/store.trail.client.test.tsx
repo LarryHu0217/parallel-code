@@ -2,7 +2,7 @@ import { render } from 'solid-js/web';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { setStore, store } from '../store/core';
 import { IPC } from '../../electron/ipc/channels';
-import { DocumentWorkspaceOverlay } from './DocumentWorkspaceOverlay';
+import { DocumentWorkspacePanel } from './DocumentWorkspacePanel';
 import {
   closeDocumentWorkspace,
   documentStore,
@@ -55,8 +55,9 @@ async function openWorkspace(): Promise<void> {
 
 function backButton(host: HTMLElement): HTMLButtonElement | null {
   return (
-    Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim() === '← Back') ??
-    null
+    Array.from(host.querySelectorAll('button')).find((b) =>
+      b.getAttribute('aria-label')?.startsWith('Back to '),
+    ) ?? null
   );
 }
 
@@ -105,7 +106,7 @@ describe('document trail', () => {
     await openWorkspace();
     const host = document.createElement('div');
     document.body.append(host);
-    disposers.push(render(() => <DocumentWorkspaceOverlay />, host));
+    disposers.push(render(() => <DocumentWorkspacePanel />, host));
     expect(backButton(host)).toBeNull();
 
     await openDocumentFile('notes/invoice.md');

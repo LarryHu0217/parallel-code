@@ -34,6 +34,10 @@ export interface AgentHookStatusUpdate {
 export interface AgentHookEventPayload extends AgentHookStatusUpdate {
   agentId: string;
   taskId: string;
+  /** Present on every production event; optional for legacy in-process callers. */
+  launchId?: string;
+  /** Ordered cache observation sequence, absent on the raw scheduling stream. */
+  sequence?: number;
   /** Epoch ms when the main process received the event. */
   at: number;
 }
@@ -83,7 +87,12 @@ export function isAgentHookEventPayload(value: unknown): value is AgentHookEvent
     typeof v.event === 'string' &&
     typeof v.at === 'number' &&
     typeof v.state === 'string' &&
-    HOOK_STATES.has(v.state)
+    HOOK_STATES.has(v.state) &&
+    Number.isFinite(v.at) &&
+    (v.prompt === undefined || v.prompt === 'permission' || v.prompt === 'question') &&
+    ['toolName', 'toolUseId', 'detail', 'lastAssistantMessage'].every(
+      (key) => v[key] === undefined || typeof v[key] === 'string',
+    )
   );
 }
 
@@ -183,9 +192,147 @@ export function mapClaudeHookPayload(payload: unknown): AgentHookStatusUpdate | 
       return {
         state: 'done',
         event,
+        ...(event === 'StopFailure'
+          ? {
+              detail: clip(
+                [asString(body.error), asString(body.error_details)].filter(Boolean).join(': '),
+                DETAIL_MAX_CHARS,
+              ),
+            }
+          : {}),
         lastAssistantMessage: clip(asString(body.last_assistant_message), LAST_MESSAGE_MAX_CHARS),
       };
     default:
       return null;
   }
+}
+
+export const AGENT_HOOK_STALE_MS = 30 * 60_000;
+
+export interface ActivityEvidence {
+  agentId: string;
+  /** Unknown for restored/chat processes that have no live PTY identity. */
+  launchId?: string;
+  source: 'hook' | 'terminal' | 'process';
+  activity: 'working' | 'waiting' | 'ready' | 'turn_finished' | 'unknown';
+  event: string;
+  observedAt?: number;
+  since?: number;
+  prompt?: AgentHookPrompt;
+  detail?: string;
+  freshness: 'current' | 'stale' | 'unknown';
+}
+
+export interface ReducedAgentHookStatus extends AgentHookStatusUpdate {
+  since: number;
+  updatedAt: number;
+}
+
+/** Parallel sibling results do not dismiss another tool's human prompt. */
+export function transitionAgentHookStatus(
+  previous: ReducedAgentHookStatus | undefined,
+  event: AgentHookStatusUpdate & { at: number },
+): ReducedAgentHookStatus {
+  if (
+    previous?.state === 'waiting' &&
+    (event.event === 'PostToolUse' || event.event === 'PostToolUseFailure') &&
+    previous.toolUseId !== undefined &&
+    event.toolUseId !== undefined &&
+    previous.toolUseId !== event.toolUseId
+  )
+    return previous;
+  const sameState = previous?.state === event.state;
+  const finished = (name: string) => name === 'Stop' || name === 'StopFailure';
+  const sameActivity =
+    sameState && (event.state !== 'done' || finished(previous.event) === finished(event.event));
+  return {
+    state: event.state,
+    event: event.event,
+    since: sameActivity ? previous.since : event.at,
+    updatedAt: event.at,
+    toolName: event.toolName,
+    toolUseId:
+      event.toolUseId ?? (sameState && event.state === 'waiting' ? previous.toolUseId : undefined),
+    prompt: event.prompt ?? (sameState && event.state === 'waiting' ? previous.prompt : undefined),
+    detail: event.detail ?? (sameState && event.state === 'done' ? previous.detail : undefined),
+    lastAssistantMessage:
+      event.lastAssistantMessage ??
+      (sameState && event.state === 'done' ? previous.lastAssistantMessage : undefined),
+  };
+}
+
+export function activityEvidenceFromHook(
+  agentId: string,
+  launchId: string | undefined,
+  status: ReducedAgentHookStatus,
+  now = Date.now(),
+): ActivityEvidence {
+  const finished = status.event === 'Stop' || status.event === 'StopFailure';
+  return {
+    agentId,
+    launchId,
+    source: 'hook',
+    activity: status.state === 'done' ? (finished ? 'turn_finished' : 'ready') : status.state,
+    event: status.event,
+    observedAt: status.updatedAt,
+    since: status.since,
+    prompt: status.prompt,
+    detail: status.detail,
+    freshness:
+      status.state !== 'done' && now - status.updatedAt >= AGENT_HOOK_STALE_MS
+        ? 'stale'
+        : 'current',
+  };
+}
+
+export type AgentActivityObservation =
+  | {
+      kind: 'launch' | 'retired' | 'invalidated';
+      agentId: string;
+      taskId: string;
+      launchId: string;
+      sequence: number;
+      at: number;
+    }
+  | (AgentHookEventPayload & { kind: 'hook'; launchId: string; sequence: number; since: number });
+
+export interface AgentActivitySnapshot {
+  sequence: number;
+  observations: AgentActivityObservation[];
+}
+
+export function isAgentActivityObservation(value: unknown): value is AgentActivityObservation {
+  const v = asRecord(value);
+  if (
+    !v ||
+    typeof v.agentId !== 'string' ||
+    typeof v.taskId !== 'string' ||
+    typeof v.launchId !== 'string' ||
+    !v.launchId ||
+    typeof v.at !== 'number' ||
+    !Number.isFinite(v.at) ||
+    typeof v.sequence !== 'number' ||
+    !Number.isSafeInteger(v.sequence) ||
+    v.sequence < 0
+  )
+    return false;
+  if (v.kind === 'hook')
+    return isAgentHookEventPayload(v) && typeof v.since === 'number' && Number.isFinite(v.since);
+  return v.kind === 'launch' || v.kind === 'retired' || v.kind === 'invalidated';
+}
+
+export function isAgentActivitySnapshot(value: unknown): value is AgentActivitySnapshot {
+  const v = asRecord(value);
+  const watermark = v?.sequence;
+  return (
+    !!v &&
+    typeof watermark === 'number' &&
+    Number.isSafeInteger(watermark) &&
+    watermark >= 0 &&
+    Array.isArray(v.observations) &&
+    v.observations.every(
+      (observation: unknown) =>
+        isAgentActivityObservation(observation) && observation.sequence <= watermark,
+    )
+  );
 }

@@ -6,9 +6,11 @@ import { setAgentHookRuntime } from '../ipc/pty.js';
 import { error as logError, info as logInfo } from '../log.js';
 import { emitAgentHookEvent } from './events.js';
 import { startAgentHookServer, type AgentHookServer } from './server.js';
+import { observeAgentHook, onAgentActivityObservation } from './observations.js';
 import type { AgentHookEventPayload } from './status.js';
 
 let server: AgentHookServer | null = null;
+let stopObservations: (() => void) | undefined;
 
 /**
  * Brings up the loopback hook receiver and hands its env/settings to the PTY
@@ -21,11 +23,15 @@ export async function startAgentHookRuntime(getWindow: () => BrowserWindow | nul
   // run and an installed build hands every agent's hook events to whichever
   // instance started last.
   const dir = path.join(getUserDataDir(), 'agent-hooks');
+  stopObservations?.();
+  stopObservations = onAgentActivityObservation((observation) => {
+    const win = getWindow();
+    if (win && !win.isDestroyed()) win.webContents.send(IPC.AgentHookEvent, observation);
+  });
   // Resolved per event: the server starts before the window exists so that no
   // Claude launch can race it, and the window may be recreated later.
   const forward = (event: AgentHookEventPayload): void => {
-    const win = getWindow();
-    if (win && !win.isDestroyed()) win.webContents.send(IPC.AgentHookEvent, event);
+    observeAgentHook(event);
     // Main-process consumers (the MCP coordinator) get the event regardless of
     // window state — a coordinated sub-task keeps running with no window.
     emitAgentHookEvent(event);
@@ -45,6 +51,8 @@ export async function startAgentHookRuntime(getWindow: () => BrowserWindow | nul
 
 export function stopAgentHookRuntime(): void {
   setAgentHookRuntime(null);
+  stopObservations?.();
+  stopObservations = undefined;
   const current = server;
   server = null;
   current?.close().catch((err: unknown) => {

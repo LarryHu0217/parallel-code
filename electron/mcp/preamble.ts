@@ -25,7 +25,16 @@ export const SUB_TASK_MODE_PREAMBLE = `<sub-task-mode>
 These rules override all skills and hooks:
 - When your work is complete, commit your changes and call the \`land_self\` MCP tool with the verification checks you ran. A successful \`land_self\` call is the finish line — do NOT call \`signal_done\` afterward, use finishing-a-development-branch, or offer merge/PR options.
 - Use \`signal_done\` only if the coordinator explicitly asks for manual review instead of self-landing.
+- Include a concise \`result\` in \`signal_done\`: summary, verification checks actually run, repository-relative artifact paths if useful, and unresolved issues. Checks are agent reports; never invent passing results.
 - Asking questions is fine when requirements are unclear or an action is risky.
+</sub-task-mode>`;
+
+export const REVIEW_SUB_TASK_MODE_PREAMBLE = `<sub-task-mode>
+- Complete the assignment, verify it, and commit your changes for user review.
+- Keep injected Parallel Code guidance out of your commits. Remove this runtime block before committing its file.
+- Call the \`signal_done\` MCP tool when the committed result is ready. Do not merge, call \`land_self\`, or delete the worktree; the user reviews and approves integration.
+- Include a concise \`result\`: summary, verification checks actually run, repository-relative artifact paths if useful, and unresolved issues. Checks are agent reports; never invent passing results.
+- Ask questions when requirements are unclear or an action is risky.
 </sub-task-mode>`;
 
 export type PreambleWriteQueue = Map<string, Promise<void>>;
@@ -58,6 +67,7 @@ export async function queueFileMutation(
 async function injectMarkdownPreamble(
   queue: PreambleWriteQueue,
   filePath: string,
+  preamble: string,
 ): Promise<InjectedSubTaskPreamble> {
   let originalContent: string | null = null;
   await queueFileMutation(queue, filePath, async () => {
@@ -69,7 +79,7 @@ async function injectMarkdownPreamble(
     }
     await atomicWriteFile(
       filePath,
-      originalContent ? `${originalContent}\n\n${SUB_TASK_MODE_PREAMBLE}` : SUB_TASK_MODE_PREAMBLE,
+      originalContent ? `${originalContent}\n\n${preamble}` : preamble,
     );
   });
   return {
@@ -84,20 +94,23 @@ export async function injectSubTaskPreamble(args: {
   worktreePath: string;
   agentCommand: string;
   queue: PreambleWriteQueue;
+  integrationPolicy?: 'review' | 'automatic';
 }): Promise<InjectedSubTaskPreamble> {
+  const preamble =
+    args.integrationPolicy === 'review' ? REVIEW_SUB_TASK_MODE_PREAMBLE : SUB_TASK_MODE_PREAMBLE;
   const agentCmd = args.agentCommand.toLowerCase();
   if (
     agentCmd.includes('codex') ||
     agentCmd.includes('opencode') ||
     isKimiCommand(args.agentCommand)
   ) {
-    return injectMarkdownPreamble(args.queue, join(args.worktreePath, 'AGENTS.md'));
+    return injectMarkdownPreamble(args.queue, join(args.worktreePath, 'AGENTS.md'), preamble);
   }
   if (agentCmd.includes('gemini')) {
-    return injectMarkdownPreamble(args.queue, join(args.worktreePath, 'GEMINI.md'));
+    return injectMarkdownPreamble(args.queue, join(args.worktreePath, 'GEMINI.md'), preamble);
   }
   if (agentCmd.includes('copilot')) {
-    return injectMarkdownPreamble(args.queue, join(args.worktreePath, '.agent.md'));
+    return injectMarkdownPreamble(args.queue, join(args.worktreePath, '.agent.md'), preamble);
   }
 
   const settingsDir = join(args.worktreePath, '.claude');
@@ -113,8 +126,8 @@ export async function injectSubTaskPreamble(args: {
       existingSettings = {};
     }
     existingSettings.systemPrompt = existingSettings.systemPrompt
-      ? `${existingSettings.systemPrompt}\n\n${SUB_TASK_MODE_PREAMBLE}`
-      : SUB_TASK_MODE_PREAMBLE;
+      ? `${existingSettings.systemPrompt}\n\n${preamble}`
+      : preamble;
     await atomicWriteFile(settingsPath, JSON.stringify(existingSettings, null, 2));
   });
   return {

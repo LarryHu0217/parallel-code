@@ -1,10 +1,12 @@
 import { createSignal, createMemo, createEffect, onCleanup, batch, Index, Show } from 'solid-js';
 import { invoke } from '../lib/ipc';
+import { isWindowVisible } from '../lib/windowVisibility';
 import { IPC } from '../../electron/ipc/channels';
 import { theme } from '../lib/theme';
 import { sf } from '../lib/fontScale';
 import { getStatusColor } from '../lib/status-colors';
 import { openFileInEditor } from '../lib/shell';
+import { isMarkdownPath } from '../lib/canvas-tabs';
 import { buildFileTree, flattenVisibleTree } from '../lib/file-tree';
 import {
   buildCoverageComparison,
@@ -19,16 +21,26 @@ import {
   isCommitHashSelection,
   isUncommittedSelection,
 } from './CommitNavBar';
+import type { UnderstandingTourState } from '../lib/create-understanding-tour';
+import { TourHint } from './understanding/TourHint';
 import type { ChangedFile, CoverageFileSummary, CoverageSummary } from '../ipc/types';
 
 interface ChangedFilesListProps {
   worktreePath: string;
+  /** Fixed inventory when viewing a tour's captured diff. */
+  filesOverride?: ChangedFile[];
   isActive?: boolean;
   panelFocused?: boolean;
   onFileClick?: (file: ChangedFile) => void;
   /** Optional path to visually mark as the active/open diff target. */
   activeFilePath?: string | null;
   onOpenInEditorClick?: () => void;
+  /** Opens a Markdown file in the task's canvas column; omit to hide the button. */
+  onOpenMarkdownClick?: (file: ChangedFile) => void;
+  /** Starts a guided tour of the file; omit to hide the button. */
+  onUnderstandClick?: (file: ChangedFile) => void;
+  /** Lets each row's tour button show its own generating/ready state. */
+  understanding?: UnderstandingTourState;
   ref?: (el: HTMLDivElement) => void;
   /** Optional coverage artifact path relative to the repo root. */
   coverageReportPath?: string;
@@ -351,6 +363,101 @@ function OpenInEditorButton(props: {
   );
 }
 
+function UnderstandFileButton(props: {
+  filePath: string;
+  understanding?: UnderstandingTourState;
+  onUnderstandClick?: () => void;
+}) {
+  const loading = () => props.understanding?.isLoading('file', props.filePath) ?? false;
+  const ready = () => props.understanding?.isReady('file', props.filePath) ?? false;
+
+  return (
+    <TourHint
+      kind="file"
+      subject={props.filePath}
+      tour={props.understanding}
+      class="changed-files-understand-anchor"
+    >
+      {(describedBy) => (
+        <button
+          class="changed-files-understand-btn"
+          aria-describedby={describedBy()}
+          data-ready={ready() ? 'true' : undefined}
+          onClick={(e) => {
+            e.stopPropagation();
+            props.onUnderstandClick?.();
+          }}
+          onKeyDown={(e) => e.stopPropagation()}
+          tabIndex={-1}
+          aria-busy={loading()}
+          style={{
+            background: `color-mix(in srgb, ${theme.bgElevated} 92%, transparent)`,
+            border: 'none',
+            color: ready() ? theme.success : theme.fgMuted,
+            cursor: 'pointer',
+            padding: '4px',
+            display: 'flex',
+            'align-items': 'center',
+            'justify-content': 'center',
+            'border-radius': 'var(--radius-xs)',
+          }}
+          aria-label={`Understand ${props.filePath}`}
+        >
+          <Show
+            when={loading()}
+            fallback={
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0ZM1.5 8a6.5 6.5 0 1 1 13 0 6.5 6.5 0 0 1-13 0Zm6.6-3.7c-.9 0-1.5.4-1.9 1a.75.75 0 0 1-1.3-.8c.7-1 1.7-1.7 3.2-1.7 1.7 0 3.1 1.1 3.1 2.7 0 1.2-.7 1.9-1.5 2.4-.6.4-.9.7-.9 1.2a.75.75 0 0 1-1.5 0c0-1.3.8-1.9 1.5-2.4.6-.4.9-.7.9-1.2 0-.7-.7-1.2-1.6-1.2ZM8 11.4a.9.9 0 1 1 0 1.8.9.9 0 0 1 0-1.8Z" />
+              </svg>
+            }
+          >
+            <span class="inline-spinner" aria-hidden="true" />
+          </Show>
+        </button>
+      )}
+    </TourHint>
+  );
+}
+
+function OpenMarkdownButton(props: { filePath: string; onOpenMarkdownClick?: () => void }) {
+  return (
+    <button
+      class="changed-files-open-canvas-btn"
+      onClick={(e) => {
+        e.stopPropagation();
+        props.onOpenMarkdownClick?.();
+      }}
+      onKeyDown={(e) => e.stopPropagation()}
+      tabIndex={-1}
+      style={{
+        background: `color-mix(in srgb, ${theme.bgElevated} 92%, transparent)`,
+        border: 'none',
+        color: theme.fgMuted,
+        cursor: 'pointer',
+        padding: '4px',
+        display: 'flex',
+        'align-items': 'center',
+        'justify-content': 'center',
+        'border-radius': 'var(--radius-xs)',
+      }}
+      title="Open in canvas"
+      aria-label={`Open ${props.filePath} in canvas`}
+    >
+      <svg
+        width="16"
+        height="16"
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.5"
+      >
+        <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="1.5" />
+        <path d="M10 2.75v10.5" />
+      </svg>
+    </button>
+  );
+}
+
 export function ChangedFilesList(props: ChangedFilesListProps) {
   const [files, setFiles] = createSignal<ChangedFile[]>([]);
   createEffect(() => props.onFileCountChange?.(files().length));
@@ -628,6 +735,12 @@ export function ChangedFilesList(props: ChangedFilesListProps) {
   });
 
   createEffect(() => {
+    const filesOverride = props.filesOverride;
+    if (filesOverride) {
+      setFiles(filesOverride);
+      setCanOpenFilesInEditor(false);
+      return;
+    }
     const path = props.worktreePath;
     const projectRoot = props.projectRoot;
     const branchName = props.branchName;
@@ -790,12 +903,12 @@ export function ChangedFilesList(props: ChangedFilesListProps) {
     }
 
     void refresh();
-    // Polling: skip when inactive (off-screen tasks) and when viewing a single
-    // commit (committed data is immutable).
+    // Polling: skip when inactive (off-screen tasks), when viewing a single
+    // commit (committed data is immutable), and while the window is hidden.
     const shouldPoll = singleCommitHash === null && props.isActive;
     const timer = shouldPoll
       ? setInterval(() => {
-          if (!usingBranchFallback) void refresh();
+          if (!usingBranchFallback && isWindowVisible()) void refresh();
         }, 5000)
       : undefined;
     onCleanup(() => {
@@ -810,7 +923,7 @@ export function ChangedFilesList(props: ChangedFilesListProps) {
     const taskBranch = props.branchName;
     const baseBranch = props.baseBranch;
     const selection = props.selectedCommit;
-    if (!repoRoot || isCommitHashSelection(selection)) {
+    if (props.filesOverride || !repoRoot || isCommitHashSelection(selection)) {
       batch(() => {
         setCoverage(null);
         setBaseCoverage(null);
@@ -875,7 +988,9 @@ export function ChangedFilesList(props: ChangedFilesListProps) {
     }
 
     void refresh();
-    const timer = setInterval(() => void refresh(), 5000);
+    const timer = setInterval(() => {
+      if (isWindowVisible()) void refresh();
+    }, 5000);
     onCleanup(() => {
       cancelled = true;
       clearInterval(timer);
@@ -928,7 +1043,7 @@ export function ChangedFilesList(props: ChangedFilesListProps) {
                   selectedIndex() === i
                     ? theme.bgHover
                     : row().node.file && row().node.path === props.activeFilePath
-                      ? 'rgba(88, 166, 255, 0.16)'
+                      ? `color-mix(in srgb, ${theme.accent} 16%, transparent)`
                       : 'transparent',
               }}
               onClick={() => {
@@ -1039,6 +1154,32 @@ export function ChangedFilesList(props: ChangedFilesListProps) {
                       worktreePath={props.worktreePath}
                       filePath={row().node.file?.path ?? row().node.path}
                       onOpenInEditorClick={props.onOpenInEditorClick}
+                    />
+                  </Show>
+                  <Show when={!!props.onUnderstandClick && row().node.file?.status !== 'D'}>
+                    <UnderstandFileButton
+                      filePath={row().node.file?.path ?? row().node.path}
+                      understanding={props.understanding}
+                      onUnderstandClick={() => {
+                        const file = row().node.file;
+                        if (file) props.onUnderstandClick?.(file);
+                      }}
+                    />
+                  </Show>
+                  <Show
+                    when={
+                      canOpenFilesInEditor() &&
+                      !!props.onOpenMarkdownClick &&
+                      row().node.file?.status !== 'D' &&
+                      isMarkdownPath(row().node.path)
+                    }
+                  >
+                    <OpenMarkdownButton
+                      filePath={row().node.file?.path ?? row().node.path}
+                      onOpenMarkdownClick={() => {
+                        const file = row().node.file;
+                        if (file) props.onOpenMarkdownClick?.(file);
+                      }}
                     />
                   </Show>
                 </>

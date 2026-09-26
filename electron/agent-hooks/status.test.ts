@@ -124,6 +124,30 @@ describe('mapClaudeHookPayload', () => {
     expect(long?.lastAssistantMessage?.endsWith('…')).toBe(true);
   });
 
+  it('preserves bounded StopFailure context', () => {
+    expect(
+      mapClaudeHookPayload(
+        payload({ hook_event_name: 'StopFailure', error: '  API unavailable\nTry later ' }),
+      ),
+    ).toMatchObject({ event: 'StopFailure', state: 'done', detail: 'API unavailable Try later' });
+    expect(
+      mapClaudeHookPayload(payload({ hook_event_name: 'StopFailure', error: 'x'.repeat(300) }))
+        ?.detail,
+    ).toHaveLength(200);
+  });
+
+  it('retains StopFailure error type and provider details together', () => {
+    expect(
+      mapClaudeHookPayload(
+        payload({
+          hook_event_name: 'StopFailure',
+          error: 'rate_limit',
+          error_details: '429 Too Many Requests',
+        }),
+      )?.detail,
+    ).toBe('rate_limit: 429 Too Many Requests');
+  });
+
   it('treats a fresh session as done but a compaction restart as no signal', () => {
     expect(
       mapClaudeHookPayload(payload({ hook_event_name: 'SessionStart', source: 'startup' })),

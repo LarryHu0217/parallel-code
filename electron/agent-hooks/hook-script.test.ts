@@ -22,6 +22,7 @@ describe('buildHookScript', () => {
     expect(script).toContain('http://127.0.0.1:$PARALLEL_CODE_HOOK_PORT/hook/claude');
     expect(script).toContain('x-parallel-code-hook-token: $PARALLEL_CODE_HOOK_TOKEN');
     expect(script).toContain('x-parallel-code-agent-id: $PARALLEL_CODE_AGENT_ID');
+    expect(script).toContain('x-parallel-code-launch-id: $PARALLEL_CODE_LAUNCH_ID');
   });
 
   it('stays quiet for background job workers that inherited the env', () => {

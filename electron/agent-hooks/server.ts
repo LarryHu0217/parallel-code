@@ -8,11 +8,14 @@ import {
   HOOK_ENV_AGENT_ID,
   HOOK_ENV_ENDPOINT,
   HOOK_ENV_TASK_ID,
+  HOOK_ENV_LAUNCH_ID,
+  HOOK_LAUNCH_ID_HEADER,
   HOOK_TASK_ID_HEADER,
   HOOK_TOKEN_HEADER,
   buildEndpointFile,
   buildHookScript,
 } from './hook-script.js';
+import { isCurrentAgentLaunch } from './observations.js';
 import { mapClaudeHookPayload, type AgentHookEventPayload } from './status.js';
 
 /** Hook payloads are small; anything larger is not a hook. */
@@ -30,7 +33,7 @@ export interface AgentHookServer {
   hookScriptPath: string;
   claudeSettingsPath: string;
   /** Env the PTY layer merges into a Claude launch so the script can find us. */
-  buildPtyEnv(agentId: string, taskId: string): Record<string, string>;
+  buildPtyEnv(agentId: string, taskId: string, launchId: string): Record<string, string>;
   close(): Promise<void>;
 }
 
@@ -118,11 +121,14 @@ export function startAgentHookServer(options: AgentHookServerOptions): Promise<A
     res.writeHead(204).end();
     const agentId = headerValue(req, HOOK_AGENT_ID_HEADER);
     const update = mapClaudeHookPayload(parseJson(body));
-    if (!agentId || !update) return;
+    const taskId = headerValue(req, HOOK_TASK_ID_HEADER);
+    const launchId = headerValue(req, HOOK_LAUNCH_ID_HEADER);
+    if (!agentId || !update || !isCurrentAgentLaunch(agentId, taskId, launchId)) return;
     options.onEvent({
       ...update,
       agentId,
-      taskId: headerValue(req, HOOK_TASK_ID_HEADER),
+      taskId,
+      launchId,
       at: now(),
     });
   });
@@ -152,10 +158,11 @@ export function startAgentHookServer(options: AgentHookServerOptions): Promise<A
       resolve({
         port,
         ...files,
-        buildPtyEnv: (agentId, taskId) => ({
+        buildPtyEnv: (agentId, taskId, launchId) => ({
           [HOOK_ENV_ENDPOINT]: endpointPath,
           [HOOK_ENV_AGENT_ID]: agentId,
           [HOOK_ENV_TASK_ID]: taskId,
+          [HOOK_ENV_LAUNCH_ID]: launchId,
         }),
         close: () =>
           new Promise<void>((done) => {

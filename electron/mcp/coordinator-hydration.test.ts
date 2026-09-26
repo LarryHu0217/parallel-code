@@ -11,7 +11,7 @@ import {
   mockAtomicWriteFileSync,
   mockAppendGitInfoExcludeBlocks,
   mockNotifyRenderer,
-  mockWin,
+  mockNotify,
 } from './coordinator-test-harness.js';
 
 const { Coordinator } = await setupCoordinatorHarness();
@@ -44,7 +44,7 @@ describe('existing Kimi task hydration failure', () => {
       fs.writeFileSync(file, data, { mode: 0o600 }),
     );
     coordinator = new Coordinator();
-    coordinator.setWindow(mockWin);
+    coordinator.setNotify(mockNotify);
     coordinator.registerCoordinator('coord', 'project');
     coordinator.setMCPServerInfo(
       'coord',

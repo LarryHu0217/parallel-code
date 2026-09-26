@@ -8,6 +8,12 @@ import {
 import { handleMCPToolCall } from './server.js';
 import type { MCPClient } from './client.js';
 import {
+  getAgentActivitySnapshot,
+  observeAgentHook,
+  registerAgentLaunch,
+  retireAgentLaunch,
+} from '../agent-hooks/observations.js';
+import {
   setupCoordinatorHarness,
   mockExecFile,
   mockSpawnSync,
@@ -26,6 +32,9 @@ import {
   mockWriteToAgent,
   mockSubscribeToAgent,
   mockGetAgentScrollback,
+  mockGetActiveAgentIds,
+  mockGetAgentMeta,
+  mockKillAgent,
   mockGetChangedFiles,
   mockGetAllFileDiffs,
   mockGetDiffBaseSha,
@@ -35,7 +44,7 @@ import {
   mockVerifyCancel,
   mockFsMkdir,
   mockOnAgentHookEvent,
-  mockWin,
+  mockNotify,
   getExitHandler,
   getHookEventHandler,
   getInterruptHandler,
@@ -68,7 +77,7 @@ describe('Coordinator registerCoordinator — idempotency', () => {
       worktree_path: '/tmp/test',
     });
     coordinator = new Coordinator();
-    coordinator.setWindow(mockWin);
+    coordinator.setNotify(mockNotify);
     coordinator.setDefaultProject('proj-1', '/tmp/project');
   });
 
@@ -1072,7 +1081,7 @@ describe('Coordinator coordinator notifications', () => {
       worktree_path: '/tmp/test',
     });
     coordinator = new Coordinator();
-    coordinator.setWindow(mockWin);
+    coordinator.setNotify(mockNotify);
     coordinator.setDefaultProject('proj-1', '/tmp/project');
   });
 
@@ -1396,14 +1405,14 @@ describe('Coordinator signal_done', () => {
       worktree_path: '/tmp/test',
     });
     coordinator = new Coordinator();
-    coordinator.setWindow(mockWin);
+    coordinator.setNotify(mockNotify);
     coordinator.setDefaultProject('proj-1', '/tmp/project');
   });
 
   it('stages notification with 5s delay without requiring markPromptDelivered', async () => {
     coordinator.registerCoordinator('coord-1', 'proj-1');
     await coordinator.createTask({ name: 'test', prompt: 'do', coordinatorTaskId: 'coord-1' });
-    coordinator.signalDone('task-1');
+    await coordinator.signalDone('task-1');
 
     const stagedCall = mockNotifyRenderer.mock.calls.find(
       (c) => c[0] === 'mcp_coordinator_notification_staged',
@@ -1417,7 +1426,7 @@ describe('Coordinator signal_done', () => {
   it('sends MCP_TaskStateSync to renderer', async () => {
     coordinator.registerCoordinator('coord-1', 'proj-1');
     await coordinator.createTask({ name: 'test', prompt: 'do', coordinatorTaskId: 'coord-1' });
-    coordinator.signalDone('task-1');
+    await coordinator.signalDone('task-1');
 
     expect(mockNotifyRenderer).toHaveBeenCalledWith(
       'mcp_task_state_sync',
@@ -1432,7 +1441,7 @@ describe('Coordinator signal_done', () => {
     coordinator.registerCoordinator('coord-1', 'proj-1');
     await coordinator.createTask({ name: 'test', prompt: 'do', coordinatorTaskId: 'coord-1' });
     const before = new Date();
-    coordinator.signalDone('task-1');
+    await coordinator.signalDone('task-1');
     const after = new Date();
     const task = coordinator.getTask('task-1');
     expect(task?.signalDoneAt).toBeDefined();
@@ -1440,9 +1449,9 @@ describe('Coordinator signal_done', () => {
     expect(task?.signalDoneAt?.getTime()).toBeLessThanOrEqual(after.getTime());
   });
 
-  it('is a no-op for unknown taskId', () => {
+  it('rejects unknown taskId without a completion notification', async () => {
     coordinator.registerCoordinator('coord-1', 'proj-1');
-    expect(() => coordinator.signalDone('nonexistent-task')).not.toThrow();
+    await expect(coordinator.signalDone('nonexistent-task')).rejects.toThrow('Task not found');
     expect(mockNotifyRenderer).not.toHaveBeenCalledWith(
       'mcp_coordinator_notification_staged',
       expect.anything(),
@@ -1503,7 +1512,7 @@ describe('Coordinator land_self', () => {
     vi.mocked(mockDeleteTask).mockResolvedValue(undefined);
     mockGit();
     coordinator = new Coordinator();
-    coordinator.setWindow(mockWin);
+    coordinator.setNotify(mockNotify);
     coordinator.setDefaultProject('proj-1', '/tmp/project');
     coordinator.registerCoordinator('coord-1', 'proj-1', { worktreePath: '/tmp/project' });
     await coordinator.createTask({ name: 'test', prompt: 'do', coordinatorTaskId: 'coord-1' });
@@ -1512,6 +1521,10 @@ describe('Coordinator land_self', () => {
 
   it('lands, cleans up resources, and closes the task record', async () => {
     const { deleteTask: mockDeleteTask } = await import('../ipc/tasks.js');
+    mockGetActiveAgentIds.mockReturnValueOnce(['secondary', 'unrelated']);
+    mockGetAgentMeta
+      .mockReturnValueOnce({ taskId: 'task-1' })
+      .mockReturnValueOnce({ taskId: 'other' });
 
     const result = await coordinator.landSelf('task-1', { verification, summary: 'done' });
 
@@ -1523,11 +1536,17 @@ describe('Coordinator land_self', () => {
     });
     expect(vi.mocked(mergeTask)).toHaveBeenCalled();
     expect(vi.mocked(mockDeleteTask)).toHaveBeenCalled();
-    expect(coordinator.getTask('task-1')).toBeUndefined();
-    expect(mockNotifyRenderer).toHaveBeenCalledWith(
-      'mcp_task_closed',
-      expect.objectContaining({ taskId: 'task-1' }),
+    expect(mockKillAgent).toHaveBeenCalledWith('secondary');
+    expect(mockKillAgent).not.toHaveBeenCalledWith('unrelated');
+    expect(vi.mocked(mockDeleteTask)).toHaveBeenCalledWith(
+      expect.objectContaining({ agentIds: expect.arrayContaining(['secondary']) }),
     );
+    expect(coordinator.getTask('task-1')).toBeUndefined();
+    // The renderer marks the Super Productivity task done with a merge note.
+    expect(mockNotifyRenderer).toHaveBeenCalledWith('mcp_task_closed', {
+      taskId: 'task-1',
+      merged: { linesAdded: expect.any(Number), linesRemoved: expect.any(Number) },
+    });
   });
 
   it('restores the Kimi auto-discovered config before checking and merging the worktree', async () => {
@@ -1567,7 +1586,7 @@ describe('Coordinator land_self', () => {
     );
 
     const kimiCoordinator = new Coordinator();
-    kimiCoordinator.setWindow(mockWin);
+    kimiCoordinator.setNotify(mockNotify);
     kimiCoordinator.setDefaultProject('proj-1', '/tmp/project');
     kimiCoordinator.registerCoordinator('coord-kimi', 'proj-1', {
       worktreePath: '/tmp/project',
@@ -1621,7 +1640,7 @@ describe('Coordinator land_self', () => {
     });
 
     const kimiCoordinator = new Coordinator();
-    kimiCoordinator.setWindow(mockWin);
+    kimiCoordinator.setNotify(mockNotify);
     kimiCoordinator.setDefaultProject('proj-1', '/tmp/project');
     kimiCoordinator.registerCoordinator('coord-kimi', 'proj-1', {
       worktreePath: '/tmp/project',
@@ -1670,7 +1689,7 @@ describe('Coordinator land_self', () => {
     });
 
     const kimiCoordinator = new Coordinator();
-    kimiCoordinator.setWindow(mockWin);
+    kimiCoordinator.setNotify(mockNotify);
     kimiCoordinator.setDefaultProject('proj-1', '/tmp/project');
     kimiCoordinator.registerCoordinator('coord-kimi', 'proj-1', {
       worktreePath: '/tmp/project',
@@ -1727,7 +1746,7 @@ describe('Coordinator land_self', () => {
     });
 
     const kimiCoordinator = new Coordinator();
-    kimiCoordinator.setWindow(mockWin);
+    kimiCoordinator.setNotify(mockNotify);
     kimiCoordinator.setDefaultProject('proj-1', '/tmp/project');
     kimiCoordinator.registerCoordinator('coord-kimi', 'proj-1', {
       worktreePath: '/tmp/project',
@@ -1970,6 +1989,41 @@ describe('Coordinator land_self', () => {
     expect(coordinator.getTask('task-1')?.autoDiscoveredMcpConfig).toBeDefined();
   });
 
+  it('refuses desktop-approved integration when the Kimi MCP entry was changed', async () => {
+    const task = coordinator.getTask('task-1');
+    expect(task).toBeDefined();
+    if (!task) return;
+    task.integrationPolicy = 'review';
+    task.baseBranch = 'main';
+    task.signalDoneAt = new Date();
+    task.agentCommand = 'kimi';
+    task.autoDiscoveredMcpConfig = {
+      path: '/tmp/test/.kimi-code/mcp.json',
+      writtenParallelCodeFingerprint: 'a'.repeat(64),
+    };
+    mockReadFileSync.mockReturnValue(
+      JSON.stringify({ mcpServers: { 'parallel-code': { command: 'user-changed' } } }),
+    );
+    mockExecFile.mockClear();
+
+    await expect(
+      coordinator.approveAndMergeTask(task.id, {
+        expectedCommit: 'a'.repeat(40),
+        expectedTargetBranch: 'main',
+        expectedTargetCommit: 'b'.repeat(40),
+      }),
+    ).rejects.toThrow('Unable to restore managed Kimi MCP config');
+
+    expect(mockUnlinkSync).not.toHaveBeenCalled();
+    expect(mockExecFile).not.toHaveBeenCalledWith(
+      'git',
+      expect.arrayContaining(['add', '-A']),
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(vi.mocked(mergeTask)).not.toHaveBeenCalled();
+  });
+
   it('stages a landed notification so the coordinator hears about successful self-land', async () => {
     await coordinator.landSelf('task-1', { verification, summary: 'done' });
 
@@ -2096,7 +2150,7 @@ describe('Coordinator land_self', () => {
         if (path === configPath) currentConfig = raw as string;
       });
       const kimiCoordinator = new Coordinator();
-      kimiCoordinator.setWindow(mockWin);
+      kimiCoordinator.setNotify(mockNotify);
       kimiCoordinator.setDefaultProject('proj-1', '/tmp/project');
       kimiCoordinator.registerCoordinator('coord-kimi', 'proj-1', {
         worktreePath: '/tmp/project',
@@ -2446,7 +2500,7 @@ describe('Coordinator sub-agent spawn settings', () => {
       worktree_path: '/tmp/test',
     });
     coordinator = new Coordinator();
-    coordinator.setWindow(mockWin);
+    coordinator.setNotify(mockNotify);
     coordinator.setDefaultProject('proj-1', '/tmp/project');
     coordinator.registerCoordinator('coord-1', 'proj-1');
   });
@@ -2456,6 +2510,7 @@ describe('Coordinator sub-agent spawn settings', () => {
     expect(mockSpawnAgent).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ command: 'claude' }),
+      expect.any(Function),
     );
   });
 
@@ -2465,6 +2520,7 @@ describe('Coordinator sub-agent spawn settings', () => {
     expect(mockSpawnAgent).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ command: '/usr/local/bin/claude' }),
+      expect.any(Function),
     );
   });
 
@@ -2474,6 +2530,7 @@ describe('Coordinator sub-agent spawn settings', () => {
     expect(mockSpawnAgent).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ envFile: '~/.config/parallel-code/claude.env' }),
+      expect.any(Function),
     );
   });
 
@@ -2526,6 +2583,7 @@ describe('Coordinator sub-agent spawn settings', () => {
     expect(mockSpawnAgent).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ cwd: '/tmp/test' }),
+      expect.any(Function),
     );
   });
 
@@ -2542,6 +2600,7 @@ describe('Coordinator sub-agent spawn settings', () => {
         // Args are the agent args (not docker exec wrapper)
         args: expect.not.arrayContaining(['exec']),
       }),
+      expect.any(Function),
     );
     // Coordinator container name is NOT in the args (sub-task has its own container)
     const spawnArgs = mockSpawnAgent.mock.calls[0][1].args as string[];
@@ -2554,6 +2613,7 @@ describe('Coordinator sub-agent spawn settings', () => {
     expect(mockSpawnAgent).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ command: 'claude' }),
+      expect.any(Function),
     );
     const spawnCall = mockSpawnAgent.mock.calls[0][1] as { dockerMode?: boolean; args: string[] };
     expect(spawnCall.dockerMode).toBeUndefined();
@@ -2579,7 +2639,7 @@ describe('Coordinator settings.local.json sub-task injection', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     coordinator = new Coordinator();
-    coordinator.setWindow(mockWin);
+    coordinator.setNotify(mockNotify);
     coordinator.setDefaultProject('proj-1', '/tmp/project');
     coordinator.registerCoordinator('coord-1', 'proj-1');
     mockCreateBackendTask.mockResolvedValue({
@@ -2670,7 +2730,7 @@ describe('Coordinator waitForIdle', () => {
       worktree_path: '/tmp/test',
     });
     coordinator = new Coordinator();
-    coordinator.setWindow(mockWin);
+    coordinator.setNotify(mockNotify);
     coordinator.setDefaultProject('proj-1', '/tmp/project');
     coordinator.registerCoordinator('coord-1', 'proj-1');
   });
@@ -2773,7 +2833,7 @@ describe('Coordinator waitForSignalDone', () => {
       worktree_path: '/tmp/test',
     });
     coordinator = new Coordinator();
-    coordinator.setWindow(mockWin);
+    coordinator.setNotify(mockNotify);
     coordinator.setDefaultProject('proj-1', '/tmp/project');
     coordinator.registerCoordinator('coord-1', 'proj-1');
   });
@@ -2790,7 +2850,7 @@ describe('Coordinator waitForSignalDone', () => {
 
   it('resolves immediately with unconsumed signal if already signalled', async () => {
     await coordinator.createTask({ name: 'test', prompt: 'do', coordinatorTaskId: 'coord-1' });
-    coordinator.signalDone('task-1');
+    await coordinator.signalDone('task-1');
     await expect(coordinator.waitForSignalDone('coord-1')).resolves.toMatchObject({
       taskId: 'task-1',
       name: 'test',
@@ -2803,7 +2863,7 @@ describe('Coordinator waitForSignalDone', () => {
   it('resolves when signalDone is called, with remaining count', async () => {
     await coordinator.createTask({ name: 'test', prompt: 'do', coordinatorTaskId: 'coord-1' });
     const waitPromise = coordinator.waitForSignalDone('coord-1');
-    coordinator.signalDone('task-1');
+    await coordinator.signalDone('task-1');
     await expect(waitPromise).resolves.toMatchObject({
       taskId: 'task-1',
       name: 'test',
@@ -2830,7 +2890,7 @@ describe('Coordinator waitForSignalDone', () => {
     await coordinator.createTask({ name: 'task-a', prompt: 'do', coordinatorTaskId: 'coord-1' });
     await coordinator.createTask({ name: 'task-b', prompt: 'do', coordinatorTaskId: 'coord-1' });
     const waitPromise = coordinator.waitForSignalDone('coord-1');
-    coordinator.signalDone('task-1');
+    await coordinator.signalDone('task-1');
     await expect(waitPromise).resolves.toMatchObject({
       taskId: 'task-1',
       name: 'task-a',
@@ -2859,7 +2919,7 @@ describe('Coordinator waitForSignalDone', () => {
       expect.anything(),
     );
 
-    coordinator.signalDone('task-1');
+    await coordinator.signalDone('task-1');
     await expect(waitPromise).resolves.toMatchObject({ taskId: 'task-1' });
     expect(mockNotifyRenderer).toHaveBeenCalledWith(
       'mcp_coordinator_notification_staged',
@@ -2888,7 +2948,7 @@ describe('Coordinator waitForSignalDone', () => {
       coordinatorTaskId: 'coord-1',
     });
 
-    coordinator.signalDone('task-1');
+    await coordinator.signalDone('task-1');
     await expect(waitPromise).resolves.toMatchObject({ taskId: 'task-1' });
     expect(mockNotifyRenderer).not.toHaveBeenCalledWith(
       'mcp_coordinator_notification_staged',
@@ -2911,7 +2971,7 @@ describe('Coordinator sendPrompt', () => {
       worktree_path: '/tmp/test',
     });
     coordinator = new Coordinator();
-    coordinator.setWindow(mockWin);
+    coordinator.setNotify(mockNotify);
     coordinator.setDefaultProject('proj-1', '/tmp/project');
     coordinator.registerCoordinator('coord-1', 'proj-1');
   });
@@ -3319,7 +3379,7 @@ describe('Coordinator mergeTask active ownership guard', () => {
       lines_removed: 0,
     });
     coordinator = new Coordinator();
-    coordinator.setWindow(mockWin);
+    coordinator.setNotify(mockNotify);
     coordinator.setDefaultProject('proj-1', '/tmp/project');
     coordinator.registerCoordinator('coord-1', 'proj-1');
   });
@@ -3334,7 +3394,7 @@ describe('Coordinator mergeTask active ownership guard', () => {
 
   it('allows legacy signal_done manual-review tasks even if the agent process is still running', async () => {
     await coordinator.createTask({ name: 'test', prompt: 'do', coordinatorTaskId: 'coord-1' });
-    coordinator.signalDone('task-1');
+    await coordinator.signalDone('task-1');
 
     await expect(coordinator.mergeTask('task-1')).resolves.toEqual({
       mainBranch: 'main',
@@ -3345,10 +3405,22 @@ describe('Coordinator mergeTask active ownership guard', () => {
     expect(vi.mocked(mergeTask)).toHaveBeenCalled();
   });
 
+  it('says the task was merged when a merge with cleanup closes it', async () => {
+    await coordinator.createTask({ name: 'test', prompt: 'do', coordinatorTaskId: 'coord-1' });
+    await coordinator.signalDone('task-1');
+
+    await coordinator.mergeTask('task-1', { cleanup: true });
+
+    expect(mockNotifyRenderer).toHaveBeenCalledWith('mcp_task_closed', {
+      taskId: 'task-1',
+      merged: { linesAdded: 1, linesRemoved: 0 },
+    });
+  });
+
   it('runs the verify command before a coordinator-driven merge and escalates on failure', async () => {
     coordinator.registerCoordinator('coord-1', 'proj-1', { verifyCommand: 'npm test' });
     await coordinator.createTask({ name: 'test', prompt: 'do', coordinatorTaskId: 'coord-1' });
-    coordinator.signalDone('task-1');
+    await coordinator.signalDone('task-1');
     mockVerifyStart.mockResolvedValueOnce({
       command: 'npm test',
       status: 'timed_out',
@@ -3384,7 +3456,7 @@ describe('Coordinator deregisterCoordinator', () => {
       worktree_path: '/tmp/test',
     });
     coordinator = new Coordinator();
-    coordinator.setWindow(mockWin);
+    coordinator.setNotify(mockNotify);
     coordinator.setDefaultProject('proj-1', '/tmp/project');
   });
 
@@ -3570,7 +3642,7 @@ describe('Coordinator per-task projectRoot', () => {
       worktree_path: '/tmp/test',
     });
     coordinator = new Coordinator();
-    coordinator.setWindow(mockWin);
+    coordinator.setNotify(mockNotify);
     coordinator.setDefaultProject('proj-1', '/tmp/project-a');
     coordinator.registerCoordinator('coord-1', 'proj-1');
   });
@@ -3602,7 +3674,7 @@ describe('Coordinator waiter resolver cleanup on timeout', () => {
       worktree_path: '/tmp/test',
     });
     coordinator = new Coordinator();
-    coordinator.setWindow(mockWin);
+    coordinator.setNotify(mockNotify);
     coordinator.setDefaultProject('proj-1', '/tmp/project');
     coordinator.registerCoordinator('coord-1', 'proj-1');
   });
@@ -3644,7 +3716,7 @@ describe('Coordinator waiter resolver cleanup on timeout', () => {
     p2.then(() => {
       resolveCalled = true;
     }).catch(() => {});
-    coordinator.signalDone('task-1');
+    await coordinator.signalDone('task-1');
     await Promise.resolve();
     expect(resolveCalled).toBe(true);
   });
@@ -3664,7 +3736,7 @@ describe('Coordinator MCP_TaskCreated spawn settings', () => {
       worktree_path: '/tmp/test',
     });
     coordinator = new Coordinator();
-    coordinator.setWindow(mockWin);
+    coordinator.setNotify(mockNotify);
     coordinator.setDefaultProject('proj-1', '/tmp/project');
     coordinator.registerCoordinator('coord-1', 'proj-1');
   });
@@ -3760,7 +3832,7 @@ describe('Coordinator sub-task MCP config isolation', () => {
     mockSpawnSync.mockReturnValue({ status: 1, error: undefined, stderr: Buffer.alloc(0) });
     mockExistsSync.mockReturnValue(false);
     coordinator = new Coordinator();
-    coordinator.setWindow(mockWin);
+    coordinator.setNotify(mockNotify);
     coordinator.setDefaultProject('proj-1', '/tmp/project');
     coordinator.registerCoordinator('coord-1', 'proj-1');
   });
@@ -4156,7 +4228,7 @@ describe('Coordinator sub-task MCP config isolation', () => {
     expect(JSON.stringify(persistedState)).not.toContain('other-server');
 
     const restarted = new Coordinator();
-    restarted.setWindow(mockWin);
+    restarted.setNotify(mockNotify);
     restarted.setDefaultProject('proj-1', '/tmp/project');
     restarted.registerCoordinator('coord-1', 'proj-1');
     restarted.setMCPServerInfo(
@@ -4317,7 +4389,7 @@ describe('Coordinator MCP config restart rewrite', () => {
       worktree_path: '/tmp/test',
     });
     coordinator = new Coordinator();
-    coordinator.setWindow(mockWin);
+    coordinator.setNotify(mockNotify);
     coordinator.setDefaultProject('proj-1', '/tmp/project');
     coordinator.registerCoordinator('coord-1', 'proj-1');
   });
@@ -4477,7 +4549,7 @@ describe('Coordinator two-class token — subtask configs use subtaskToken', () 
       worktree_path: '/tmp/test',
     });
     coordinator = new Coordinator();
-    coordinator.setWindow(mockWin);
+    coordinator.setNotify(mockNotify);
     coordinator.setDefaultProject('proj-1', '/tmp/project');
     coordinator.registerCoordinator('coord-1', 'proj-1');
   });
@@ -4554,7 +4626,7 @@ describe('Coordinator hydrateTask — restart hydration', () => {
       worktree_path: '/tmp/test',
     });
     coordinator = new Coordinator();
-    coordinator.setWindow(mockWin);
+    coordinator.setNotify(mockNotify);
     coordinator.setDefaultProject('proj-1', '/tmp/project');
     coordinator.registerCoordinator('coord-1', 'proj-1');
   });
@@ -4932,7 +5004,7 @@ describe('Coordinator setTaskControl — queued send until activity lease clears
       worktree_path: '/tmp/test',
     });
     coordinator = new Coordinator();
-    coordinator.setWindow(mockWin);
+    coordinator.setNotify(mockNotify);
     coordinator.setDefaultProject('proj-1', '/tmp/project');
     coordinator.registerCoordinator('coord-1', 'proj-1');
   });
@@ -5023,7 +5095,7 @@ describe('Coordinator waitForSignalDone — notification lifecycle', () => {
       worktree_path: '/tmp/test',
     });
     coordinator = new Coordinator();
-    coordinator.setWindow(mockWin);
+    coordinator.setNotify(mockNotify);
     coordinator.setDefaultProject('proj-1', '/tmp/project');
     coordinator.registerCoordinator('coord-1', 'proj-1');
   });
@@ -5053,7 +5125,7 @@ describe('Coordinator waitForSignalDone — notification lifecycle', () => {
     });
 
     // Clean up — reject or resolve the promise
-    coordinator.signalDone('task-1');
+    await coordinator.signalDone('task-1');
     await waitPromise.catch(() => {});
   });
 
@@ -5076,7 +5148,7 @@ describe('Coordinator waitForSignalDone — notification lifecycle', () => {
     expect(stagedCalls).toHaveLength(0);
 
     // Clean up
-    coordinator.signalDone('task-1');
+    await coordinator.signalDone('task-1');
     await waitPromise.catch(() => {});
   });
 
@@ -5142,7 +5214,7 @@ describe('Coordinator cleanupTask — failure resilience', () => {
       worktree_path: '/tmp/test',
     });
     coordinator = new Coordinator();
-    coordinator.setWindow(mockWin);
+    coordinator.setNotify(mockNotify);
     coordinator.setDefaultProject('proj-1', '/tmp/project');
     coordinator.registerCoordinator('coord-1', 'proj-1');
   });
@@ -5391,7 +5463,7 @@ describe('Coordinator cleanupTask — Docker sub-task container stop', () => {
       worktree_path: '/tmp/test',
     });
     coordinator = new Coordinator();
-    coordinator.setWindow(mockWin);
+    coordinator.setNotify(mockNotify);
     coordinator.setDefaultProject('proj-1', '/tmp/project');
     coordinator.registerCoordinator('coord-1', 'proj-1');
     coordinator.setDockerContainerName('coord-1', 'my-coord-container');
@@ -5453,7 +5525,7 @@ describe('Coordinator setMCPServerInfo — token rotation', () => {
       worktree_path: '/tmp/test',
     });
     coordinator = new Coordinator();
-    coordinator.setWindow(mockWin);
+    coordinator.setNotify(mockNotify);
     coordinator.setDefaultProject('proj-1', '/tmp/project');
     coordinator.registerCoordinator('coord-1', 'proj-1');
   });
@@ -5534,12 +5606,12 @@ describe('Multiple Docker coordinators — isolation', () => {
     });
 
     coordA = new Coordinator();
-    coordA.setWindow(mockWin);
+    coordA.setNotify(mockNotify);
     coordA.setDefaultProject('proj-a', '/tmp/project-a');
     coordA.registerCoordinator('coord-a', 'proj-a');
 
     coordB = new Coordinator();
-    coordB.setWindow(mockWin);
+    coordB.setNotify(mockNotify);
     coordB.setDefaultProject('proj-b', '/tmp/project-b');
     coordB.registerCoordinator('coord-b', 'proj-b');
   });
@@ -5591,7 +5663,7 @@ describe('Coordinator Docker sub-task — per-container spawn', () => {
       worktree_path: '/tmp/test',
     });
     coordinator = new Coordinator();
-    coordinator.setWindow(mockWin);
+    coordinator.setNotify(mockNotify);
     coordinator.setDefaultProject('proj-1', '/tmp/project');
     coordinator.registerCoordinator('coord-1', 'proj-1');
     coordinator.setDockerContainerName('coord-1', 'my-coord-container');
@@ -5637,7 +5709,7 @@ describe('Coordinator interrupted bootstrap', () => {
       worktree_path: '/tmp/test',
     });
     coordinator = new Coordinator();
-    coordinator.setWindow(mockWin);
+    coordinator.setNotify(mockNotify);
     coordinator.setDefaultProject('proj-1', '/tmp/project');
     coordinator.registerCoordinator('coord-1', 'proj-1');
   });
@@ -5682,7 +5754,7 @@ describe('Coordinator very fast prompt — scrollback detection', () => {
       worktree_path: '/tmp/test',
     });
     coordinator = new Coordinator();
-    coordinator.setWindow(mockWin);
+    coordinator.setNotify(mockNotify);
     coordinator.setDefaultProject('proj-1', '/tmp/project');
     coordinator.registerCoordinator('coord-1', 'proj-1');
   });
@@ -5752,7 +5824,7 @@ describe('Coordinator close with active sub-tasks', () => {
     vi.clearAllMocks();
     mockExistsSync.mockReturnValue(false);
     coordinator = new Coordinator();
-    coordinator.setWindow(mockWin);
+    coordinator.setNotify(mockNotify);
     coordinator.setDefaultProject('proj-1', '/tmp/project');
     coordinator.registerCoordinator('coord-1', 'proj-1');
   });
@@ -5843,7 +5915,7 @@ describe('Coordinator restart hydration with Docker container name', () => {
     vi.clearAllMocks();
     mockExistsSync.mockReturnValue(false);
     coordinator = new Coordinator();
-    coordinator.setWindow(mockWin);
+    coordinator.setNotify(mockNotify);
     coordinator.setDefaultProject('proj-1', '/tmp/project');
     coordinator.registerCoordinator('coord-1', 'proj-1');
   });
@@ -5900,12 +5972,12 @@ describe('Coordinator removeCoordinatedTask', () => {
       worktree_path: '/tmp/test',
     });
     coordinator = new Coordinator();
-    coordinator.setWindow(mockWin);
+    coordinator.setNotify(mockNotify);
     coordinator.setDefaultProject('proj-1', '/tmp/project');
     coordinator.registerCoordinator('coord-1', 'proj-1');
   });
 
-  it('is a no-op for unknown taskId', () => {
+  it('rejects unknown taskId without a completion notification', async () => {
     expect(() => coordinator.removeCoordinatedTask('nonexistent')).not.toThrow();
   });
 
@@ -6052,7 +6124,7 @@ describe('Coordinator restart round-trip integration', () => {
     vi.clearAllMocks();
     mockExistsSync.mockReturnValue(false);
     coordinator = new Coordinator();
-    coordinator.setWindow(mockWin);
+    coordinator.setNotify(mockNotify);
     coordinator.setDefaultProject('proj-1', '/tmp/project');
     coordinator.registerCoordinator('coord-1', 'proj-1');
   });
@@ -6241,7 +6313,7 @@ describe('Coordinator hydrateTask — mcpConfigPath directory scoping', () => {
     vi.clearAllMocks();
     mockExistsSync.mockReturnValue(false);
     coordinator = new Coordinator();
-    coordinator.setWindow(mockWin);
+    coordinator.setNotify(mockNotify);
     coordinator.setDefaultProject('proj-1', '/tmp/project');
     coordinator.registerCoordinator('coord-1', 'proj-1');
     coordinator.setMCPServerInfo(
@@ -6389,7 +6461,7 @@ describe('Coordinator closeTask — per-task config isolation (two sub-tasks)', 
     vi.clearAllMocks();
     mockExistsSync.mockReturnValue(false);
     coordinator = new Coordinator();
-    coordinator.setWindow(mockWin);
+    coordinator.setNotify(mockNotify);
     coordinator.setDefaultProject('proj-1', '/tmp/project');
     coordinator.registerCoordinator('coord-1', 'proj-1');
     coordinator.setMCPServerInfo(
@@ -6444,7 +6516,7 @@ describe('Coordinator Docker mode — per-container sub-tasks', () => {
       worktree_path: '/tmp/project/.worktrees/task/docker-sub',
     });
     coordinator = new Coordinator();
-    coordinator.setWindow(mockWin);
+    coordinator.setNotify(mockNotify);
     coordinator.setDefaultProject('proj-1', '/tmp/project');
 
     // Register coordinator in Docker mode
@@ -6564,7 +6636,7 @@ describe('Coordinator waitForSignalDone — requestId replay after transport fai
       worktree_path: '/tmp/test',
     });
     coordinator = new Coordinator();
-    coordinator.setWindow(mockWin);
+    coordinator.setNotify(mockNotify);
     coordinator.setDefaultProject('proj-1', '/tmp/project');
     coordinator.registerCoordinator('coord-1', 'proj-1');
   });
@@ -6705,7 +6777,7 @@ describe('Coordinator getTaskDiff — preamble-bearing files', () => {
       worktree_path: '/tmp/worktree',
     });
     coordinator = new Coordinator();
-    coordinator.setWindow(mockWin);
+    coordinator.setNotify(mockNotify);
     coordinator.setDefaultProject('proj-1', '/tmp/project');
     coordinator.registerCoordinator('coord-1', 'proj-1');
     vi.mocked(getDiffBaseSha).mockResolvedValue('base-sha-abc');
@@ -6938,7 +7010,7 @@ describe('Coordinator deregisterCoordinator — .mcp.json cleanup', () => {
       worktree_path: '/tmp/test',
     });
     coordinator = new Coordinator();
-    coordinator.setWindow(mockWin);
+    coordinator.setNotify(mockNotify);
     coordinator.setDefaultProject('proj-1', '/tmp/project');
     coordinator.registerCoordinator('coord-1', 'proj-1');
     coordinator.setMcpJsonInfo('coord-1', '/tmp/.mcp.json', false);
@@ -7075,7 +7147,7 @@ describe('Coordinator createTask — deregister race', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     coordinator = new Coordinator();
-    coordinator.setWindow(mockWin);
+    coordinator.setNotify(mockNotify);
     coordinator.setDefaultProject('proj-1', '/tmp/project');
     coordinator.registerCoordinator('coord-1', 'proj-1');
   });
@@ -7146,7 +7218,7 @@ describe('Coordinator createTask — concurrency enforcement', () => {
       };
     });
     coordinator = new Coordinator();
-    coordinator.setWindow(mockWin);
+    coordinator.setNotify(mockNotify);
     coordinator.setDefaultProject('proj-1', '/tmp/project');
     coordinator.registerCoordinator('coord-1', 'proj-1', { maxConcurrentTasks: 2 });
   });
@@ -7228,12 +7300,38 @@ describe('Coordinator createTask — concurrency enforcement', () => {
 
   it('applies the default limit when the coordinator registers without one', async () => {
     coordinator.registerCoordinator('coord-default', 'proj-1');
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 4; i++) {
       await coordinator.createTask({ name: `t${i}`, coordinatorTaskId: 'coord-default' });
     }
     await expect(
       coordinator.createTask({ name: 'over', coordinatorTaskId: 'coord-default' }),
     ).rejects.toThrow(/concurrency limit/);
+  });
+
+  it('admits against a limit changed after registration without killing running children', async () => {
+    await coordinator.createTask({ name: 'a', coordinatorTaskId: 'coord-1' });
+    await coordinator.createTask({ name: 'b', coordinatorTaskId: 'coord-1' });
+    coordinator.setMaxConcurrentSubTasks('coord-1', 3);
+    await expect(
+      coordinator.createTask({ name: 'c', coordinatorTaskId: 'coord-1' }),
+    ).resolves.toBeDefined();
+    coordinator.setMaxConcurrentSubTasks('coord-1', 1);
+    await expect(
+      coordinator.createTask({ name: 'd', coordinatorTaskId: 'coord-1' }),
+    ).rejects.toThrow(/3\/1 in flight/);
+    expect(mockKillAgent).not.toHaveBeenCalled();
+  });
+
+  it('applies limit changes to exited child restarts', async () => {
+    const child = await coordinator.createTask({ name: 'a', coordinatorTaskId: 'coord-1' });
+    await coordinator.createTask({ name: 'b', coordinatorTaskId: 'coord-1' });
+    getExitHandler()(child.agentId, { exitCode: 0 });
+    coordinator.setMaxConcurrentSubTasks('coord-1', 1);
+    expect(() => coordinator.reserveChildRestart(child.id)).toThrow(/concurrency limit/);
+    coordinator.setMaxConcurrentSubTasks('coord-1', 2);
+    const release = coordinator.reserveChildRestart(child.id);
+    expect(() => coordinator.reserveChildRestart(child.id)).toThrow(/concurrency limit/);
+    release();
   });
 });
 
@@ -7272,13 +7370,67 @@ describe('Coordinator hook-driven task state', () => {
       };
     });
     coordinator = new Coordinator();
-    coordinator.setWindow(mockWin);
+    coordinator.setNotify(mockNotify);
     coordinator.setDefaultProject('proj-1', '/tmp/project');
     coordinator.registerCoordinator('coord-1', 'proj-1');
   });
 
   it('subscribes to hook events on construction', () => {
     expect(mockOnAgentHookEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it('exposes the shared primary-agent observation without completing the assignment', async () => {
+    const task = await coordinator.createTask({ name: 'a', coordinatorTaskId: 'coord-1' });
+    const launchId = 'evidence-launch';
+    registerAgentLaunch(task.agentId, task.id, launchId);
+    try {
+      observeAgentHook(
+        hookEvent(task.agentId, {
+          taskId: task.id,
+          launchId,
+          state: 'done',
+          event: 'SessionStart',
+        }),
+      );
+      expect(coordinator.getTaskStatus(task.id)?.activityEvidence?.activity).toBe('ready');
+      observeAgentHook(
+        hookEvent(task.agentId, {
+          taskId: task.id,
+          launchId,
+          state: 'done',
+          event: 'Stop',
+        }),
+      );
+      const observation = getAgentActivitySnapshot().observations.find(
+        (entry) => entry.agentId === task.agentId,
+      );
+      const evidence = coordinator.getTaskStatus(task.id)?.activityEvidence;
+      expect(evidence).toMatchObject({
+        agentId: task.agentId,
+        launchId,
+        source: 'hook',
+        activity: 'turn_finished',
+        event: 'Stop',
+        observedAt: observation?.at,
+        freshness: 'current',
+      });
+      expect(coordinator.listTasks()[0]?.activityEvidence).toEqual(evidence);
+      expect(coordinator.getTaskStatus(task.id)).toMatchObject({ status: 'running' });
+      expect(coordinator.getTaskStatus(task.id)?.signalDoneAt).toBeUndefined();
+    } finally {
+      retireAgentLaunch(task.agentId, launchId);
+    }
+  });
+
+  it('reports unknown evidence when no primary launch has been observed', async () => {
+    const task = await coordinator.createTask({ name: 'a', coordinatorTaskId: 'coord-1' });
+    expect(coordinator.getTaskStatus(task.id)?.activityEvidence).toEqual({
+      agentId: task.agentId,
+      source: 'process',
+      activity: 'unknown',
+      event: 'NoObservation',
+      freshness: 'unknown',
+    });
   });
 
   it('marks a running task idle on a hook Stop event', async () => {
@@ -7408,6 +7560,14 @@ describe('Coordinator hook-driven task state', () => {
     expect(task.status).toBe('running');
     emitWorkThenIdle(getOutputCb());
     expect(task.status).toBe('idle');
+  });
+
+  it('preserves hook ownership when the renderer reattaches to the same process', async () => {
+    const task = await coordinator.createTask({ name: 'a', coordinatorTaskId: 'coord-1' });
+    getHookEventHandler()(hookEvent(task.agentId, { event: 'UserPromptSubmit' }));
+    getSpawnHandler()(task.agentId, { reattached: true });
+    emitWorkThenIdle(getOutputCb());
+    expect(task.status).toBe('running');
   });
 
   it('resolves waitForIdle waiters on a hook Stop event', async () => {

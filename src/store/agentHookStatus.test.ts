@@ -1,6 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MockStoreHarness } from './test-helpers';
-import type { AgentHookEventPayload } from '../../electron/agent-hooks/status';
+import type {
+  AgentActivityObservation,
+  AgentHookEventPayload,
+} from '../../electron/agent-hooks/status';
+import { IPC } from '../../electron/ipc/channels';
+
+vi.mock('../lib/ipc', () => ({ invoke: vi.fn() }));
+const { invoke } = await import('../lib/ipc');
 
 let mockActiveTaskId: string | null = null;
 let mockTasks: Record<string, unknown> = {};
@@ -41,7 +48,7 @@ vi.mock('solid-js', () => {
   return {
     createSignal,
     createEffect: vi.fn(),
-    createRoot: vi.fn(),
+    createRoot: (fn: (dispose: () => void) => unknown) => fn(vi.fn()),
     untrack: (fn: () => unknown) => fn(),
   };
 });
@@ -49,13 +56,29 @@ vi.mock('solid-js', () => {
 const {
   AGENT_HOOK_STALE_MS,
   applyAgentHookEvent,
+  applyAgentActivityObservation,
+  applyAgentActivitySnapshot,
   clearAgentHookStatus,
   getAgentHookStatus,
   getTaskAgentHookStatus,
   isTaskUnread,
   markTaskRead,
   noteAgentTerminalInput,
+  startAgentHookStatusListener,
 } = await import('./agentHookStatus');
+
+let sequence = 100;
+function observation(
+  overrides: Partial<AgentHookEventPayload> = {},
+): Extract<AgentActivityObservation, { kind: 'hook' }> {
+  return {
+    ...event(overrides),
+    kind: 'hook',
+    launchId: 'launch-1',
+    sequence: ++sequence,
+    since: Date.now(),
+  };
+}
 
 function event(overrides: Partial<AgentHookEventPayload>): AgentHookEventPayload {
   return {
@@ -78,6 +101,7 @@ describe('agentHookStatus', () => {
 
   afterEach(() => {
     for (const id of ['a1', 'a2']) clearAgentHookStatus(id);
+    vi.unstubAllGlobals();
     vi.useRealTimers();
   });
 
@@ -140,6 +164,7 @@ describe('agentHookStatus', () => {
     expect(getAgentHookStatus('a1')).toMatchObject({
       state: 'working',
       event: 'PermissionAnswered',
+      source: 'terminal',
       toolName: 'Bash',
     });
 
@@ -225,7 +250,11 @@ describe('agentHookStatus', () => {
     vi.advanceTimersByTime(499);
     expect(getAgentHookStatus('a1')?.state).toBe('working');
     vi.advanceTimersByTime(1);
-    expect(getAgentHookStatus('a1')).toMatchObject({ state: 'done', event: 'Interrupt' });
+    expect(getAgentHookStatus('a1')).toMatchObject({
+      state: 'done',
+      event: 'Interrupt',
+      source: 'terminal',
+    });
 
     // The interrupted tool's PostToolUse still lands; it must not revive the turn.
     applyAgentHookEvent(event({ event: 'PostToolUse', at: Date.now() + 100 }));
@@ -272,6 +301,171 @@ describe('agentHookStatus', () => {
     noteAgentTerminalInput('a1', '\x1b');
     clearAgentHookStatus('a1');
     vi.advanceTimersByTime(1000);
+    expect(getAgentHookStatus('a1')).toBeNull();
+  });
+
+  it('merges older snapshots without overwriting a subscribed event', () => {
+    const old = observation({ state: 'waiting', event: 'PermissionRequest' });
+    const newer = observation({ event: 'UserPromptSubmit', at: Date.now() + 1 });
+    applyAgentActivityObservation(newer);
+    applyAgentActivitySnapshot({ sequence: newer.sequence, observations: [old] });
+    expect(getAgentHookStatus('a1')?.state).toBe('working');
+  });
+
+  it('does not revive a retired launch from an in-flight snapshot', () => {
+    const old = observation({ state: 'done', event: 'Stop' });
+    applyAgentActivityObservation(old);
+    applyAgentActivityObservation({ ...old, kind: 'retired', sequence: ++sequence });
+    applyAgentActivitySnapshot({ sequence: old.sequence, observations: [old] });
+    expect(getAgentHookStatus('a1')).toBeNull();
+  });
+
+  it('clears missed retirements from an empty snapshot and rejects events below its watermark', () => {
+    const old = observation({ state: 'done', event: 'Stop' });
+    applyAgentActivityObservation(old);
+    applyAgentActivitySnapshot({ sequence: ++sequence, observations: [] });
+    expect(getAgentHookStatus('a1')).toBeNull();
+    applyAgentActivityObservation({ ...old, sequence: sequence - 1 });
+    expect(getAgentHookStatus('a1')).toBeNull();
+  });
+
+  it('clears replaced launches and accepts only newer observations', () => {
+    const old = observation({ state: 'done', event: 'Stop' });
+    applyAgentActivityObservation(old);
+    applyAgentActivityObservation({
+      ...old,
+      kind: 'launch',
+      launchId: 'launch-2',
+      sequence: ++sequence,
+    });
+    expect(getAgentHookStatus('a1')).toBeNull();
+    applyAgentActivityObservation(old);
+    expect(getAgentHookStatus('a1')).toBeNull();
+    const current = { ...observation(), launchId: 'launch-2' };
+    applyAgentActivityObservation(current);
+    expect(getAgentHookStatus('a1')?.launchId).toBe('launch-2');
+  });
+
+  it('expires snapshot evidence by observation time rather than load time', () => {
+    const old = observation({ at: Date.now() - AGENT_HOOK_STALE_MS + 10 });
+    applyAgentActivitySnapshot({ sequence: old.sequence, observations: [old] });
+    expect(getAgentHookStatus('a1')).not.toBeNull();
+    vi.advanceTimersByTime(10);
+    expect(getAgentHookStatus('a1')).toBeNull();
+  });
+
+  it('retains local input inference when the cache has not advanced', () => {
+    const current = observation({
+      state: 'waiting',
+      event: 'PermissionRequest',
+      prompt: 'permission',
+    });
+    applyAgentActivityObservation(current);
+    noteAgentTerminalInput('a1', '\r');
+    applyAgentActivitySnapshot({ sequence: current.sequence, observations: [current] });
+    expect(getAgentHookStatus('a1')).toMatchObject({
+      event: 'PermissionAnswered',
+      source: 'terminal',
+    });
+  });
+
+  it('does not attribute local interruption details to a later hook observation', () => {
+    applyAgentActivityObservation(observation());
+    noteAgentTerminalInput('a1', '\x1b');
+    vi.advanceTimersByTime(500);
+    expect(getAgentHookStatus('a1')).toMatchObject({ source: 'terminal', detail: 'Interrupted' });
+    vi.advanceTimersByTime(60_000);
+    const idle = observation({ state: 'done', event: 'Notification' });
+    applyAgentActivityObservation(idle);
+    expect(getAgentHookStatus('a1')).toMatchObject({
+      source: 'hook',
+      event: 'Notification',
+      since: idle.since,
+      updatedAt: idle.at,
+    });
+    expect(getAgentHookStatus('a1')?.detail).toBeUndefined();
+  });
+
+  it('replaces an older tool wait with the already reduced main snapshot', () => {
+    applyAgentActivityObservation(
+      observation({
+        state: 'waiting',
+        event: 'PermissionRequest',
+        prompt: 'permission',
+        toolUseId: 'old-tool',
+        detail: 'Old approval',
+      }),
+    );
+    vi.advanceTimersByTime(20);
+    const current = observation({ event: 'PostToolUse', toolUseId: 'new-tool' });
+    applyAgentActivitySnapshot({ sequence: current.sequence, observations: [current] });
+    expect(getAgentHookStatus('a1')).toMatchObject({
+      state: 'working',
+      toolUseId: 'new-tool',
+      since: current.since,
+      updatedAt: current.at,
+    });
+    expect(getAgentHookStatus('a1')?.detail).toBeUndefined();
+    expect(getAgentHookStatus('a1')?.prompt).toBeUndefined();
+  });
+
+  it('retains unread state and main-provided final text through idle observations', () => {
+    mockActiveTaskId = 'other';
+    applyAgentActivityObservation(
+      observation({ state: 'done', event: 'Stop', lastAssistantMessage: 'Finished' }),
+    );
+    applyAgentActivityObservation(
+      observation({ state: 'done', event: 'Notification', lastAssistantMessage: 'Finished' }),
+    );
+    expect(getAgentHookStatus('a1')).toMatchObject({
+      unread: true,
+      lastAssistantMessage: 'Finished',
+    });
+    markTaskRead('t1');
+    expect(getAgentHookStatus('a1')?.unread).toBe(false);
+  });
+
+  it('does not change inferred interrupt onset when a tool event is suppressed', () => {
+    applyAgentActivityObservation(observation());
+    noteAgentTerminalInput('a1', '\x1b');
+    vi.advanceTimersByTime(500);
+    const inferredSince = getAgentHookStatus('a1')?.since;
+    applyAgentActivityObservation({ ...observation({ event: 'PostToolUse' }), since: 1 });
+    expect(getAgentHookStatus('a1')).toMatchObject({ event: 'Interrupt', since: inferredSince });
+  });
+
+  it('subscribes before requesting a snapshot and ignores a response after disposal', async () => {
+    const calls: string[] = [];
+    let deliver: ((value: unknown) => void) | undefined;
+    let resolveSnapshot: ((value: unknown) => void) | undefined;
+    vi.mocked(invoke).mockImplementation(() => {
+      calls.push('snapshot');
+      return new Promise((resolve) => {
+        resolveSnapshot = resolve;
+      });
+    });
+    vi.stubGlobal('window', {
+      electron: {
+        ipcRenderer: {
+          on: (channel: string, handler: (value: unknown) => void) => {
+            expect(channel).toBe(IPC.AgentHookEvent);
+            calls.push('subscribe');
+            deliver = handler;
+            return vi.fn();
+          },
+        },
+      },
+    });
+    const stop = startAgentHookStatusListener();
+    expect(calls).toEqual(['subscribe', 'snapshot']);
+    expect(invoke).toHaveBeenCalledWith(IPC.AgentHookSnapshot);
+    const current = observation();
+    deliver?.(current);
+    expect(getAgentHookStatus('a1')).not.toBeNull();
+    stop();
+    clearAgentHookStatus('a1');
+    resolveSnapshot?.({ sequence: current.sequence, observations: [current] });
+    await Promise.resolve();
     expect(getAgentHookStatus('a1')).toBeNull();
   });
 });

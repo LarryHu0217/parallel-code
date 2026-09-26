@@ -5,6 +5,7 @@ You have two sub-task MCP tools available via the parallel-code server:
 
 - land_self — Happy-path finish line. Call this after committing your work and passing verification. The backend will merge your branch into the coordinator branch and clean up your task.
 - signal_done — Legacy/manual-review finish line. Use this only if the coordinator explicitly asks to review and land your branch manually.
+  Include a concise result: summary, verification checks actually run, repository-relative artifact paths if useful, and unresolved issues. Checks are agent reports; never invent passing results.
 
 RULES:
 1. Complete your assigned work fully before calling land_self. Before landing:
@@ -21,7 +22,19 @@ ${verifyLine}2. Ask questions if requirements are unclear or if you are about to
 /** Tells the agent the backend runs the full check at land time and hands back
  *  only failures, so it does targeted checks instead of flooding its own
  *  context with a full-suite run. */
-export function buildSubTaskPreamble(verifyCommand?: string): string {
+export function buildSubTaskPreamble(
+  verifyCommand?: string,
+  integrationPolicy?: 'review' | 'automatic',
+): string {
+  if (integrationPolicy === 'review')
+    return `[SUB-TASK MODE] Complete the assigned work for user review.
+Verify your changes${verifyCommand ? ` with \`${verifyCommand}\`` : ' with the relevant tests'}, then commit them. Keep injected Parallel Code guidance out of commits; remove runtime sub-task blocks before committing their files.
+Call signal_done when your committed result is ready. Do not merge, call land_self, or delete your worktree. User approval is required for integration. Ask questions when requirements are unclear.
+Include a concise result: summary, verification checks actually run, repository-relative artifact paths if useful, and unresolved issues. Checks are agent reports; never invent passing results.
+
+---
+`;
+
   if (!verifyCommand) return preamble('');
   return preamble(
     `   - You do not need to run \`${verifyCommand}\` yourself: land_self runs it in your ` +

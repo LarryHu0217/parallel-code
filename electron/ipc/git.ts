@@ -2,7 +2,7 @@ import { execFile, execFileSync as _execFileSync, spawn } from 'child_process';
 import { promisify } from 'util';
 import fs from 'fs';
 import path from 'path';
-import type { BrowserWindow } from 'electron';
+import type { Notify } from './notify.js';
 import { debug as logDebug } from '../log.js';
 import {
   appendGitInfoExcludeBlock,
@@ -114,6 +114,8 @@ function cacheKey(p: string): string {
 // --- Worktree lock serialization ---
 
 const worktreeLocks = new Map<string, Promise<void>>();
+const sandboxSetups = new Map<string, Promise<void>>();
+const worktreeRemovals = new Map<string, Promise<void>>();
 
 function withWorktreeLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
   const prev = worktreeLocks.get(key) ?? Promise.resolve();
@@ -513,6 +515,50 @@ async function refineDiffBaseWithCherryPick(
   return base;
 }
 
+/** Read rebases oldest first so repeated rebases retain the inherited baseline. */
+async function findRebases(
+  repoRoot: string,
+  head: string,
+): Promise<{ target: string; previousHead: string }[]> {
+  try {
+    const { stdout: ref } = await exec('git', ['rev-parse', '--symbolic-full-name', head], {
+      cwd: repoRoot,
+    });
+    const branch = ref.trim() || (await getCurrentBranchName(repoRoot));
+    const { stdout } = await exec('git', ['reflog', 'show', '--format=%H%x00%gs', branch], {
+      cwd: repoRoot,
+      maxBuffer: MAX_BUFFER,
+    });
+    const entries = stdout.trimEnd().split('\n');
+    const rebases: { target: string; previousHead: string }[] = [];
+    for (let index = 0; index < entries.length; index++) {
+      const target = entries[index].match(
+        /^[0-9a-f]{40}\0rebase \(finish\): .* onto ([0-9a-f]{40})$/,
+      )?.[1];
+      if (!target) continue;
+      const previousHead = entries[index + 1]?.split('\0', 1)[0];
+      if (previousHead && /^[0-9a-f]{40}$/.test(previousHead)) {
+        // A reset can reuse the branch for different work. Only trust a target
+        // retained by every later branch head, including intermediate resets.
+        if (index > 0) {
+          const newerHeads = entries.slice(0, index).map((entry) => entry.split('\0', 1)[0]);
+          const { stdout: commonBase } = await exec(
+            'git',
+            ['merge-base', '--octopus', target, ...newerHeads],
+            { cwd: repoRoot },
+          );
+          if (commonBase.trim() !== target) continue;
+        }
+        rebases.push({ target, previousHead });
+      }
+    }
+    return rebases.reverse();
+  } catch {
+    // Missing or expired reflogs are not evidence of a changed branch point.
+    return [];
+  }
+}
+
 /**
  * Resolve both sides needed for one-way diffs.
  *
@@ -553,7 +599,52 @@ async function detectDiffBase(
   const picked = await pickMergeBase(repoRoot, branch, headRef);
   if (!picked) return { sha: headRef, ref: headRef };
 
-  const refined = await refineDiffBaseWithCherryPick(repoRoot, picked, headRef);
+  let refined = await refineDiffBaseWithCherryPick(repoRoot, picked, headRef);
+  if (baseBranch) {
+    // A child may rebase away from its parent. Use that recorded target, not
+    // today's main tip: main can subsequently receive the child's own commits.
+    // The explicit parent remains the integration target.
+    for (const rebase of await findRebases(repoRoot, requestedHead)) {
+      if (rebase.target === refined.sha) continue;
+      try {
+        await Promise.all([
+          exec('git', ['merge-base', '--is-ancestor', refined.sha, rebase.target], {
+            cwd: repoRoot,
+          }),
+          exec('git', ['merge-base', '--is-ancestor', rebase.target, headRef], { cwd: repoRoot }),
+        ]);
+        // The target may already contain child work (an interactive rewrite,
+        // or main landing the child before it rebases). Keep the parent scope
+        // if advancing would absorb any earlier child commits or their patches.
+        // Exclude previously accepted upstream history from both counts.
+        const [before, remaining] = await Promise.all([
+          exec(
+            'git',
+            ['rev-list', '--count', rebase.previousHead, `^${picked.ref}`, `^${refined.sha}`],
+            { cwd: repoRoot },
+          ),
+          exec(
+            'git',
+            [
+              'rev-list',
+              '--count',
+              '--cherry-pick',
+              '--right-only',
+              `${rebase.target}...${rebase.previousHead}`,
+              `^${picked.ref}`,
+              `^${refined.sha}`,
+            ],
+            { cwd: repoRoot },
+          ),
+        ]);
+        if (parseInt(before.stdout.trim(), 10) === parseInt(remaining.stdout.trim(), 10)) {
+          refined = { sha: rebase.target, ref: rebase.target };
+        }
+      } catch {
+        // Ignore obsolete rebase records and targets outside the current ancestry.
+      }
+    }
+  }
   diffBaseCache.set(key, { value: refined, expiresAt: Date.now() + DIFF_BASE_TTL });
   return refined;
 }
@@ -837,6 +928,25 @@ async function computeBranchDiffStats(
  * Throws with an actionable message when the leftovers need `sudo` to clear.
  */
 async function forceRemoveWorktreeDir(repoRoot: string, worktreePath: string): Promise<void> {
+  const key = safeRealpath(path.resolve(worktreePath));
+  const existing = worktreeRemovals.get(key);
+  if (existing) return existing;
+
+  // Copies must settle before deletion; cancelling a PTY launch does not stop
+  // its filesystem writes. Reject new setup requests while removal is pending.
+  const removal = (async () => {
+    await sandboxSetups.get(key);
+    await removeWorktreeDir(repoRoot, worktreePath);
+  })();
+  worktreeRemovals.set(key, removal);
+  try {
+    await removal;
+  } finally {
+    worktreeRemovals.delete(key);
+  }
+}
+
+async function removeWorktreeDir(repoRoot: string, worktreePath: string): Promise<void> {
   try {
     await exec('git', ['worktree', 'remove', '--force', worktreePath], { cwd: repoRoot });
     return;
@@ -884,6 +994,11 @@ async function removeDirWithRetries(dirPath: string): Promise<unknown> {
 
 // --- Public functions (used by tasks.ts and register.ts) ---
 
+/** Where `createWorktree` puts the worktree for a branch. */
+export function worktreePathFor(repoRoot: string, branchName: string): string {
+  return `${repoRoot}/.worktrees/${branchName}`;
+}
+
 export async function createWorktree(
   repoRoot: string,
   branchName: string,
@@ -891,7 +1006,7 @@ export async function createWorktree(
   baseBranch?: string,
   forceClean = false,
 ): Promise<{ path: string; branch: string }> {
-  const worktreePath = `${repoRoot}/.worktrees/${branchName}`;
+  const worktreePath = worktreePathFor(repoRoot, branchName);
 
   if (forceClean) {
     // Clean up stale worktree/branch from a previous session that wasn't properly removed
@@ -979,7 +1094,7 @@ export async function createWorktree(
     }
   }
 
-  ensureClaudeSandboxFiles(worktreePath, repoRoot);
+  await ensureClaudeSandboxFiles(worktreePath, repoRoot);
   ensureSandboxExcludes(worktreePath);
   ensureSymlinkExcludes(worktreePath, createdSymlinks);
 
@@ -999,7 +1114,30 @@ export async function createWorktree(
  * from the previous shallow-symlink behavior and seeds any newly-missing
  * entries from the source.
  */
-export function ensureClaudeSandboxFiles(worktreePath: string, repoRoot?: string | null): void {
+export async function ensureClaudeSandboxFiles(
+  worktreePath: string,
+  repoRoot?: string | null,
+): Promise<void> {
+  const key = safeRealpath(path.resolve(worktreePath));
+  if (worktreeRemovals.has(key)) throw new Error('Worktree is being removed');
+  const existing = sandboxSetups.get(key);
+  if (existing) return existing;
+
+  // AI and shell agents can start together. A destination directory existing
+  // during a recursive copy does not mean its contents are ready yet.
+  const setup = seedClaudeSandboxFiles(worktreePath, repoRoot);
+  sandboxSetups.set(key, setup);
+  try {
+    await setup;
+  } finally {
+    sandboxSetups.delete(key);
+  }
+}
+
+async function seedClaudeSandboxFiles(
+  worktreePath: string,
+  repoRoot?: string | null,
+): Promise<void> {
   const claudeDir = path.join(worktreePath, '.claude');
   try {
     fs.mkdirSync(claudeDir, { recursive: true });
@@ -1043,7 +1181,8 @@ export function ensureClaudeSandboxFiles(worktreePath: string, repoRoot?: string
         const dst = path.join(claudeDir, entry.name);
         if (fs.existsSync(dst)) continue;
         try {
-          fs.cpSync(path.join(source, entry.name), dst, {
+          // Recursive copies can be large; never block Electron's main thread.
+          await fs.promises.cp(path.join(source, entry.name), dst, {
             recursive: true,
             dereference: true,
           });
@@ -1219,7 +1358,7 @@ export async function removeWorktree(
   // After the user adopts a branch the agent switched the worktree to, the
   // folder keeps its original branch-derived name — callers that know the real
   // path must pass it, deriving from branchName is only a fallback.
-  const worktreePath = explicitWorktreePath ?? `${repoRoot}/.worktrees/${branchName}`;
+  const worktreePath = explicitWorktreePath ?? worktreePathFor(repoRoot, branchName);
 
   if (!fs.existsSync(repoRoot)) return;
 
@@ -1703,7 +1842,10 @@ export async function getWorktreeStatus(
   }
   let statusOut: string;
   try {
-    ({ stdout: statusOut } = await exec('git', ['status', '--porcelain'], {
+    // Polled every few seconds while agents run git in the same worktree:
+    // skip status's opportunistic index refresh so it never takes index.lock
+    // (agents would see "index.lock: File exists") or rewrites the index.
+    ({ stdout: statusOut } = await exec('git', ['--no-optional-locks', 'status', '--porcelain'], {
       cwd: worktreePath,
       maxBuffer: MAX_BUFFER,
     }));
@@ -1896,6 +2038,7 @@ export async function mergeTask(
   baseBranch?: string,
   worktreePath?: string,
   mergeWorktreePath?: string,
+  approval?: { expectedCommit: string; expectedTargetBranch: string; expectedTargetCommit: string },
 ): Promise<{ main_branch: string; lines_added: number; lines_removed: number }> {
   const lockKey = await detectRepoLockKey(projectRoot).catch(() => projectRoot);
 
@@ -1966,9 +2109,39 @@ export async function mergeTask(
       }
     };
 
+    // User approval binds the exact committed result and destination. Check under
+    // the same repository lock as the merge, after verification and checkout.
+    if (approval) {
+      if (
+        !/^[a-f0-9]{40,64}$/i.test(approval.expectedCommit) ||
+        !/^[a-f0-9]{40,64}$/i.test(approval.expectedTargetCommit)
+      ) {
+        throw new Error('Invalid review commit.');
+      }
+      const [childHead, childRef, targetHead, targetBranch, childStatus] = await Promise.all([
+        exec('git', ['rev-parse', 'HEAD'], { cwd: checkWorktreePath }),
+        exec('git', ['rev-parse', '--verify', `refs/heads/${branchName}`], { cwd: projectRoot }),
+        exec('git', ['rev-parse', 'HEAD'], { cwd: mergeRoot }),
+        getCurrentBranchName(mergeRoot),
+        exec('git', ['status', '--porcelain'], { cwd: checkWorktreePath }),
+      ]);
+      if (
+        mainBranch !== approval.expectedTargetBranch ||
+        targetBranch !== approval.expectedTargetBranch ||
+        childHead.stdout.trim() !== approval.expectedCommit ||
+        childRef.stdout.trim() !== approval.expectedCommit ||
+        targetHead.stdout.trim() !== approval.expectedTargetCommit ||
+        childStatus.stdout.trim()
+      ) {
+        throw new Error(
+          'The reviewed result or integration target changed. Review again before merging.',
+        );
+      }
+    }
+    const mergeRef = approval?.expectedCommit ?? branchName;
     if (squash) {
       try {
-        await exec('git', ['merge', '--squash', '--', branchName], { cwd: mergeRoot });
+        await exec('git', ['merge', '--squash', '--', mergeRef], { cwd: mergeRoot });
       } catch (e) {
         await exec('git', ['reset', '--hard', 'HEAD'], { cwd: mergeRoot }).catch((recoverErr) =>
           console.warn('git reset --hard failed during squash recovery:', recoverErr),
@@ -1988,7 +2161,7 @@ export async function mergeTask(
       }
     } else {
       try {
-        await exec('git', ['merge', '--', branchName], { cwd: mergeRoot });
+        await exec('git', ['merge', '--', mergeRef], { cwd: mergeRoot });
       } catch (e) {
         await exec('git', ['merge', '--abort'], { cwd: mergeRoot }).catch((recoverErr) =>
           console.warn('git merge --abort failed:', recoverErr),
@@ -2093,7 +2266,7 @@ export async function getFileDiffFromBranch(
 }
 
 export function pushTask(
-  win: BrowserWindow,
+  notify: Notify,
   projectRoot: string,
   branchName: string,
   channelId: string,
@@ -2104,11 +2277,7 @@ export function pushTask(
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
-    const send = (msg: string) => {
-      if (!win.isDestroyed()) {
-        win.webContents.send(`channel:${channelId}`, msg);
-      }
-    };
+    const send = (msg: string) => notify(`channel:${channelId}`, msg);
 
     proc.stdout?.on('data', (chunk: Buffer) => {
       send(chunk.toString('utf8'));

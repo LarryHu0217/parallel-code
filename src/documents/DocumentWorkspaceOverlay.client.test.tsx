@@ -1,7 +1,7 @@
 import { render } from 'solid-js/web';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { setStore, store } from '../store/core';
-import { DocumentWorkspaceOverlay } from './DocumentWorkspaceOverlay';
+import { DocumentWorkspacePanel } from './DocumentWorkspacePanel';
 import { documentStore, setDocumentComposerDraft, openDocumentWorkspace } from './store';
 import { IPC } from '../../electron/ipc/channels';
 import * as ipc from '../lib/ipc';
@@ -44,6 +44,7 @@ afterEach(() => {
     editorCommand: '',
     documentFullWidth: false,
     documentWorkspacesEnabled: false,
+    focusMode: false,
     tasks: {},
     agents: {},
     terminals: {},
@@ -74,7 +75,7 @@ function openWorkspace(): HTMLElement {
   });
   const host = document.createElement('div');
   document.body.append(host);
-  disposers.push(render(() => <DocumentWorkspaceOverlay />, host));
+  disposers.push(render(() => <DocumentWorkspacePanel />, host));
   return host;
 }
 
@@ -84,7 +85,68 @@ function button(host: HTMLElement, label: string): HTMLButtonElement | null {
   );
 }
 
-describe('DocumentWorkspaceOverlay', () => {
+describe('DocumentWorkspacePanel', () => {
+  it('switches document views with arrow keys and keeps keyboard focus on the selected tab', () => {
+    const host = openWorkspace();
+    const tabs = host.querySelectorAll<HTMLButtonElement>('[aria-label="Document views"] button');
+    tabs[0].focus();
+    tabs[0].dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    expect(documentStore.view).toBe('history');
+    expect(document.activeElement).toBe(tabs[1]);
+    expect(tabs[0].tabIndex).toBe(-1);
+    tabs[1].dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true }));
+    expect(documentStore.view).toBe('document');
+    expect(document.activeElement).toBe(tabs[0]);
+    const shortcut = new KeyboardEvent('keydown', {
+      key: 'ArrowRight',
+      altKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    tabs[0].dispatchEvent(shortcut);
+    expect(shortcut.defaultPrevented).toBe(false);
+    expect(documentStore.view).toBe('document');
+  });
+
+  it('focuses the document from its header and returns to tiling without closing it', () => {
+    const host = openWorkspace();
+    const focus = host.querySelector<HTMLButtonElement>('[aria-label="Focus on this document"]');
+    expect(focus).not.toBeNull();
+    focus?.click();
+    expect(store.focusMode).toBe(true);
+    expect(store.activeTaskId).toBe('doc-agent-docs');
+    host.querySelector<HTMLButtonElement>('[aria-label="Exit focus mode"]')?.click();
+    expect(store.focusMode).toBe(false);
+    expect(store.activeDocumentProjectId).toBe('docs');
+  });
+
+  it('opens the file list from the current document path', () => {
+    const host = openWorkspace();
+    const path = host.querySelector<HTMLButtonElement>(
+      '[aria-label="Browse project files: notes.md"]',
+    );
+    expect(path?.textContent).toContain('notes.md');
+    path?.click();
+    expect(host.querySelector('[aria-label="Project files"]')).not.toBeNull();
+  });
+
+  it('stacks the document above the agent in a narrow panel', () => {
+    const host = openWorkspace();
+    expect(host.querySelector('.docws-body .resize-handle-v')).not.toBeNull();
+    expect(host.querySelector('.docws-body .resize-handle-h')).toBeNull();
+  });
+
+  it('refocuses the open document without replacing its draft', async () => {
+    vi.spyOn(ipc, 'invoke').mockResolvedValue([]);
+    openWorkspace();
+    setStore('documentWorkspacesEnabled', true);
+    await openDocumentWorkspace('docs');
+    setDocumentComposerDraft({ text: 'Keep my draft' });
+    setStore('activeTaskId', 'other');
+    await openDocumentWorkspace('docs');
+    expect(store.activeTaskId).toBe('doc-agent-docs');
+    expect(documentStore.composerDraft?.text).toBe('Keep my draft');
+  });
   it('bounds the composer to the document pane and remeasures on pane resize', async () => {
     let reflow: (() => void) | undefined;
     const observe = vi.fn();
@@ -92,7 +154,7 @@ describe('DocumentWorkspaceOverlay', () => {
       'ResizeObserver',
       class {
         constructor(callback: () => void) {
-          reflow = callback;
+          reflow ??= callback;
         }
         observe = observe;
         unobserve() {}
@@ -126,7 +188,7 @@ describe('DocumentWorkspaceOverlay', () => {
   });
 
   it.each(['select', 'restore', 'create', 'terminal'] as const)(
-    'returns to the task area when navigating via %s',
+    'keeps the document open when navigating via %s',
     async (action) => {
       vi.spyOn(ipc, 'invoke').mockResolvedValue(undefined);
       const task: Task = {
@@ -173,7 +235,7 @@ describe('DocumentWorkspaceOverlay', () => {
             description: '',
           },
         });
-      expect(store.activeDocumentProjectId).toBeNull();
+      expect(store.activeDocumentProjectId).toBe('docs');
       expect(store.activeTaskId).not.toBeNull();
     },
   );
@@ -191,7 +253,7 @@ describe('DocumentWorkspaceOverlay', () => {
     disposers.pop()?.();
     const reopened = document.createElement('div');
     document.body.append(reopened);
-    disposers.push(render(() => <DocumentWorkspaceOverlay />, reopened));
+    disposers.push(render(() => <DocumentWorkspacePanel />, reopened));
     expect(reopened.querySelector('[aria-label="Reset document zoom"]')?.textContent).toBe('110%');
     for (let i = 0; i < 20; i++)
       reopened.querySelector<HTMLButtonElement>('[aria-label="Zoom out document"]')?.click();
@@ -237,7 +299,7 @@ describe('DocumentWorkspaceOverlay', () => {
     });
     const host = document.createElement('div');
     document.body.append(host);
-    disposers.push(render(() => <DocumentWorkspaceOverlay />, host));
+    disposers.push(render(() => <DocumentWorkspacePanel />, host));
 
     const header = host.querySelector<HTMLElement>('.docws-header');
 
@@ -283,7 +345,8 @@ describe('DocumentWorkspaceOverlay', () => {
     expect(host.querySelector('.docws-doc')?.classList.contains('is-full-width')).toBe(true);
   });
 
-  it('places the agent, runs and files panel to the right of the document', () => {
+  it('places the agent, runs and files panel to the right in a wide panel', () => {
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(1000);
     setStore({
       projects: [
         {
@@ -299,7 +362,7 @@ describe('DocumentWorkspaceOverlay', () => {
     });
     const host = document.createElement('div');
     document.body.append(host);
-    disposers.push(render(() => <DocumentWorkspaceOverlay />, host));
+    disposers.push(render(() => <DocumentWorkspacePanel />, host));
 
     expect(host.querySelector('.docws-body .resize-handle-h')).not.toBeNull();
     expect(host.querySelector('.docws-body .resize-handle-v')).toBeNull();
@@ -315,6 +378,7 @@ describe('DocumentWorkspaceOverlay', () => {
   });
 
   it('restores the agent column width without treating the former bottom-panel height as a width', () => {
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(1000);
     setStore('panelUserSize', { 'docws-task:rail': 240 });
     const host = openWorkspace();
     const rail = host.querySelector<HTMLElement>('.docws-rail');
@@ -339,7 +403,7 @@ describe('DocumentWorkspaceOverlay', () => {
     });
     const host = document.createElement('div');
     document.body.append(host);
-    disposers.push(render(() => <DocumentWorkspaceOverlay />, host));
+    disposers.push(render(() => <DocumentWorkspacePanel />, host));
 
     const tabs = Array.from(host.querySelectorAll<HTMLButtonElement>('.docws-header [role="tab"]'));
     expect(tabs.map((t) => t.textContent?.trim())).toEqual(['Document', 'History']);
@@ -363,7 +427,7 @@ describe('DocumentWorkspaceOverlay', () => {
     });
     const host = document.createElement('div');
     document.body.append(host);
-    disposers.push(render(() => <DocumentWorkspaceOverlay />, host));
+    disposers.push(render(() => <DocumentWorkspacePanel />, host));
 
     const button = host.querySelector<HTMLButtonElement>(
       'button[aria-label="Open docs/notes.md in code"]',
@@ -392,13 +456,51 @@ describe('DocumentWorkspaceOverlay', () => {
     });
     const host = document.createElement('div');
     document.body.append(host);
-    disposers.push(render(() => <DocumentWorkspaceOverlay />, host));
+    disposers.push(render(() => <DocumentWorkspacePanel />, host));
 
     const button = host.querySelector<HTMLButtonElement>(
       'button[aria-label="Configure an editor command in Settings to open notes.md"]',
     );
 
     expect(button?.disabled).toBe(true);
+  });
+
+  it.each([
+    ['Commit edits', 'commit_document_edits'],
+    ['Discard edits', 'discard_document_edits'],
+  ])('offers to %s when uncommitted edits are clicked', async (action, channel) => {
+    vi.spyOn(ipc, 'invoke').mockImplementation(async (channel) => {
+      if (channel === IPC.ReadDocument) {
+        return {
+          content: '# Notes\n\nEdited.\n',
+          headSha: '1234567890abcdef',
+          branch: 'main',
+          dirty: true,
+          missing: false,
+        };
+      }
+      return [];
+    });
+    const host = openWorkspace();
+    setStore('documentWorkspacesEnabled', true);
+    await openDocumentWorkspace('docs');
+
+    button(host, 'uncommitted edits')?.click();
+
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain(
+      'Commit or discard edits?',
+    );
+    expect(button(document.body, 'Commit edits')).not.toBeNull();
+    expect(button(document.body, 'Discard edits')).not.toBeNull();
+    expect(ipc.invoke).not.toHaveBeenCalledWith(channel, expect.anything());
+
+    button(document.body, action)?.click();
+
+    await vi.waitFor(() =>
+      expect(ipc.invoke).toHaveBeenCalledWith(channel, {
+        projectRoot: '/projects/release',
+      }),
+    );
   });
 });
 

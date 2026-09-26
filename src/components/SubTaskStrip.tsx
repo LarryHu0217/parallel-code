@@ -1,6 +1,13 @@
 import { For, Show, createMemo, createSignal, createUniqueId, onMount } from 'solid-js';
-import { store, setActiveTask, getTaskDotStatus, uncollapseTask } from '../store/store';
+import {
+  store,
+  activateTaskFromPointer,
+  getTaskDotStatus,
+  uncollapseTask,
+  showNotification,
+} from '../store/store';
 import { getCoordinatorChildren } from '../store/sidebar-order';
+import { getChildAttentionSummary } from '../store/sidebar-attention';
 import { invoke } from '../lib/ipc';
 import { IPC } from '../../electron/ipc/channels';
 import { StatusDot } from './StatusDot';
@@ -130,6 +137,7 @@ function MCPLogModal(props: { onClose: () => void }) {
 
 export function SubTaskStrip(props: SubTaskStripProps) {
   const [showLogs, setShowLogs] = createSignal(false);
+  const summary = createMemo(() => getChildAttentionSummary(props.coordinatorTaskId));
 
   const subTasks = createMemo(() => {
     const { active, collapsed } = getCoordinatorChildren(props.coordinatorTaskId);
@@ -137,7 +145,10 @@ export function SubTaskStrip(props: SubTaskStripProps) {
   });
 
   const taskTone = (task: (typeof store.tasks)[string]) => {
-    if (task.landingState === 'landed_pending_review' || task.landingState === 'reviewed') {
+    if (task.landingState === 'landed_pending_review') {
+      return { color: theme.warning, label: 'merged, awaiting review' };
+    }
+    if (task.landingState === 'reviewed') {
       return { color: theme.success, label: 'landed' };
     }
     if (
@@ -149,7 +160,11 @@ export function SubTaskStrip(props: SubTaskStripProps) {
     if (task.landingState === 'landing_failed') {
       return { color: theme.error, label: 'landing failed' };
     }
-    if (task.signalDoneReceived) return { color: theme.success, label: 'signalled done' };
+    if (task.signalDoneReceived)
+      return {
+        color: theme.warning,
+        label: task.integrationPolicy === 'review' ? 'awaiting review' : 'signalled done',
+      };
     return null;
   };
 
@@ -158,7 +173,7 @@ export function SubTaskStrip(props: SubTaskStripProps) {
       <Show when={showLogs()}>
         <MCPLogModal onClose={() => setShowLogs(false)} />
       </Show>
-      <Show when={subTasks().length > 0}>
+      <Show when={subTasks().length > 0 || summary()}>
         <div
           style={{
             display: 'flex',
@@ -181,50 +196,76 @@ export function SubTaskStrip(props: SubTaskStripProps) {
           >
             Sub-tasks:
           </span>
+          <Show when={summary()}>
+            {(text) => (
+              <span style={{ 'font-size': sf(11), color: theme.fgMuted, 'white-space': 'nowrap' }}>
+                {text()}
+              </span>
+            )}
+          </Show>
           <For each={subTasks()}>
             {(task) => (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (task.collapsed) {
-                    uncollapseTask(task.id);
-                  }
-                  setActiveTask(task.id);
-                }}
-                title={taskTone(task) ? `${task.name} — ${taskTone(task)?.label}` : task.name}
-                style={{
-                  display: 'inline-flex',
-                  'align-items': 'center',
-                  gap: '4px',
-                  padding: '2px 8px',
-                  'border-radius': '999px',
-                  background: taskTone(task)
-                    ? `color-mix(in srgb, ${taskTone(task)?.color} 12%, transparent)`
-                    : `color-mix(in srgb, ${theme.fgSubtle} 8%, transparent)`,
-                  border: `1px solid ${taskTone(task) ? `${taskTone(task)?.color}44` : theme.border}`,
-                  color: theme.fgMuted,
-                  'font-size': sf(11),
-                  'font-family': "'JetBrains Mono', monospace",
-                  cursor: 'pointer',
-                  'white-space': 'nowrap',
-                  'max-width': '160px',
-                  overflow: 'hidden',
-                  'text-overflow': 'ellipsis',
-                  'flex-shrink': '0',
-                }}
-              >
-                <Show
-                  when={taskTone(task)}
-                  fallback={<StatusDot status={getTaskDotStatus(task.id)} size="sm" />}
+              <span style={{ display: 'inline-flex', gap: '4px', 'align-items': 'center' }}>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (task.collapsed) {
+                      uncollapseTask(task.id);
+                    }
+                    activateTaskFromPointer(task.id);
+                  }}
+                  title={taskTone(task) ? `${task.name} — ${taskTone(task)?.label}` : task.name}
+                  style={{
+                    display: 'inline-flex',
+                    'align-items': 'center',
+                    gap: '4px',
+                    padding: '2px 8px',
+                    'border-radius': '999px',
+                    background: taskTone(task)
+                      ? `color-mix(in srgb, ${taskTone(task)?.color} 12%, transparent)`
+                      : `color-mix(in srgb, ${theme.fgSubtle} 8%, transparent)`,
+                    border: `1px solid ${taskTone(task) ? `${taskTone(task)?.color}44` : theme.border}`,
+                    color: theme.fgMuted,
+                    'font-size': sf(11),
+                    'font-family': "'JetBrains Mono', monospace",
+                    cursor: 'pointer',
+                    'white-space': 'nowrap',
+                    'max-width': '160px',
+                    overflow: 'hidden',
+                    'text-overflow': 'ellipsis',
+                    'flex-shrink': '0',
+                  }}
                 >
-                  {(tone) => (
-                    <span style={{ color: tone().color, display: 'inline-flex' }}>
-                      <CheckIcon size={10} />
-                    </span>
-                  )}
+                  <Show
+                    when={taskTone(task)}
+                    fallback={
+                      <StatusDot status={getTaskDotStatus(task.id)} taskId={task.id} size="sm" />
+                    }
+                  >
+                    {(tone) => (
+                      <span style={{ color: tone().color, display: 'inline-flex' }}>
+                        <CheckIcon size={10} />
+                      </span>
+                    )}
+                  </Show>
+                  <span style={{ overflow: 'hidden', 'text-overflow': 'ellipsis' }}>
+                    {task.name}
+                  </span>
+                </button>
+                <Show when={task.agentIds.some((id) => store.agents[id]?.status === 'running')}>
+                  <button
+                    class="delegation-button"
+                    title={`Stop ${task.name}; keep its worktree`}
+                    onClick={() => {
+                      void Promise.all(
+                        task.agentIds.map((agentId) => invoke(IPC.KillAgent, { agentId })),
+                      ).catch((error: unknown) => showNotification(String(error)));
+                    }}
+                  >
+                    Stop
+                  </button>
                 </Show>
-                <span style={{ overflow: 'hidden', 'text-overflow': 'ellipsis' }}>{task.name}</span>
-              </button>
+              </span>
             )}
           </For>
           <Show when={store.verboseLogging}>
@@ -249,7 +290,7 @@ export function SubTaskStrip(props: SubTaskStripProps) {
           </Show>
         </div>
       </Show>
-      <Show when={subTasks().length === 0 && store.verboseLogging}>
+      <Show when={subTasks().length === 0 && !summary() && store.verboseLogging}>
         <div
           style={{
             display: 'flex',

@@ -1,5 +1,6 @@
 import { Show, For, createSignal, createEffect, onMount, onCleanup, untrack } from 'solid-js';
 import { isAgentSupportedInMode } from '../../electron/shared/agent-support';
+import type { TranscriptMarks } from '../investigation/transcript';
 
 import {
   store,
@@ -13,6 +14,7 @@ import {
   setTaskFocusedPanel,
   aiTerminalPanelId,
   isPanelFocused,
+  isPanelFocusedOrDefault,
   setActiveAgent,
   setActiveTask,
   addAgentToTask,
@@ -21,24 +23,33 @@ import {
   toggleAITerminalLayout,
 } from '../store/store';
 import { markDirty } from '../lib/terminalFitManager';
-import { isAgentAskingQuestion } from '../store/taskStatus';
-import { warn as logWarn } from '../lib/log';
+import { isAgentAskingQuestion, isAgentSettled } from '../store/taskStatus';
+import { errMessage, warn as logWarn } from '../lib/log';
 import { InfoBar } from './InfoBar';
+import { PromptHistory } from './PromptHistory';
 import { TerminalView } from './TerminalView';
+import { SessionPicker } from './SessionPicker';
+import { AgentChatView } from './AgentChatView';
+import { isAgentChat, agentChatProvider, agentChatUnavailableReason } from '../store/agent-chat';
+import { agentViewHandsOff, agentViewSwitchCost, switchMainAgentView } from '../store/agent-view';
+import { setStore } from '../store/core';
+import { saveState } from '../store/persistence';
 import { Dialog } from './Dialog';
-import { CloseIcon } from './icons';
+import { ConfirmDialog } from './ConfirmDialog';
+import { CheckIcon, CloseIcon, CommentIcon, CopyIcon, TerminalIcon } from './icons';
 import { theme } from '../lib/theme';
 import { sf } from '../lib/fontScale';
 import { invoke } from '../lib/ipc';
 import { getTaskDockerOverlayLabel } from '../lib/docker';
 import { IPC } from '../../electron/ipc/channels';
+import { codexResumeId } from '../../electron/shared/codex-resume';
 import { createHighlightedMarkdown } from '../lib/marked-shiki';
 import type { Task } from '../store/types';
 import type { AgentDef } from '../ipc/types';
 import type { PromptInputHandle } from './PromptInput';
 import { buildTaskAgentArgs, isResumeArgsFailure } from '../lib/agent-args';
 
-type StepNavApi = { mark: (i: number) => void; jump: (i: number) => boolean };
+type StepNavApi = TranscriptMarks;
 
 interface TaskAITerminalProps {
   task: Task;
@@ -56,10 +67,16 @@ interface TaskAITerminalProps {
     jump: ((stepIndex: number) => boolean) | undefined,
     firstJumpableIndex: number,
   ) => void;
+  /** Each agent terminal's raw marker API, so other panels can anchor their own keys. */
+  onTranscriptMarksReady?: (agentId: string, api: TranscriptMarks | undefined) => void;
   /** First look at a Markdown path the agent printed; returns true when it
    *  took the link. Otherwise the file opens in the Markdown viewer. */
   onFileLink?: (filePath: string) => boolean;
+  onReview?: (path?: string) => void;
 }
+
+/** Marker key of the step at index `i` in the agent's scrollback. */
+const stepKey = (i: number): string => `step:${i}`;
 
 export function TaskAITerminal(props: TaskAITerminalProps) {
   // Step bookmarks — TerminalView hands us a mark/jump API once the xterm
@@ -87,7 +104,7 @@ export function TaskAITerminal(props: TaskAITerminalProps) {
 
     const firstJumpable = untrack(() => props.task.stepsContent?.length ?? 0);
     lastMarkedLen = firstJumpable;
-    props.onStepJumpReady?.(api.jump, firstJumpable);
+    props.onStepJumpReady?.((i) => api.jump(stepKey(i)), firstJumpable);
   }
 
   createEffect(() => syncStepNavSource(props.task.agentIds));
@@ -99,7 +116,7 @@ export function TaskAITerminal(props: TaskAITerminalProps) {
       lastMarkedLen = len;
       return;
     }
-    for (let i = lastMarkedLen; i < len; i++) stepNav.mark(i);
+    for (let i = lastMarkedLen; i < len; i++) stepNav.mark(stepKey(i));
     lastMarkedLen = len;
   });
 
@@ -110,6 +127,75 @@ export function TaskAITerminal(props: TaskAITerminalProps) {
   const [mdViewerOpen, setMdViewerOpen] = createSignal(false);
 
   const firstAgentId = () => props.task.agentIds[0] ?? '';
+  const [switchingView, setSwitchingView] = createSignal(false);
+  const [viewError, setViewError] = createSignal('');
+  const [noticeRequested, setNoticeRequested] = createSignal(false);
+  /** The view the user asked for and has yet to confirm quitting the other for. */
+  const [pendingSwitch, setPendingSwitch] = createSignal<'chat' | 'terminal' | null>(null);
+  const currentView = () => (isAgentChat(props.task, firstAgentId()) ? 'chat' : 'terminal');
+  const agentName = () => (agentChatProvider(firstAgentId()) === 'claude' ? 'Claude' : 'Codex');
+  /** Whether leaving the terminal hands its conversation over, rather than
+   *  leaving a running CLI behind and opening a separate chat. */
+  const terminalHandoff = () => agentViewHandsOff(props.task, firstAgentId(), 'chat');
+  const switchBlockedReason = () => {
+    const unavailable = agentChatUnavailableReason(props.task);
+    if (unavailable) return unavailable;
+    if (currentView() === 'chat') {
+      const state = store.agents[firstAgentId()]?.chatState;
+      if (state?.requests.length) return 'Resolve the pending request before switching views';
+      if (state?.status === 'working' || state?.status === 'starting')
+        return 'Finish or stop the response before switching views';
+    } else if (terminalHandoff()) {
+      if (props.task.initialPrompt) return 'Wait for the queued prompt before switching views';
+      if (props.task.terminalInputPending)
+        return 'Send or clear the terminal draft before switching views';
+      if (!isAgentSettled(firstAgentId()))
+        return `Wait for ${agentName()} to finish and resolve pending requests before switching views`;
+    }
+    return '';
+  };
+  // A handoff failure stands until the next attempt, but a precondition is
+  // transient: report whichever one holds *now*, so the alert can neither keep
+  // asking for something already done nor resurface a reason that has since
+  // been replaced by a different one.
+  const viewNotice = () => viewError() || (noticeRequested() ? switchBlockedReason() : '');
+  // Drop a question whose cost has gone, so a later restart cannot make the
+  // dialog reappear for a switch the user asked about minutes ago.
+  createEffect(() => {
+    const mode = pendingSwitch();
+    if (mode && !agentViewSwitchCost(props.task, firstAgentId(), mode)) setPendingSwitch(null);
+  });
+  async function switchView(mode: 'chat' | 'terminal', confirmed = false) {
+    // The answer is spent whatever happens below — including a refusal, which
+    // belongs in the alert rather than behind a dialog that stays open.
+    if (confirmed) setPendingSwitch(null);
+    if (currentView() === mode || switchingView()) return;
+    // A disabled button's tooltip is unreachable by keyboard and screen readers,
+    // so the precondition is reported where the handoff errors already appear.
+    const blocked = switchBlockedReason();
+    setNoticeRequested(!!blocked);
+    setViewError('');
+    if (blocked) return;
+    // Quitting a live CLI is the user's call, and the answer is asked for again
+    // on every switch: what the running side is in the middle of changes.
+    if (!confirmed && agentViewSwitchCost(props.task, firstAgentId(), mode)) {
+      setPendingSwitch(mode);
+      return;
+    }
+    const agentId = firstAgentId();
+    const taskId = props.task.id;
+    setSwitchingView(true);
+    try {
+      await switchMainAgentView(taskId, agentId, mode);
+      if (!store.tasks[taskId] || !store.agents[agentId]) return;
+      selectAgent(agentId);
+      void saveState();
+    } catch (error) {
+      setViewError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSwitchingView(false);
+    }
+  }
   const selectedAgent = () =>
     store.agents[props.selectedAgentId] ?? store.agents[firstAgentId()] ?? undefined;
 
@@ -212,6 +298,7 @@ export function TaskAITerminal(props: TaskAITerminalProps) {
   }
 
   function handleStepNavReady(agentId: string, api: StepNavApi | undefined) {
+    props.onTranscriptMarksReady?.(agentId, api);
     if (!api) {
       stepNavByAgent.delete(agentId);
       syncStepNavSource();
@@ -237,7 +324,6 @@ export function TaskAITerminal(props: TaskAITerminalProps) {
       >
         <InfoBar
           allowOverflow
-          title={props.task.lastPrompt || infoBarStatus().title}
           onDblClick={() => {
             const prompt = props.task.lastPrompt;
             if (!prompt) return;
@@ -256,104 +342,89 @@ export function TaskAITerminal(props: TaskAITerminalProps) {
               'min-width': '0',
             }}
           >
-            <span
-              style={{
-                opacity: props.task.lastPrompt ? 1 : 0.4,
-                flex: '1',
-                'min-width': '0',
-                overflow: 'hidden',
-                'text-overflow': 'ellipsis',
-              }}
-            >
-              {props.task.lastPrompt ? `> ${props.task.lastPrompt}` : infoBarStatus().text}
-            </span>
-            <div
-              style={{
-                display: 'flex',
-                'align-items': 'center',
-                gap: '4px',
-                'flex-shrink': '0',
-              }}
-            >
-              <For each={props.task.agentIds}>
-                {(agentId, i) => {
-                  const agent = () => store.agents[agentId];
-                  const selected = () => props.selectedAgentId === agentId;
-                  return (
-                    <span
-                      style={{
-                        display: 'inline-flex',
-                        'align-items': 'center',
-                        height: '20px',
-                      }}
-                    >
-                      <button
-                        type="button"
-                        title={agent()?.def.description ?? agent()?.def.name}
-                        aria-pressed={selected()}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          selectAgent(agentId);
-                        }}
+            <PromptHistory task={props.task} emptyLabel={infoBarStatus().text} />
+            <div class="agent-header-controls">
+              <div class="agent-header-tabs">
+                <For each={props.task.agentIds}>
+                  {(agentId, i) => {
+                    const agent = () => store.agents[agentId];
+                    const selected = () => props.selectedAgentId === agentId;
+                    return (
+                      <span
                         style={{
                           display: 'inline-flex',
                           'align-items': 'center',
-                          gap: '4px',
                           height: '20px',
-                          padding: '0 7px',
-                          background: selected() ? theme.bgSelected : theme.bgInput,
-                          border: selected()
-                            ? `1px solid ${theme.accent}`
-                            : `1px solid ${theme.border}`,
-                          'border-right':
-                            props.task.agentIds.length > 1
-                              ? 'none'
-                              : selected()
-                                ? `1px solid ${theme.accent}`
-                                : `1px solid ${theme.border}`,
-                          color: selected() ? theme.fg : theme.fgMuted,
-                          'border-radius': props.task.agentIds.length > 1 ? '5px 0 0 5px' : '5px',
-                          cursor: 'pointer',
-                          'font-size': sf(11),
-                          'font-family': "'JetBrains Mono', monospace",
                         }}
                       >
-                        <span>{agent()?.def.name ?? `Agent ${i() + 1}`}</span>
-                        <Show when={props.task.agentIds.length > 1}>
-                          <span style={{ opacity: 0.55 }}>#{i() + 1}</span>
-                        </Show>
-                      </button>
-                      <Show when={props.task.agentIds.length > 1}>
                         <button
                           type="button"
-                          title="Close AI agent"
+                          title={agent()?.def.description ?? agent()?.def.name}
+                          aria-pressed={selected()}
                           onClick={(e) => {
                             e.stopPropagation();
-                            void closeAgent(agentId);
+                            selectAgent(agentId);
                           }}
                           style={{
                             display: 'inline-flex',
                             'align-items': 'center',
-                            'justify-content': 'center',
-                            width: '20px',
+                            gap: '4px',
                             height: '20px',
+                            padding: '0 7px',
                             background: selected() ? theme.bgSelected : theme.bgInput,
                             border: selected()
                               ? `1px solid ${theme.accent}`
                               : `1px solid ${theme.border}`,
-                            color: theme.fgMuted,
-                            'border-radius': '0 5px 5px 0',
+                            'border-right':
+                              props.task.agentIds.length > 1
+                                ? 'none'
+                                : selected()
+                                  ? `1px solid ${theme.accent}`
+                                  : `1px solid ${theme.border}`,
+                            color: selected() ? theme.fg : theme.fgMuted,
+                            'border-radius': props.task.agentIds.length > 1 ? '5px 0 0 5px' : '5px',
                             cursor: 'pointer',
-                            padding: '0',
+                            'font-size': sf(11),
+                            'font-family': "'JetBrains Mono', monospace",
                           }}
                         >
-                          <CloseIcon size={11} />
+                          <span>{agent()?.def.name ?? `Agent ${i() + 1}`}</span>
+                          <Show when={props.task.agentIds.length > 1}>
+                            <span style={{ opacity: 0.55 }}>#{i() + 1}</span>
+                          </Show>
                         </button>
-                      </Show>
-                    </span>
-                  );
-                }}
-              </For>
+                        <Show when={props.task.agentIds.length > 1}>
+                          <button
+                            type="button"
+                            title="Close AI agent"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void closeAgent(agentId);
+                            }}
+                            style={{
+                              display: 'inline-flex',
+                              'align-items': 'center',
+                              'justify-content': 'center',
+                              width: '20px',
+                              height: '20px',
+                              background: selected() ? theme.bgSelected : theme.bgInput,
+                              border: selected()
+                                ? `1px solid ${theme.accent}`
+                                : `1px solid ${theme.border}`,
+                              color: theme.fgMuted,
+                              'border-radius': '0 5px 5px 0',
+                              cursor: 'pointer',
+                              padding: '0',
+                            }}
+                          >
+                            <CloseIcon size={11} />
+                          </button>
+                        </Show>
+                      </span>
+                    );
+                  }}
+                </For>
+              </div>
               <Show when={multipleAgents()}>
                 <button
                   type="button"
@@ -411,16 +482,66 @@ export function TaskAITerminal(props: TaskAITerminalProps) {
                 </button>
               </Show>
               <AddAgentMenu taskId={props.task.id} />
+              <Show when={agentChatProvider(firstAgentId())}>
+                <div
+                  class="agent-view-switch"
+                  role="group"
+                  aria-label="Main agent view"
+                  aria-busy={switchingView()}
+                >
+                  <For each={['chat', 'terminal'] as const}>
+                    {(mode) => {
+                      const selected = () => currentView() === mode;
+                      const blocked = () => !selected() && !!switchBlockedReason();
+                      return (
+                        <button
+                          type="button"
+                          aria-label={`Show main agent ${mode}`}
+                          aria-pressed={selected()}
+                          // Never `disabled`: it would move focus to <body> mid
+                          // handoff, and `switchView` already guards re-entry.
+                          aria-disabled={blocked() || switchingView()}
+                          title={
+                            // Without this the button announces itself disabled
+                            // mid-handoff while promising that it works.
+                            switchingView()
+                              ? 'Switching conversation…'
+                              : blocked()
+                                ? switchBlockedReason()
+                                : mode === 'chat'
+                                  ? terminalHandoff()
+                                    ? 'Continue this conversation in Chat'
+                                    : `Open a separate ${agentName()} chat in this worktree`
+                                  : 'Open the terminal conversation'
+                          }
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void switchView(mode);
+                          }}
+                        >
+                          {mode === 'chat' ? <CommentIcon size={12} /> : <TerminalIcon size={12} />}
+                        </button>
+                      );
+                    }}
+                  </For>
+                </div>
+              </Show>
             </div>
           </div>
         </InfoBar>
+        <Show when={viewNotice()}>
+          <div class="agent-view-error" role="alert">
+            {viewNotice()}
+          </div>
+        </Show>
         <div
+          class="agent-terminal-row"
+          classList={{ 'agent-terminal-row-tabs': tabsMode() }}
           style={{
             flex: '1',
             display: 'flex',
             // Tabs mode stacks panes absolutely; a positioning context is needed.
             position: tabsMode() ? 'relative' : 'static',
-            gap: multipleAgents() && !tabsMode() ? '6px' : '0',
             overflow: 'hidden',
             background: multipleAgents() ? theme.taskContainerBg : 'transparent',
           }}
@@ -437,6 +558,7 @@ export function TaskAITerminal(props: TaskAITerminalProps) {
                 onFileLink={(filePath) => {
                   if (!props.onFileLink?.(filePath)) handleFileLink(filePath);
                 }}
+                onReview={props.onReview}
                 onReady={registerAgentFocus}
                 onUnmount={unregisterAgentFocus}
                 onStepNavReady={(api) => handleStepNavReady(agentId, api)}
@@ -452,6 +574,25 @@ export function TaskAITerminal(props: TaskAITerminalProps) {
         fileName={mdViewerFileName()}
         filePath={mdViewerFilePath()}
       />
+      <Show when={pendingSwitch()}>
+        {(mode) => (
+          // Re-read on every render: the CLI on the other side may have exited
+          // on its own while the dialog was open, and then there is nothing
+          // left to quit — the question goes away with the cost.
+          <Show when={agentViewSwitchCost(props.task, firstAgentId(), mode())}>
+            {(cost) => (
+              <ConfirmDialog
+                open
+                title={cost().title}
+                message={cost().message}
+                confirmLabel={cost().confirmLabel}
+                onConfirm={() => void switchView(mode(), true)}
+                onCancel={() => setPendingSwitch(null)}
+              />
+            )}
+          </Show>
+        )}
+      </Show>
     </>
   );
 }
@@ -580,6 +721,7 @@ function AddAgentMenu(props: { taskId: string }) {
 
 function AgentTerminalPane(props: {
   task: Task;
+  onReview?: (path?: string) => void;
   agentId: string;
   canClose: boolean;
   /** When true the pane is one of several stacked tabs (only `visible` shown). */
@@ -590,13 +732,25 @@ function AgentTerminalPane(props: {
   onReady: (agentId: string, focusFn: () => void) => void;
   onUnmount: (agentId: string) => void;
   onStepNavReady?: (
-    api: { mark: (i: number) => void; jump: (i: number) => boolean } | undefined,
+    api: { mark: (key: string) => void; jump: (key: string) => boolean } | undefined,
   ) => void;
 }) {
   onCleanup(() => props.onUnmount(props.agentId));
 
   const dockerOverlayLabel = () => getTaskDockerOverlayLabel(props.task.dockerSource);
   const agent = () => store.agents[props.agentId];
+  const [terminalOpened, setTerminalOpened] = createSignal(
+    untrack(() => !isAgentChat(props.task, props.agentId)),
+  );
+  let terminalFocus: (() => void) | undefined;
+  let chatFocus: (() => void) | undefined;
+  const focusCurrentView = () => {
+    if (isAgentChat(props.task, props.agentId)) chatFocus?.();
+    else terminalFocus?.();
+  };
+  createEffect(() => {
+    if (!isAgentChat(props.task, props.agentId)) setTerminalOpened(true);
+  });
 
   return (
     <div
@@ -610,6 +764,8 @@ function AgentTerminalPane(props: {
               position: 'absolute',
               inset: '0',
               visibility: props.visible ? 'visible' : 'hidden',
+              // Pauses xterm rendering for hidden tabs; see TilingLayout.
+              'content-visibility': props.visible ? 'visible' : 'hidden',
               'pointer-events': props.visible ? 'auto' : 'none',
             }
           : {
@@ -621,7 +777,6 @@ function AgentTerminalPane(props: {
         display: 'flex',
         'flex-direction': 'column',
         background: theme.taskPanelBg,
-        border: '1px solid transparent',
       }}
       onClick={(e) => {
         e.stopPropagation();
@@ -652,7 +807,7 @@ function AgentTerminalPane(props: {
       <Show when={agent()}>
         {(a) => (
           <>
-            <Show when={a().status === 'exited'}>
+            <Show when={a().status === 'exited' && !isAgentChat(props.task, props.agentId)}>
               <div
                 class="exit-badge"
                 title={a().lastOutput.length ? a().lastOutput.join('\n') : undefined}
@@ -697,60 +852,132 @@ function AgentTerminalPane(props: {
                     Resume
                   </button>
                 </Show>
+                <SessionPicker
+                  taskId={props.task.id}
+                  agentId={a().id}
+                  command={a().def.command}
+                  currentSessionId={props.task.agentSessionIds?.[a().id]}
+                />
               </div>
             </Show>
-            <Show when={`${a().id}:${a().generation}`} keyed>
-              <TerminalView
-                taskId={props.task.id}
-                agentId={a().id}
-                visible={props.visible}
-                isFocused={isPanelFocused(props.task.id, aiTerminalPanelId(props.agentId))}
-                command={a().def.command}
-                args={buildTaskAgentArgs(a().def, props.task, a().resumed)}
-                cwd={props.task.worktreePath}
-                envFile={store.agentEnvFiles[a().def.id]}
-                stepsEnabled={props.task.stepsEnabled}
-                dockerMode={
-                  props.task.dockerMode ||
-                  Boolean(
-                    props.task.coordinatedBy && store.tasks[props.task.coordinatedBy]?.dockerMode,
-                  )
+            <Show when={isAgentChat(props.task, props.agentId)}>
+              <AgentChatView
+                onReview={props.onReview}
+                task={props.task}
+                agentId={props.agentId}
+                active={
+                  props.visible &&
+                  isPanelFocusedOrDefault(props.task.id, aiTerminalPanelId(props.agentId))
                 }
-                dockerImage={
-                  props.task.dockerMode
-                    ? props.task.dockerImage
-                    : props.task.coordinatedBy
-                      ? store.tasks[props.task.coordinatedBy]?.dockerImage
-                      : undefined
-                }
-                dockerMountWorktreeParent={
-                  (props.task.coordinatorMode && props.task.dockerMode) ||
-                  Boolean(
-                    props.task.coordinatedBy && store.tasks[props.task.coordinatedBy]?.dockerMode,
-                  )
-                }
-                attachExisting={a().attachExisting}
-                preserveSessionOnCleanup
-                onExit={(code) => {
-                  if (
-                    a().resumed &&
-                    code.exit_code !== 0 &&
-                    isResumeArgsFailure(a().def.command, code.last_output)
-                  ) {
-                    // Resume args failed (e.g. Claude's "No conversation to continue");
-                    // fall back to a fresh start with normal args.
-                    restartAgent(a().id, false);
-                    return;
-                  }
-                  markAgentExited(a().id, code);
+                onReady={(focus) => {
+                  chatFocus = focus;
+                  props.onReady(props.agentId, focusCurrentView);
                 }}
-                onData={(data) => markAgentOutput(a().id, data, props.task.id)}
-                onFileLink={props.onFileLink}
-                onPromptDetected={(text) => setLastPrompt(props.task.id, text)}
-                onReady={(focusFn) => props.onReady(a().id, focusFn)}
-                onStepNavReady={props.onStepNavReady}
-                fontSize={13}
               />
+            </Show>
+            <Show when={terminalOpened()}>
+              <div
+                style={{ display: isAgentChat(props.task, props.agentId) ? 'none' : 'contents' }}
+              >
+                <Show when={`${a().id}:${a().generation}`} keyed>
+                  <TerminalView
+                    taskId={props.task.id}
+                    agentId={a().id}
+                    visible={props.visible && !isAgentChat(props.task, props.agentId)}
+                    isFocused={
+                      !isAgentChat(props.task, props.agentId) &&
+                      isPanelFocused(props.task.id, aiTerminalPanelId(props.agentId))
+                    }
+                    command={a().def.command}
+                    args={buildTaskAgentArgs(
+                      a().def,
+                      props.task,
+                      a().resumed,
+                      a().id,
+                      props.task.agentSessionIds?.[a().id],
+                    )}
+                    cwd={props.task.worktreePath}
+                    envFile={store.agentEnvFiles[a().def.id]}
+                    stepsEnabled={props.task.stepsEnabled}
+                    dockerMode={
+                      props.task.dockerMode ||
+                      Boolean(
+                        props.task.coordinatedBy &&
+                        store.tasks[props.task.coordinatedBy]?.dockerMode,
+                      )
+                    }
+                    dockerImage={
+                      props.task.dockerMode
+                        ? props.task.dockerImage
+                        : props.task.coordinatedBy
+                          ? store.tasks[props.task.coordinatedBy]?.dockerImage
+                          : undefined
+                    }
+                    dockerMountWorktreeParent={
+                      (props.task.coordinatorMode && props.task.dockerMode) ||
+                      Boolean(
+                        props.task.coordinatedBy &&
+                        store.tasks[props.task.coordinatedBy]?.dockerMode,
+                      )
+                    }
+                    attachExisting={a().attachExisting}
+                    preserveSessionOnCleanup
+                    onExit={(code) => {
+                      if (
+                        !a().requireResumeSuccess &&
+                        a().resumed &&
+                        code.exit_code !== 0 &&
+                        isResumeArgsFailure(a().def.command, code.last_output)
+                      ) {
+                        // Resume args failed (e.g. Claude's "No conversation to continue");
+                        // fall back to a fresh start with normal args.
+                        restartAgent(a().id, false);
+                        return;
+                      }
+                      if (
+                        props.task.mainAgentView !== 'chat' &&
+                        props.task.agentIds[0] === a().id &&
+                        a().def.id === 'codex' &&
+                        props.task.codexChatHandoff
+                      ) {
+                        const threadId =
+                          code.exit_code === 0 && (!code.signal || code.signal === '0')
+                            ? codexResumeId(code.last_output.join('\n'))
+                            : undefined;
+                        // /new and /model in the CLI may change the session or its settings.
+                        // Keep only its confirmed final ID; let Codex restore the native settings.
+                        setStore(
+                          'tasks',
+                          props.task.id,
+                          'codexChatHandoff',
+                          threadId
+                            ? { threadId, model: undefined, reasoningEffort: undefined }
+                            : undefined,
+                        );
+                        void saveState();
+                      }
+                      if (
+                        a().requireResumeSuccess &&
+                        code.exit_code !== 0 &&
+                        isResumeArgsFailure(a().def.command, code.last_output)
+                      )
+                        showNotification(
+                          'Resume failed. Your existing conversation was not replaced; review the terminal error before retrying.',
+                        );
+                      markAgentExited(a().id, code);
+                    }}
+                    onData={(data) => markAgentOutput(a().id, data, props.task.id)}
+                    onFileLink={props.onFileLink}
+                    onPromptDetected={(text) => setLastPrompt(props.task.id, text, props.agentId)}
+                    onReady={(focusFn) => {
+                      terminalFocus = focusFn;
+                      props.onReady(a().id, focusCurrentView);
+                    }}
+                    onStepNavReady={props.onStepNavReady}
+                    fontSize={13}
+                  />
+                </Show>
+              </div>
             </Show>
           </>
         )}
@@ -767,6 +994,22 @@ function MarkdownViewerDialog(props: {
   filePath: string;
 }) {
   const html = createHighlightedMarkdown(() => props.content);
+  const [copied, setCopied] = createSignal(false);
+  let copiedTimer: ReturnType<typeof setTimeout> | undefined;
+  onCleanup(() => clearTimeout(copiedTimer));
+
+  function copyMarkdown() {
+    navigator.clipboard
+      .writeText(props.content)
+      .then(() => {
+        setCopied(true);
+        clearTimeout(copiedTimer);
+        copiedTimer = setTimeout(() => setCopied(false), 1500);
+      })
+      .catch((err: unknown) => {
+        logWarn('clipboard', 'Could not copy Markdown', { err: errMessage(err) });
+      });
+  }
 
   return (
     <Dialog
@@ -804,6 +1047,22 @@ function MarkdownViewerDialog(props: {
           {props.fileName}
         </span>
         <span style={{ flex: '1' }} />
+        <button
+          onClick={copyMarkdown}
+          style={{
+            background: 'transparent',
+            border: 'none',
+            color: copied() ? theme.success : theme.fgMuted,
+            cursor: 'pointer',
+            padding: '4px',
+            display: 'flex',
+            'align-items': 'center',
+            'border-radius': 'var(--radius-xs)',
+          }}
+          title={copied() ? 'Copied' : 'Copy Markdown'}
+        >
+          {copied() ? <CheckIcon size={16} /> : <CopyIcon size={16} />}
+        </button>
         <Show when={props.filePath}>
           <button
             onClick={() => {

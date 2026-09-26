@@ -3,6 +3,7 @@ import os from 'os';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { startAgentHookServer, type AgentHookServer } from './server.js';
+import { registerAgentLaunch, retireAgentLaunch } from './observations.js';
 import type { AgentHookEventPayload } from './status.js';
 
 function tokenFrom(dir: string): string {
@@ -19,11 +20,15 @@ describe('startAgentHookServer', () => {
   beforeEach(async () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-hooks-'));
     events = [];
+    registerAgentLaunch('agent-1', 'task-1', 'launch-1');
+    registerAgentLaunch('agent-sh', 'task-sh', 'launch-sh');
     server = await startAgentHookServer({ dir, onEvent: (e) => events.push(e), now: () => 1234 });
   });
 
   afterEach(async () => {
     await server.close();
+    retireAgentLaunch('agent-1', 'launch-1');
+    retireAgentLaunch('agent-sh', 'launch-sh');
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
@@ -55,6 +60,7 @@ describe('startAgentHookServer', () => {
         'x-parallel-code-hook-token': tokenFrom(dir),
         'x-parallel-code-agent-id': 'agent-1',
         'x-parallel-code-task-id': 'task-1',
+        'x-parallel-code-launch-id': 'launch-1',
       },
     );
     expect(status).toBe(204);
@@ -65,8 +71,38 @@ describe('startAgentHookServer', () => {
       lastAssistantMessage: 'All done',
       agentId: 'agent-1',
       taskId: 'task-1',
+      launchId: 'launch-1',
       at: 1234,
     });
+  });
+
+  it('drops missing, foreign-task, retired, and replaced launch identities', async () => {
+    const auth = {
+      'x-parallel-code-hook-token': tokenFrom(dir),
+      'x-parallel-code-agent-id': 'agent-1',
+      'x-parallel-code-task-id': 'task-1',
+    };
+    const body = JSON.stringify({ hook_event_name: 'Stop' });
+    expect(await post(body, auth)).toBe(204);
+    expect(await post(body, { ...auth, 'x-parallel-code-launch-id': 'wrong' })).toBe(204);
+    expect(
+      await post(body, {
+        ...auth,
+        'x-parallel-code-launch-id': 'launch-1',
+        'x-parallel-code-task-id': 'wrong',
+      }),
+    ).toBe(204);
+    retireAgentLaunch('agent-1', 'launch-1');
+    expect(await post(body, { ...auth, 'x-parallel-code-launch-id': 'launch-1' })).toBe(204);
+    registerAgentLaunch('agent-1', 'task-1', 'launch-2');
+    try {
+      expect(await post(body, { ...auth, 'x-parallel-code-launch-id': 'launch-1' })).toBe(204);
+      expect(events).toHaveLength(0);
+      await post(body, { ...auth, 'x-parallel-code-launch-id': 'launch-2' });
+      await vi.waitFor(() => expect(events).toHaveLength(1));
+    } finally {
+      retireAgentLaunch('agent-1', 'launch-2');
+    }
   });
 
   it('rejects a missing or wrong token without leaking anything', async () => {
@@ -120,10 +156,11 @@ describe('startAgentHookServer', () => {
   });
 
   it('hands the PTY layer the env the script needs', () => {
-    expect(server.buildPtyEnv('agent-9', 'task-9')).toEqual({
+    expect(server.buildPtyEnv('agent-9', 'task-9', 'launch-9')).toEqual({
       PARALLEL_CODE_HOOK_ENDPOINT: path.join(dir, 'endpoint.env'),
       PARALLEL_CODE_AGENT_ID: 'agent-9',
       PARALLEL_CODE_TASK_ID: 'task-9',
+      PARALLEL_CODE_LAUNCH_ID: 'launch-9',
     });
   });
 
@@ -131,7 +168,7 @@ describe('startAgentHookServer', () => {
     const { execFile } = await import('child_process');
     const env = {
       ...process.env,
-      ...server.buildPtyEnv('agent-sh', 'task-sh'),
+      ...server.buildPtyEnv('agent-sh', 'task-sh', 'launch-sh'),
     };
     const stdout = await new Promise<string>((resolve, reject) => {
       const child = execFile('/bin/sh', [server.hookScriptPath], { env }, (err, out) =>

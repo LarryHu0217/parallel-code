@@ -1,18 +1,26 @@
 import { createEffect, createRoot, createSignal, untrack } from 'solid-js';
 import { IPC } from '../../electron/ipc/channels';
 import {
-  isAgentHookEventPayload,
+  AGENT_HOOK_STALE_MS,
+  isAgentActivityObservation,
+  isAgentActivitySnapshot,
+  transitionAgentHookStatus,
+  type AgentActivityObservation,
+  type AgentActivitySnapshot,
   type AgentHookEventPayload,
   type AgentHookPrompt,
   type AgentHookStatusState,
+  type ReducedAgentHookStatus,
 } from '../../electron/agent-hooks/status';
+import { formatRelativeAge } from '../lib/relativeAge';
+import { invoke } from '../lib/ipc';
+import { errMessage, warn } from '../lib/log';
 import { store } from './core';
 
 /**
  * Status an agent reported about itself through Claude Code hooks. Unlike the
- * PTY heuristics in `taskStatus.ts`, this is authoritative: `working` means a
- * turn is in flight, `waiting` means it is blocked on the human, `done` means
- * the turn ended. Absent for shells, Docker agents, and non-Claude agents.
+ * PTY heuristics in `taskStatus.ts`, this is a hook report, except for explicitly
+ * labeled local input inferences. `done` may mean ready or a finished turn.
  */
 export interface AgentHookStatus {
   state: AgentHookStatusState;
@@ -30,6 +38,8 @@ export interface AgentHookStatus {
   lastAssistantMessage?: string;
   /** The turn ended while the task was not on screen and nobody has looked since. */
   unread: boolean;
+  launchId?: string;
+  source?: 'hook' | 'terminal';
 }
 
 export interface TaskAgentHookStatus extends AgentHookStatus {
@@ -37,7 +47,7 @@ export interface TaskAgentHookStatus extends AgentHookStatus {
 }
 
 /** A `working`/`waiting` claim this old has lost its hook stream; heuristics take over. */
-export const AGENT_HOOK_STALE_MS = 30 * 60_000;
+export { AGENT_HOOK_STALE_MS };
 /** Esc/Ctrl-C only counts as an interrupt if no hook event follows within this window. */
 const INTERRUPT_SETTLE_MS = 500;
 /** Tool events of the interrupted turn can still land shortly after; ignore them. */
@@ -64,6 +74,9 @@ const [statuses, setStatuses] = createSignal<ReadonlyMap<string, AgentHookStatus
 const staleTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const interruptTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const suppressToolEventsUntil = new Map<string, number>();
+// Retain retirement sequences so an in-flight snapshot cannot revive an exit.
+const observationSequences = new Map<string, number>();
+let snapshotSequence = -1;
 
 function updateStatuses(mutate: (next: Map<string, AgentHookStatus>) => void): void {
   setStatuses((prev) => {
@@ -85,12 +98,17 @@ function setStatus(agentId: string, status: AgentHookStatus): void {
   clearTimer(staleTimers, agentId);
   // `done` is a terminal fact and stays put; only an ongoing claim can go stale.
   if (status.state === 'done') return;
+  const remaining = status.updatedAt + AGENT_HOOK_STALE_MS - Date.now();
+  if (remaining <= 0) {
+    updateStatuses((next) => next.delete(agentId));
+    return;
+  }
   staleTimers.set(
     agentId,
     setTimeout(() => {
       staleTimers.delete(agentId);
       updateStatuses((next) => next.delete(agentId));
-    }, AGENT_HOOK_STALE_MS),
+    }, remaining),
   );
 }
 
@@ -104,48 +122,64 @@ function isSuppressedToolEvent(event: AgentHookEventPayload): boolean {
   return TOOL_EVENTS.has(event.event);
 }
 
-const TOOL_RESULT_EVENTS: ReadonlySet<string> = new Set(['PostToolUse', 'PostToolUseFailure']);
-
-/** Claude runs sibling tool calls in parallel, so a result for some other call
- *  says nothing about the dialog the agent is parked on; only the matching
- *  result (or a non-tool event) ends the wait. Unknown ids fall back to
- *  treating any result as the end. */
-function isUnrelatedToolResult(
-  prev: AgentHookStatus | undefined,
-  event: AgentHookEventPayload,
-): boolean {
-  if (prev?.state !== 'waiting' || !TOOL_RESULT_EVENTS.has(event.event)) return false;
-  if (prev.toolUseId === undefined || event.toolUseId === undefined) return false;
-  return prev.toolUseId !== event.toolUseId;
-}
-
-export function applyAgentHookEvent(event: AgentHookEventPayload): void {
+export function applyAgentHookEvent(event: AgentHookEventPayload): boolean {
   // Any real event during the settle window means the keypress was not an interrupt.
   clearTimer(interruptTimers, event.agentId);
-  if (isSuppressedToolEvent(event)) return;
+  if (isSuppressedToolEvent(event)) return false;
   const prev = statuses().get(event.agentId);
-  if (isUnrelatedToolResult(prev, event)) return;
+  const reduced = transitionAgentHookStatus(prev, event);
+  if (reduced === prev) return false;
+  setHookStatus(event, reduced);
+  return true;
+}
+
+/** Only unread bookkeeping is carried across accepted hook observations. */
+function setHookStatus(event: AgentHookEventPayload, status: ReducedAgentHookStatus): void {
+  const prev = statuses().get(event.agentId);
   const sameState = prev?.state === event.state;
   const finished = event.event === 'Stop' || event.event === 'StopFailure';
   setStatus(event.agentId, {
-    state: event.state,
-    event: event.event,
-    since: sameState ? prev.since : event.at,
-    updatedAt: event.at,
-    toolName: event.toolName,
-    toolUseId:
-      event.toolUseId ?? (sameState && event.state === 'waiting' ? prev.toolUseId : undefined),
-    detail: event.detail,
-    prompt: event.prompt ?? (sameState && event.state === 'waiting' ? prev.prompt : undefined),
-    // A later idle-prompt notification must not wipe the final message Stop carried,
-    // nor count as the user having looked: only opening the task clears unread.
-    lastAssistantMessage:
-      event.lastAssistantMessage ??
-      (sameState && event.state === 'done' ? prev.lastAssistantMessage : undefined),
+    ...status,
+    launchId: event.launchId ?? prev?.launchId,
+    source: 'hook',
     unread: finished
       ? event.taskId !== store.activeTaskId
       : sameState && event.state === 'done' && prev.unread,
   });
+}
+
+/** Main observations are already reduced; the snapshot must retain their onset. */
+export function applyAgentActivityObservation(observation: AgentActivityObservation): void {
+  if (
+    observation.sequence <= snapshotSequence ||
+    observation.sequence <= (observationSequences.get(observation.agentId) ?? -1)
+  )
+    return;
+  observationSequences.set(observation.agentId, observation.sequence);
+  const prev = statuses().get(observation.agentId);
+  if (observation.kind !== 'hook') {
+    clearAgentHookStatus(observation.agentId);
+    return;
+  }
+  if (prev?.launchId !== observation.launchId) clearAgentHookStatus(observation.agentId);
+  clearTimer(interruptTimers, observation.agentId);
+  if (isSuppressedToolEvent(observation)) return;
+  // Main already matched tool results and reduced this state. Reducing it
+  // against local inference can invent hook details or reject a newer snapshot.
+  setHookStatus(observation, { ...observation, updatedAt: observation.at });
+}
+
+export function applyAgentActivitySnapshot(snapshot: AgentActivitySnapshot): void {
+  if (snapshot.sequence <= snapshotSequence) return;
+  for (const observation of snapshot.observations) applyAgentActivityObservation(observation);
+  const present = new Set(snapshot.observations.map((observation) => observation.agentId));
+  for (const agentId of new Set([...statuses().keys(), ...observationSequences.keys()])) {
+    if (!present.has(agentId) && (observationSequences.get(agentId) ?? -1) <= snapshot.sequence) {
+      clearAgentHookStatus(agentId);
+      observationSequences.delete(agentId);
+    }
+  }
+  snapshotSequence = snapshot.sequence;
 }
 
 /**
@@ -171,6 +205,7 @@ export function noteAgentTerminalInput(agentId: string, data: string): void {
       ...current,
       state: 'working',
       event: 'PermissionAnswered',
+      source: 'terminal',
       since: now,
       updatedAt: now,
       prompt: undefined,
@@ -194,6 +229,8 @@ function scheduleInterrupt(agentId: string, baseline: number): void {
       setStatus(agentId, {
         state: 'done',
         event: 'Interrupt',
+        source: 'terminal',
+        launchId: latest.launchId,
         since: now,
         updatedAt: now,
         detail: 'Interrupted',
@@ -205,6 +242,41 @@ function scheduleInterrupt(agentId: string, baseline: number): void {
 
 export function getAgentHookStatus(agentId: string): AgentHookStatus | null {
   return statuses().get(agentId) ?? null;
+}
+
+export function getAgentActivitySubject(agentId: string): string {
+  const name = store.agents?.[agentId]?.def?.name;
+  return name ? `Agent ${name} (${agentId.slice(0, 8)})` : `Agent ${agentId}`;
+}
+
+/** Diagnostic provenance; task attention may summarize several different panes. */
+export function formatAgentHookTooltip(status: TaskAgentHookStatus, nowMs?: number): string {
+  const activity =
+    status.state === 'waiting'
+      ? status.prompt === 'permission'
+        ? 'Waiting for approval'
+        : 'Waiting for an answer'
+      : status.state === 'working'
+        ? 'Working'
+        : status.event === 'SessionStart'
+          ? 'Session ready'
+          : status.event === 'StopFailure'
+            ? 'Turn failed'
+            : status.event === 'Stop'
+              ? 'Turn finished'
+              : status.event === 'Interrupt'
+                ? 'Interrupted'
+                : 'Ready for input';
+  const source =
+    status.source === 'terminal' ? 'Activity inferred from terminal input' : 'hook report';
+  const age = nowMs === undefined ? undefined : formatRelativeAge(status.updatedAt, nowMs);
+  const observed =
+    age === undefined
+      ? `observed ${new Date(status.updatedAt).toLocaleString()}`
+      : age === 'just now'
+        ? 'observed just now'
+        : `observed ${age} ago`;
+  return `${getAgentActivitySubject(status.agentId)} · ${activity}${status.detail ? `: ${status.detail}` : ''} · ${source} (${status.event}) · ${observed}`;
 }
 
 export function clearAgentHookStatus(agentId: string): void {
@@ -258,10 +330,20 @@ export function markTaskRead(taskId: string): void {
 
 /** Subscribe to hook events from the main process; returns the unsubscribe. */
 export function startAgentHookStatusListener(): () => void {
+  let disposed = false;
   // eslint-disable-next-line solid/reactivity -- IPC callback is not a reactive context; it writes our own signal
   const off = window.electron.ipcRenderer.on(IPC.AgentHookEvent, (data: unknown) => {
-    if (isAgentHookEventPayload(data)) applyAgentHookEvent(data);
+    if (isAgentActivityObservation(data)) applyAgentActivityObservation(data);
   });
+  // Subscribe first: a response may be older than events received during its read.
+  void invoke<unknown>(IPC.AgentHookSnapshot)
+    // eslint-disable-next-line solid/reactivity -- asynchronous IPC response writes our own signal
+    .then((snapshot) => {
+      if (!disposed && isAgentActivitySnapshot(snapshot)) applyAgentActivitySnapshot(snapshot);
+    })
+    .catch((error: unknown) =>
+      warn('agent-hooks', 'Could not read agent activity evidence', { error: errMessage(error) }),
+    );
   // Opening a task is how the user "reads" it; runs outside the mount owner
   // because callers start this past an await.
   const dispose = createRoot((dispose) => {
@@ -274,6 +356,7 @@ export function startAgentHookStatusListener(): () => void {
     return dispose;
   });
   return () => {
+    disposed = true;
     off();
     dispose();
   };

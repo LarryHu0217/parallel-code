@@ -1,6 +1,7 @@
 import { createStore } from 'solid-js/store';
 import { DEFAULT_TERMINAL_FONT } from '../lib/fonts';
 import { getLocalDateKey } from '../lib/date';
+import { defaultPresetForTone } from '../lib/look';
 import type { AppStore, UsageState } from './types';
 
 const EMPTY_USAGE: UsageState = {
@@ -25,7 +26,8 @@ export const [store, setStore] = createStore<AppStore>({
   availableAgents: [],
   customAgents: [],
   agentEnvFiles: {},
-  showNewTaskDialog: false,
+  showNewTaskPanel: false,
+  newTaskPanelFocused: false,
   sidebarVisible: true,
   panelUserSize: {},
   globalScale: 1,
@@ -47,11 +49,11 @@ export const [store, setStore] = createStore<AppStore>({
   mergedLinesRemoved: 0,
   terminalFont: DEFAULT_TERMINAL_FONT,
   terminalScreenReaderMode: false,
-  themePreset: 'islands-dark',
+  themePreset: defaultPresetForTone('dark'),
   appearanceMode: 'dark',
-  lightThemePreset: 'islands-light',
+  lightThemePreset: defaultPresetForTone('light'),
   lightThemeCustomId: null,
-  darkThemePreset: 'islands-dark',
+  darkThemePreset: defaultPresetForTone('dark'),
   darkThemeCustomId: null,
   showPromptInput: true,
   fontSmoothing: true,
@@ -69,6 +71,7 @@ export const [store, setStore] = createStore<AppStore>({
   dockerAvailable: false,
   shareDockerAgentAuth: false,
   askCodeProvider: 'claude',
+  askCodeModel: 'sonnet',
   newTaskDropUrl: null,
   newTaskPrefillPrompt: null,
   missingProjectIds: {},
@@ -89,15 +92,17 @@ export const [store, setStore] = createStore<AppStore>({
   focusMode: false,
   taskSplitMode: {},
   verboseLogging: false,
-  coordinatorModeEnabled: false,
+  mcpOrchestrationEnabled: true,
   documentWorkspacesEnabled: false,
   documentFullWidth: false,
   activeDocumentProjectId: null,
   coordinatorNotificationDelayMs: 60_000,
   coordinatorControlHintDismissed: false,
+  preferUiMode: false,
   defaultStepsEnabled: false,
   defaultSkipPermissions: false,
   defaultPropagateSkipPermissions: false,
+  canvasOwnershipBadges: true,
   customThemes: {},
   activeCustomThemeId: null,
   mcpStatus: { running: false, port: null, coordinatorTaskId: null, mcpConfigPath: null },

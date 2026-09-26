@@ -1,11 +1,25 @@
+import { parseCompletionRecord } from '../../electron/shared/completion-report';
+import {
+  registerTaskAuthority,
+  delegationRequest,
+  applyDelegationChange,
+  startDelegationStateHydration,
+  startPeerMessageDelivery,
+} from './delegation';
+import type { IntegrationPolicy } from '../../electron/shared/delegation-types';
 import { produce } from 'solid-js/store';
+import { isAgentChat, supportsAgentChat } from './agent-chat';
 import { invoke, Channel } from '../lib/ipc';
 import { asStoreVerificationRun } from '../lib/verification-run';
 import { IPC } from '../../electron/ipc/channels';
 import { getSkipPermissionsArgs } from '../../electron/shared/skip-permissions';
+import { CANVAS_INSTRUCTIONS } from '../../electron/shared/canvas-view';
+import type { ChatImage } from '../../electron/shared/agent-chat-types';
 import { store, setStore, cleanupPanelEntries } from './core';
+import { assignFreshSessionId } from './session-ids';
 import { effectiveAgentId } from './agent-select';
 import { saveState } from './persistence';
+import { MAX_PROMPT_HISTORY, promptHistoryOf } from '../lib/prompt-history';
 import { setTaskFocusedPanel, shellPanelId } from './focused-panel';
 import { getProject, getProjectPath, getProjectBranchPrefix, isProjectMissing } from './projects';
 import { setPendingShellCommand } from '../lib/bookmarks';
@@ -37,13 +51,14 @@ import type {
   Task,
 } from './types';
 import type { DockerSource } from '../lib/docker';
-import { COORDINATOR_PREAMBLE } from './coordinator-preamble';
 import {
   clampCoordinatorConcurrentTasks,
   DEFAULT_COORDINATOR_CONCURRENT_TASKS,
 } from '../lib/coordinator-limits';
 import { computeSidebarDraggableTaskOrder, getCoordinatorChildren } from './sidebar-order';
 import { isLandedTaskState } from './landing';
+import { forgetAgentPublication } from './reasoning-activity';
+import { armSpCompletion, fireSpCompletion, onTaskRenamed } from './superProductivity';
 
 export function createAgentRecord(args: {
   id: string;
@@ -132,21 +147,30 @@ function removeTaskDraftEntries(
 }
 
 function initTaskInStore(
-  taskId: string,
   task: Task,
   agent: Agent,
-  projectId: string,
-  agentDef: AgentDef | undefined,
+  opts: { agentDef: AgentDef | undefined; activate: boolean },
 ): void {
+  const taskId = task.id;
   setStore(
     produce((s) => {
       s.tasks[taskId] = task;
       s.agents[agent.id] = agent;
+      if (s.preferUiMode && task.mainAgentView === undefined && supportsAgentChat(task)) {
+        s.tasks[taskId].mainAgentView = 'chat';
+      }
+      // The task's own first pane needs an id as much as any pane added later.
+      // Without this it launches with the positional default, and once a second
+      // pane exists that default means "the newest session in this worktree" —
+      // the second pane's — so pane one comes back with the wrong conversation.
+      assignFreshSessionId(s, taskId, agent.id, agent.def.command);
       s.taskOrder.push(taskId);
-      s.activeTaskId = taskId;
-      s.activeAgentId = agent.id;
-      s.lastProjectId = projectId;
-      if (agentDef) s.lastAgentId = agentDef.id;
+      if (opts.activate) {
+        s.activeTaskId = taskId;
+        s.activeAgentId = agent.id;
+      }
+      s.lastProjectId = task.projectId;
+      if (opts.agentDef) s.lastAgentId = opts.agentDef.id;
     }),
   );
   markAgentSpawned(agent.id);
@@ -183,14 +207,20 @@ function assertTaskCanReceiveInput(taskId: string, agentId: string): void {
   }
 }
 
-async function writeToAgentWhenReady(taskId: string, agentId: string, data: string): Promise<void> {
+async function writeToAgentWhenReady(
+  taskId: string,
+  agentId: string,
+  data: string,
+  signal?: AbortSignal,
+): Promise<void> {
   const deadline = Date.now() + AGENT_WRITE_READY_TIMEOUT_MS;
   let lastErr: unknown;
 
   while (Date.now() <= deadline) {
+    signal?.throwIfAborted();
     assertTaskCanReceiveInput(taskId, agentId);
     try {
-      await invoke(IPC.WriteToAgent, { agentId, data });
+      await invoke(IPC.WriteToAgent, { agentId, data, ...(signal ? { automation: true } : {}) });
       return;
     } catch (err) {
       lastErr = err;
@@ -236,9 +266,13 @@ export interface CreateTaskOptions {
   dockerSource?: DockerSource;
   dockerImage?: string;
   stepsEnabled?: boolean;
-  coordinatorMode?: boolean;
+  autoMergeChildren?: boolean;
+  autoSendChildUpdates?: boolean;
   propagateSkipPermissions?: boolean;
   maxConcurrentTasks?: number;
+  /** Defaults to true. Pass false when the desktop user did not ask for the task
+   *  (e.g. a phone created it), so it cannot take focus from their current work. */
+  activate?: boolean;
 }
 
 export async function createTask(opts: CreateTaskOptions): Promise<string> {
@@ -291,62 +325,10 @@ export async function createTask(opts: CreateTaskOptions): Promise<string> {
     worktreePath = projectRoot;
   }
 
-  // Generate agentId early so we can derive the Docker container name before StartMCPServer.
   const agentId = crypto.randomUUID();
-
-  // Single clamped value shared by the preamble text and the backend's hard
-  // enforcement so the two can never drift apart.
   const effectiveMaxConcurrentTasks = clampCoordinatorConcurrentTasks(
     opts.maxConcurrentTasks ?? DEFAULT_COORDINATOR_CONCURRENT_TASKS,
   );
-
-  // Start MCP server BEFORE adding task to store — the store update triggers
-  // a reactive render of TerminalView which spawns the PTY immediately.
-  // If MCP launch args aren't set yet, the coordinator agent starts without MCP wiring.
-  let mcpConfigPath: string | undefined;
-  let mcpLaunchArgs: string[] | undefined;
-  if (opts.coordinatorMode) {
-    // When running in Docker, sub-agents will be spawned via `docker exec` into this container.
-    const dockerContainerName = dockerMode ? `parallel-code-${agentId.slice(0, 12)}` : undefined;
-    try {
-      const mcpResult = await invoke<{
-        configPath: string | undefined;
-        mcpLaunchArgs?: string[];
-      }>(IPC.StartMCPServer, {
-        coordinatorTaskId: taskId,
-        projectId,
-        projectRoot,
-        coordinatorBranch: branchName || undefined,
-        worktreePath: gitIsolation === 'worktree' ? worktreePath : undefined,
-        skipPermissions: skipPermissions ?? false,
-        propagateSkipPermissions: opts.propagateSkipPermissions ?? false,
-        maxConcurrentTasks: effectiveMaxConcurrentTasks,
-        verifyCommand: getProject(projectId)?.verifyCommand,
-        agentCommand: agentDef.command,
-        agentArgs: agentDef.args,
-        agentEnvFile: store.agentEnvFiles[agentDef.id],
-        dockerContainerName,
-        dockerImage,
-      });
-      mcpConfigPath = mcpResult.configPath ?? undefined;
-      mcpLaunchArgs = mcpResult.mcpLaunchArgs;
-      console.warn('[MCP] Coordinator config path:', mcpConfigPath);
-      await invoke(IPC.MCP_CoordinatorRegistered, {
-        coordinatorTaskId: taskId,
-        projectId,
-        coordinatorBranch: branchName || undefined,
-        worktreePath,
-        verifyCommand: getProject(projectId)?.verifyCommand,
-      });
-    } catch (err) {
-      console.warn('[MCP] Failed to start MCP server for coordinator:', err);
-      // Clean up worktree so we don't leave a dangling branch
-      if (gitIsolation === 'worktree') {
-        invoke(IPC.RemoveArenaWorktree, { projectRoot, branchName }).catch(() => {});
-      }
-      throw err;
-    }
-  }
 
   // Per-task steps tracking — explicit opt-in from dialog, or fall back to default preference
   const stepsEnabled = opts.stepsEnabled ?? store.defaultStepsEnabled;
@@ -356,11 +338,6 @@ export async function createTask(opts: CreateTaskOptions): Promise<string> {
   // Only possible here when an initialPrompt was provided; if not, sendPrompt handles injection.
   const effectivePrompt =
     stepsEnabled && initialPrompt ? `${initialPrompt}\n\n---\n${STEPS_INSTRUCTION}` : initialPrompt;
-  const coordinatorBaseBranchInstruction =
-    opts.coordinatorMode && branchName
-      ? `Use \`${branchName}\` as the baseBranch for all sub-tasks.\n\n`
-      : '';
-
   const task: Task = {
     ...createBaseTaskRecord({
       id: taskId,
@@ -373,15 +350,7 @@ export async function createTask(opts: CreateTaskOptions): Promise<string> {
       worktreePath,
       agentId,
     }),
-    initialPrompt:
-      opts.coordinatorMode && effectivePrompt
-        ? COORDINATOR_PREAMBLE.replace(
-            /\{\{MAX_CONCURRENT\}\}/g,
-            String(effectiveMaxConcurrentTasks),
-          ) +
-          coordinatorBaseBranchInstruction +
-          effectivePrompt
-        : (effectivePrompt ?? undefined),
+    initialPrompt: effectivePrompt ?? undefined,
     savedInitialPrompt: initialPrompt ?? undefined,
     stepsEnabled: stepsEnabled || undefined,
     skipPermissions: skipPermissions ?? undefined,
@@ -389,16 +358,11 @@ export async function createTask(opts: CreateTaskOptions): Promise<string> {
     dockerSource: dockerSource ?? undefined,
     dockerImage: dockerImage ?? undefined,
     githubUrl,
-    coordinatorMode: opts.coordinatorMode || undefined,
-    propagateSkipPermissions: opts.coordinatorMode
-      ? (opts.propagateSkipPermissions ?? false)
-      : undefined,
-    maxConcurrentTasks: opts.coordinatorMode ? effectiveMaxConcurrentTasks : undefined,
-    controlledBy: opts.coordinatorMode ? 'coordinator' : undefined,
-    mcpConfigPath,
-    mcpLaunchArgs,
-    // Coordinator tasks call StartMCPServer before entering the store, so MCP is ready immediately.
-    mcpStartupStatus: opts.coordinatorMode ? ('ready' as const) : undefined,
+    autoMergeChildren: opts.autoMergeChildren,
+    autoSendChildUpdates: opts.autoSendChildUpdates,
+    propagateSkipPermissions:
+      gitIsolation === 'worktree' ? (opts.propagateSkipPermissions ?? false) : undefined,
+    maxConcurrentTasks: gitIsolation === 'worktree' ? effectiveMaxConcurrentTasks : undefined,
   };
 
   const agent = createAgentRecord({
@@ -407,7 +371,8 @@ export async function createTask(opts: CreateTaskOptions): Promise<string> {
     def: agentDef,
   });
 
-  initTaskInStore(taskId, task, agent, projectId, agentDef);
+  await registerTaskAuthority(task, agentDef);
+  initTaskInStore(task, agent, { agentDef, activate: opts.activate ?? true });
 
   saveState(); // fire-and-forget — errors handled internally
   return taskId;
@@ -464,7 +429,8 @@ export async function createImportedTask(opts: CreateImportedTaskOptions): Promi
     def: agentDef,
   });
 
-  initTaskInStore(id, task, agent, projectId, agentDef);
+  await registerTaskAuthority(task, agentDef);
+  initTaskInStore(task, agent, { agentDef, activate: true });
   saveState();
   return id;
 }
@@ -475,23 +441,24 @@ export async function createImportedTask(opts: CreateImportedTaskOptions): Promi
  */
 export function getCoordinatorCloseWarning(taskId: string): string | null {
   const task = store.tasks[taskId];
-  if (!task?.coordinatorMode) return null;
+  if (!task) return null;
   const children = getCoordinatorChildren(taskId);
   const count = children.active.length + children.collapsed.length;
   if (count === 0) return null;
-  return `This coordinator has ${count} active sub-task(s). Closing it will detach them — they will become standalone tasks and continue running independently.`;
+  return `This task has ${count} child task(s). Closing it will detach them — they will become standalone tasks and continue running independently.`;
 }
 
 export async function closeTask(taskId: string): Promise<void> {
   const task = store.tasks[taskId];
   if (!task || task.closingStatus === 'closing' || task.closingStatus === 'removing') return;
 
-  const childIdsToDetach: string[] = task.coordinatorMode
-    ? (() => {
-        const children = getCoordinatorChildren(taskId);
-        return [...children.active, ...children.collapsed];
-      })()
-    : [];
+  const childIdsToDetach: string[] =
+    task.coordinatorMode || task.delegationParent
+      ? (() => {
+          const children = getCoordinatorChildren(taskId);
+          return [...children.active, ...children.collapsed];
+        })()
+      : [];
 
   const agentIds = [...task.agentIds];
   const shellAgentIds = [...task.shellAgentIds];
@@ -509,6 +476,16 @@ export async function closeTask(taskId: string): Promise<void> {
   invoke(IPC.StopPlanWatcher, { taskId }).catch(console.error);
 
   try {
+    if (task.coordinatorMode || task.delegationParent || childIdsToDetach.length > 0) {
+      const result = await delegationRequest<{ detachedChildIds: string[] }>({
+        action: 'closeParent',
+        taskId,
+        deleteBranch,
+      });
+      applyDelegationChange({ taskId, detachedChildIds: result.detachedChildIds });
+      removeTaskFromStore(taskId, [...agentIds, ...shellAgentIds]);
+      return;
+    }
     // Kill agents
     for (const agentId of agentIds) {
       await invoke(IPC.KillAgent, { agentId }).catch(console.error);
@@ -518,7 +495,14 @@ export async function closeTask(taskId: string): Promise<void> {
     }
 
     // Skip git cleanup for direct mode (no worktree/branch) and imported worktrees (user-owned).
-    if (task.gitIsolation === 'worktree' && !task.externalWorktree) {
+    // Their checkout stays, so the task's reasoning reports must be removed on their own.
+    if (task.gitIsolation !== 'worktree' || task.externalWorktree) {
+      if (task.worktreePath)
+        await invoke(IPC.RemoveReasoningFeeds, { worktreePath: task.worktreePath, taskId }).catch(
+          (err: unknown) =>
+            logWarn('tasks', 'Failed to remove reasoning reports', { taskId, err: String(err) }),
+        );
+    } else {
       // Remove worktree + branch
       await invoke(IPC.DeleteTask, {
         taskId,
@@ -532,15 +516,6 @@ export async function closeTask(taskId: string): Promise<void> {
       });
     }
 
-    // Agents are dead — deregister the coordinator so no more MCP tool calls succeed.
-    // Done after kills (not before) so a failed close leaves the backend registered
-    // and the coordinator agent can still make tool calls until it's actually gone.
-    if (task.coordinatorMode) {
-      await invoke(IPC.MCP_CoordinatorDeregistered, { coordinatorTaskId: taskId }).catch((err) =>
-        console.warn('[MCP] Failed to deregister coordinator:', err),
-      );
-    }
-
     // Notify backend to clean up this task from its coordinator's state map.
     if (task.coordinatedBy) {
       await invoke(IPC.MCP_CoordinatedTaskClosed, {
@@ -549,26 +524,8 @@ export async function closeTask(taskId: string): Promise<void> {
       }).catch((err) => console.warn('[MCP] Failed to notify coordinator of task close:', err));
     }
 
-    // Backend cleanup succeeded — detach children then remove coordinator from UI.
-    if (childIdsToDetach.length > 0) {
-      setStore(
-        produce((s) => {
-          for (const childId of childIdsToDetach) {
-            if (s.tasks[childId]) {
-              s.tasks[childId].coordinatedBy = undefined;
-              // Unlock the textarea — control bar disappears when coordinatedBy
-              // is cleared, so the task must also be unlocked.
-              s.tasks[childId].controlledBy = undefined;
-              // Clear stale coordinator wiring — the backend registry no longer
-              // knows about these tasks, so MCP tools would fail.
-              s.tasks[childId].mcpConfigPath = undefined;
-              s.tasks[childId].mcpStartupStatus = undefined;
-              s.tasks[childId].mcpStartupError = undefined;
-            }
-          }
-        }),
-      );
-    }
+    await delegationRequest({ action: 'unregister', taskId });
+
     removeTaskFromStore(taskId, [...agentIds, ...shellAgentIds]);
   } catch (err) {
     // Backend cleanup failed — show error, allow retry
@@ -594,6 +551,9 @@ function removeTaskFromStore(taskId: string, agentIds: string[]): void {
   // regardless of which path removed the task.  Idempotent if already stopped.
   invoke(IPC.StopPlanWatcher, { taskId }).catch(console.error);
   invoke(IPC.StopStepsWatcher, { taskId }).catch(console.error);
+  // Same convergence point: a close/merge that armed a Super Productivity
+  // completion sends it only now that the task is really gone.
+  fireSpCompletion(taskId);
 
   // Clean up agent activity tracking (timers, buffers, decoders) before
   // the store entries are deleted — otherwise markAgentExited can't find
@@ -607,6 +567,7 @@ function removeTaskFromStore(taskId: string, agentIds: string[]): void {
     clearTimeout(activityTimer);
     activityReleaseTimers.delete(taskId);
   }
+  forgetAgentPublication(taskId);
 
   // Phase 1: mark as removing so UI can animate
   setStore('tasks', taskId, 'closingStatus', 'removing');
@@ -676,6 +637,11 @@ export async function mergeTask(
   if (cleanup) {
     recordMergedLines(mergeResult.lines_added, mergeResult.lines_removed);
     recordTaskMerged();
+    armSpCompletion(taskId, {
+      kind: 'merged',
+      linesAdded: mergeResult.lines_added,
+      linesRemoved: mergeResult.lines_removed,
+    });
     await Promise.allSettled(
       [...agentIds, ...shellAgentIds].map((id) => invoke(IPC.KillAgent, { agentId: id })),
     );
@@ -687,6 +653,7 @@ export async function mergeTask(
         coordinatorTaskId: task.coordinatedBy,
       }).catch((err) => console.warn('[MCP] Failed to notify coordinator of task close:', err));
     }
+    await delegationRequest({ action: 'unregister', taskId });
     removeTaskFromStore(taskId, [...agentIds, ...shellAgentIds]);
   }
 }
@@ -713,13 +680,48 @@ export async function pushTask(taskId: string, onOutput: Channel<string>): Promi
 export function updateTaskName(taskId: string, name: string): void {
   setStore('tasks', taskId, 'name', name);
   setStore('tasks', taskId, 'nameIsAutoGenerated', false);
+  onTaskRenamed(taskId);
 }
 
 export function updateTaskNotes(taskId: string, notes: string): void {
   setStore('tasks', taskId, 'notes', notes);
 }
 
-export async function sendPrompt(taskId: string, agentId: string, text: string): Promise<void> {
+/** Canvas guidance goes out once per agent session; later mentions would only repeat it. */
+function canvasGuidanceDue(agentId: string, text: string): boolean {
+  const agent = store.agents[agentId];
+  // A prompt that quotes the guidance (e.g. pasted back to ask about it) mentions the canvases too.
+  if (
+    !agent?.canvasTools ||
+    text.includes(CANVAS_INSTRUCTIONS) ||
+    !/\b(?:reasoning\s+graph|mind\s*map|live\s+map)\b/i.test(text)
+  )
+    return false;
+  const sent = agent.canvasGuidanceGeneration;
+  return sent === undefined || sent !== agent.generation;
+}
+
+/** Recorded only after delivery, so a failed send does not silence the guidance. */
+function markCanvasGuided(agentId: string, generation: number | undefined): void {
+  // A restart mid-send spawns a session that never saw the guidance.
+  if (store.agents[agentId]?.generation === generation)
+    setStore('agents', agentId, 'canvasGuidanceGeneration', generation);
+}
+
+export async function sendPrompt(
+  taskId: string,
+  agentId: string,
+  text: string,
+  options: {
+    /** App-composed prompts carry their own canvas contract, so none is appended. */
+    appPrompt?: boolean;
+    /** Images attached in the chat composer; terminal agents take text only. */
+    images?: ChatImage[];
+    /** Cancel app-initiated delivery when its authorization changes. */
+    signal?: AbortSignal;
+  } = {},
+): Promise<void> {
+  options.signal?.throwIfAborted();
   const task = store.tasks[taskId];
   assertTaskCanReceiveInput(taskId, agentId);
   const promptedAgentIds = task?.promptedAgentIds ?? [];
@@ -730,14 +732,44 @@ export async function sendPrompt(taskId: string, agentId: string, text: string):
   // When steps tracking is enabled but no initial prompt was provided in the dialog,
   // the steps instruction was never injected in createTask. Append it to each
   // agent's first manual prompt so newly added agents also maintain steps.json.
-  const injectSteps = !!(task?.stepsEnabled && !hasPromptedAgent && !isQueuedInitialPrompt);
-  const effectiveText = injectSteps ? `${text}\n\n---\n${STEPS_INSTRUCTION}` : text;
+  const hasPromptedConversation = isAgentChat(task, agentId)
+    ? !!store.agents[agentId]?.chatState?.items.some((item) => item.kind === 'user')
+    : hasPromptedAgent;
+  const injectSteps = !!(task?.stepsEnabled && !hasPromptedConversation && !isQueuedInitialPrompt);
+  let effectiveText = injectSteps ? `${text}\n\n---\n${STEPS_INSTRUCTION}` : text;
+
+  if (isAgentChat(task, agentId)) {
+    const withChatGuidance = !options.appPrompt && canvasGuidanceDue(agentId, text);
+    const chatGeneration = store.agents[agentId]?.generation;
+    if (withChatGuidance) effectiveText += `\n\n---\n${CANVAS_INSTRUCTIONS}`;
+    await invoke(IPC.AgentChat, {
+      action: 'send',
+      agentId,
+      text: effectiveText,
+      ...(options.images?.length ? { images: options.images } : {}),
+    });
+    if (withChatGuidance) markCanvasGuided(agentId, chatGeneration);
+    setTaskLastInputAt(taskId);
+    setLastPrompt(taskId, text, agentId);
+    if (task && !hasPromptedAgent)
+      setStore('tasks', taskId, 'promptedAgentIds', [...promptedAgentIds, agentId]);
+    if (isQueuedInitialPrompt) setStore('tasks', taskId, 'initialPrompt', undefined);
+    void saveState();
+    return;
+  }
 
   // Send a Focus In escape sequence before the prompt text.  When the user focuses
   // the PromptInput textarea, the xterm.js terminal loses DOM focus.  For agents
   // that enable focus tracking (\x1b[?1004h), xterm.js sends \x1b[O (Focus Out)
   // to the PTY, which may suspend readline input processing; \x1b[I re-activates it.
-  await writeToAgentWhenReady(taskId, agentId, '\x1b[I');
+  await writeToAgentWhenReady(taskId, agentId, '\x1b[I', options.signal);
+  // MCP server instructions are not always surfaced by the CLI. Include the
+  // canvas contract with the first explicit mention of a session, including resumes.
+  // Check availability after waiting for startup to finish.
+  const withGuidance = !options.appPrompt && canvasGuidanceDue(agentId, text);
+  // The session the guidance is written to; a restart mid-send spawns one that never saw it.
+  const guidedGeneration = store.agents[agentId]?.generation;
+  if (withGuidance) effectiveText += `\n\n---\n${CANVAS_INSTRUCTIONS}`;
   // Send text and Enter separately so TUI apps (Claude Code, Codex)
   // don't treat the \r as part of a pasted block.  When the agent has enabled
   // bracketed paste, wrap only the prompt text; this avoids Codex's paste-burst
@@ -748,10 +780,14 @@ export async function sendPrompt(taskId: string, agentId: string, text: string):
     taskId,
     agentId,
     useBracketed ? `${BRACKETED_PASTE_START}${effectiveText}${BRACKETED_PASTE_END}` : effectiveText,
+    options.signal,
   );
   await new Promise((r) => setTimeout(r, pasteDelayMs(effectiveText)));
-  await writeToAgentWhenReady(taskId, agentId, '\r');
-  setStore('tasks', taskId, 'lastPrompt', text);
+  await writeToAgentWhenReady(taskId, agentId, '\r', options.signal);
+  // App sends bypass xterm's onData handler, which normally clears this flag on Enter.
+  if (agentId === task?.agentIds[0]) setTaskTerminalInputPending(taskId, false);
+  if (withGuidance) markCanvasGuided(agentId, guidedGeneration);
+  setLastPrompt(taskId, text, agentId);
   if (task && !hasPromptedAgent) {
     setStore('tasks', taskId, 'promptedAgentIds', [...promptedAgentIds, agentId]);
     if (isQueuedInitialPrompt) setStore('tasks', taskId, 'initialPrompt', undefined);
@@ -759,7 +795,23 @@ export async function sendPrompt(taskId: string, agentId: string, text: string):
   }
 }
 
-export function setLastPrompt(taskId: string, text: string): void {
+export function setLastPrompt(taskId: string, text: string, agentId?: string): void {
+  const task = store.tasks[taskId];
+  if (!task || !text.trim()) return;
+  const history = promptHistoryOf(task);
+  setStore(
+    'tasks',
+    taskId,
+    'promptHistory',
+    [
+      ...history,
+      {
+        text,
+        sentAt: Date.now(),
+        agentId,
+      },
+    ].slice(-MAX_PROMPT_HISTORY),
+  );
   setStore('tasks', taskId, 'lastPrompt', text);
 }
 
@@ -951,7 +1003,7 @@ export function hasDirectTask(projectId: string): boolean {
 export async function collapseTask(taskId: string): Promise<void> {
   const task = store.tasks[taskId];
   if (!task || task.collapsed || task.closingStatus) return;
-  if (task.coordinatorMode) return;
+  if (task.coordinatorMode || task.delegationParent) return;
   // Coordinated children must not be collapsed — the backend coordinator registry
   // still holds the old agentId, so clearing agentIds here breaks send_prompt and
   // idle detection. Block collapse entirely for tasks managed by a coordinator.
@@ -966,7 +1018,8 @@ export async function collapseTask(taskId: string): Promise<void> {
   // so agents must be killed explicitly to avoid orphaned PTY processes.
   const agentIds = [...task.agentIds];
   const shellAgentIds = [...task.shellAgentIds];
-  const agentDefs = agentIds
+  const savedAgentIds = agentIds.filter((id) => store.agents[id]);
+  const agentDefs = savedAgentIds
     .map((id) => store.agents[id]?.def)
     .filter((def): def is AgentDef => Boolean(def));
   const promptedAgentIds = new Set(task.promptedAgentIds ?? []);
@@ -986,6 +1039,10 @@ export async function collapseTask(taskId: string): Promise<void> {
       s.tasks[taskId].collapsed = true;
       s.tasks[taskId].savedAgentDef = agentDefs[0];
       s.tasks[taskId].savedAgentDefs = agentDefs.length > 0 ? agentDefs : undefined;
+      s.tasks[taskId].savedAgentSessionIds = savedAgentIds.map(
+        (id) => task.agentSessionIds?.[id] ?? null,
+      );
+      s.tasks[taskId].agentSessionIds = undefined;
       s.tasks[taskId].savedSelectedAgentIndex =
         selectedAgentIndex >= 0 ? selectedAgentIndex : undefined;
       s.tasks[taskId].savedPromptedAgentIndexes =
@@ -1053,6 +1110,12 @@ export function uncollapseTask(taskId: string): void {
       }
 
       t.agentIds = restoredAgents.map((agent) => agent.id);
+      const sessions: Record<string, string> = {};
+      restoredAgents.forEach((agent, index) => {
+        const sessionId = t.savedAgentSessionIds?.[index];
+        if (sessionId) sessions[agent.id] = sessionId;
+      });
+      t.agentSessionIds = Object.keys(sessions).length > 0 ? sessions : undefined;
       const promptedAgentIds = promptedAgentIndexes
         .map((index) => t.agentIds[index])
         .filter((id): id is string => Boolean(id));
@@ -1060,6 +1123,7 @@ export function uncollapseTask(taskId: string): void {
       t.selectedAgentId = t.agentIds[selectedAgentIndex] ?? t.agentIds[0];
       t.savedAgentDef = undefined;
       t.savedAgentDefs = undefined;
+      t.savedAgentSessionIds = undefined;
       t.savedSelectedAgentIndex = undefined;
       t.savedPromptedAgentIndexes = undefined;
       s.activeAgentId = t.selectedAgentId ?? null;
@@ -1114,6 +1178,13 @@ interface MCPTaskCreatedEvent {
   worktreePath: string;
   agentId: string;
   coordinatorTaskId: string;
+  completion?: unknown;
+  reviewRevision?: number;
+  signalDoneReceived?: boolean;
+  signalDoneAt?: string;
+  signalDoneConsumed?: boolean;
+  baseBranch?: string;
+  integrationPolicy?: IntegrationPolicy;
   prompt?: string;
   mcpConfigPath?: string;
   autoDiscoveredMcpConfig?: AutoDiscoveredMcpConfigState;
@@ -1131,6 +1202,15 @@ export function initMCPListeners(): () => void {
   activeMCPListenersCleanup?.();
 
   const cleanups: Array<() => void> = [];
+  cleanups.push(
+    startPeerMessageDelivery((message) => {
+      const { taskId, agentId } = message.recipient;
+      setTaskLastInputAt(taskId);
+      setLastPrompt(taskId, message.prompt, agentId);
+      markAgentBusy(agentId);
+    }),
+  );
+  cleanups.push(startDelegationStateHydration());
 
   cleanups.push(
     window.electron.ipcRenderer.on(IPC.MCP_TaskCreated, (data: unknown) => {
@@ -1145,8 +1225,15 @@ export function initMCPListeners(): () => void {
           worktreePath: evt.worktreePath,
           agentId: evt.agentId,
         }),
+        baseBranch: evt.baseBranch ?? store.tasks[evt.coordinatorTaskId]?.branchName,
+        integrationPolicy: evt.integrationPolicy,
         coordinatedBy: evt.coordinatorTaskId,
         controlledBy: 'coordinator',
+        completion: parseCompletionRecord(evt.completion),
+        reviewRevision: evt.reviewRevision,
+        signalDoneReceived: evt.signalDoneReceived,
+        signalDoneAt: evt.signalDoneAt,
+        signalDoneConsumed: evt.signalDoneConsumed,
         // Coordinated initial assignments are delivered by the backend because
         // background sub-task panels may never mount a PromptInput.
         initialPrompt: evt.prompt,
@@ -1187,6 +1274,8 @@ export function initMCPListeners(): () => void {
         produce((s) => {
           if (s.tasks[evt.taskId]) return; // idempotent — ignore duplicate events
           s.tasks[evt.taskId] = task;
+          if (s.tasks[evt.coordinatorTaskId])
+            s.tasks[evt.coordinatorTaskId].delegationParent = true;
           s.agents[evt.agentId] = agent;
           s.taskOrder.push(evt.taskId);
           created = true;
@@ -1201,9 +1290,22 @@ export function initMCPListeners(): () => void {
 
   cleanups.push(
     window.electron.ipcRenderer.on(IPC.MCP_TaskClosed, (data: unknown) => {
-      const { taskId } = data as { taskId: string };
+      const { taskId, merged } = data as {
+        taskId: string;
+        merged?: { linesAdded: number; linesRemoved: number };
+      };
       const task = store.tasks[taskId];
       if (!task) return;
+      // The coordinator closed, merged or landed this subtask: it is finished.
+      // A merge that was cleaned up separately (approve-and-merge, a land whose
+      // cleanup failed) arrives as a plain close; its landing state says it merged.
+      armSpCompletion(
+        taskId,
+        merged
+          ? { kind: 'merged', ...merged }
+          : { kind: isLandedTaskState(task.landingState) ? 'merged' : 'closed' },
+      );
+      fireSpCompletion(taskId);
 
       const agentIds = [...task.agentIds];
       for (const agentId of agentIds) {
@@ -1262,18 +1364,20 @@ export function initMCPListeners(): () => void {
         hadTask: hasCoordinatorTask,
         userEdited: existing?.userEdited ?? false,
       });
-      const hasNewNotifications =
+      const overlapsHeldNotification =
         existing?.userEdited &&
-        evt.notificationIds.length > (existing.notificationIds?.length ?? 0);
-      if (hasNewNotifications && existing) {
-        // New completions arrived while the user was editing — preserve their edit,
-        // just update the batch metadata and show a hidden-count badge.
+        evt.notificationIds.some((id) => existing.notificationIds.includes(id));
+      if (overlapsHeldNotification && existing) {
+        // Re-staging held completions must not re-enable automatic delivery. Keep
+        // the draft and count only newly added completions, including mixed batches.
         setStore('tasks', evt.coordinatorTaskId, 'stagedNotification', {
           ...existing,
           batchId: evt.batchId,
           notificationIds: evt.notificationIds,
           autoFireAt: evt.autoFireAt,
-          hiddenCompletionCount: (existing.hiddenCompletionCount ?? 0) + 1,
+          hiddenCompletionCount:
+            (existing.hiddenCompletionCount ?? 0) +
+            evt.notificationIds.filter((id) => !existing.notificationIds.includes(id)).length,
         });
       } else {
         // Fresh staging or re-stage after user's edited send — reset to clean state
@@ -1314,6 +1418,11 @@ export function initMCPListeners(): () => void {
     window.electron.ipcRenderer.on(IPC.MCP_TaskStateSync, (data: unknown) => {
       const evt = data as {
         taskId: string;
+        delegationParent?: boolean;
+        delegationPaused?: boolean;
+        integrationPolicy?: IntegrationPolicy;
+        completion?: unknown;
+        reviewRevision?: number;
         signalDoneReceived?: boolean;
         signalDoneAt?: string;
         signalDoneConsumed?: boolean;
@@ -1334,12 +1443,29 @@ export function initMCPListeners(): () => void {
         mcpStartupError?: string | null;
       };
       if (store.tasks[evt.taskId]) {
+        if (evt.delegationParent !== undefined)
+          setStore('tasks', evt.taskId, 'delegationParent', evt.delegationParent);
+        if (evt.delegationPaused !== undefined)
+          setStore('tasks', evt.taskId, 'delegationPaused', evt.delegationPaused);
+        if (evt.integrationPolicy !== undefined)
+          setStore('tasks', evt.taskId, 'integrationPolicy', evt.integrationPolicy);
         const hasLandingStateUpdate =
+          Object.hasOwn(evt, 'completion') ||
+          evt.reviewRevision !== undefined ||
           evt.verification !== undefined ||
           evt.landingState !== undefined ||
           evt.landingReason !== undefined ||
           evt.landingSummary !== undefined ||
           evt.landedMetadata !== undefined;
+        // A completion is a replacement packet: omitted report fields must not survive.
+        if (Object.hasOwn(evt, 'completion'))
+          setStore(
+            produce((state) => {
+              state.tasks[evt.taskId].completion = parseCompletionRecord(evt.completion);
+            }),
+          );
+        if (Number.isSafeInteger(evt.reviewRevision) && (evt.reviewRevision ?? -1) >= 0)
+          setStore('tasks', evt.taskId, 'reviewRevision', evt.reviewRevision);
         if (evt.signalDoneReceived !== undefined)
           setStore('tasks', evt.taskId, 'signalDoneReceived', evt.signalDoneReceived);
         if (evt.signalDoneAt !== undefined)
@@ -1549,8 +1675,11 @@ export function retryTaskMcpStartup(taskId: string): Promise<void> {
       baseBranch: task.baseBranch,
       worktreePath: task.worktreePath,
       coordinatorTaskId: task.coordinatedBy,
+      integrationPolicy: task.integrationPolicy,
       controlledBy: task.controlledBy,
       agentId: task.agentIds[0],
+      completion: task.completion,
+      reviewRevision: task.reviewRevision,
       signalDoneAt: task.signalDoneAt,
       signalDoneConsumed: task.signalDoneConsumed,
       verification: task.verification,
@@ -1568,7 +1697,10 @@ export function retryTaskMcpStartup(taskId: string): Promise<void> {
       })
       .catch((err: unknown) => markTaskMcpError(taskId, String(err)));
   }
-  return Promise.resolve();
+  const agent = task.agentIds[0] ? store.agents[task.agentIds[0]]?.def : undefined;
+  return registerTaskAuthority(task, agent)
+    .then(() => markTaskMcpReady(taskId))
+    .catch((error: unknown) => markTaskMcpError(taskId, String(error)));
 }
 
 export function setTaskControl(taskId: string, who: 'coordinator' | 'human'): void {

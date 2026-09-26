@@ -1,3 +1,4 @@
+import { documentAgentTaskId } from '../documents/task-id';
 import { batch } from 'solid-js';
 import { produce } from 'solid-js/store';
 import { store, setStore } from './core';
@@ -10,6 +11,7 @@ import { themeToCss } from '../lib/custom-theme';
 import type { PersistedWindowState, TaskViewportVisibility } from './types';
 import { invoke } from '../lib/ipc';
 import { IPC } from '../../electron/ipc/channels';
+import { defaultAskCodeModel, type AskCodeProvider } from '../../electron/shared/ask-code-models';
 
 // Set to true after loadCustomThemes() resolves. Sanitization of persisted slot
 // IDs is skipped until then so the startup reactive effect cannot null them out
@@ -216,11 +218,8 @@ export function setVerboseLogging(enabled: boolean): void {
   setStore('verboseLogging', enabled);
 }
 
-export function setCoordinatorModeEnabled(enabled: boolean): void {
-  setStore('coordinatorModeEnabled', enabled);
-  invoke(IPC.SetCoordinatorModeEnabled, { enabled }).catch((e) =>
-    console.warn('Failed to set coordinator mode backend:', e),
-  );
+export function setPreferUiMode(enabled: boolean): void {
+  setStore('preferUiMode', enabled);
 }
 
 export function setDefaultStepsEnabled(enabled: boolean): void {
@@ -229,6 +228,10 @@ export function setDefaultStepsEnabled(enabled: boolean): void {
 
 export function setDefaultSkipPermissions(enabled: boolean): void {
   setStore('defaultSkipPermissions', enabled);
+}
+
+export function setCanvasOwnershipBadges(enabled: boolean): void {
+  setStore('canvasOwnershipBadges', enabled);
 }
 
 export function setDefaultPropagateSkipPermissions(enabled: boolean): void {
@@ -241,7 +244,7 @@ export function setCoordinatorNotificationDelayMs(ms: number): void {
 }
 
 export function setInactiveColumnOpacity(opacity: number): void {
-  setStore('inactiveColumnOpacity', Math.round(Math.max(0.3, Math.min(1.0, opacity)) * 100) / 100);
+  setStore('inactiveColumnOpacity', Math.round(Math.max(0.1, Math.min(1.0, opacity)) * 100) / 100);
 }
 
 export function setEditorCommand(command: string): void {
@@ -252,8 +255,16 @@ export function setDockerImage(image: string): void {
   setStore('dockerImage', image || 'parallel-code-agent:latest');
 }
 
-export function setAskCodeProvider(provider: 'claude' | 'minimax'): void {
+export function setAskCodeProvider(provider: AskCodeProvider): void {
+  if (provider === store.askCodeProvider) return;
   setStore('askCodeProvider', provider);
+  // Model names do not carry across providers — a Claude alias is not a Codex
+  // slug — so the new provider starts on its own default until one is picked.
+  setStore('askCodeModel', defaultAskCodeModel(provider));
+}
+
+export function setAskCodeModel(model: string): void {
+  setStore('askCodeModel', model);
 }
 
 export function setMinimaxApiKey(key: string): void {
@@ -288,7 +299,9 @@ export function toggleFocusMode(on?: boolean): void {
 }
 
 export function toggleTaskFocusMode(taskId: string | null = store.activeTaskId): void {
-  if (!taskId || !store.tasks[taskId]) return;
+  const isDocument =
+    store.activeDocumentProjectId && taskId === documentAgentTaskId(store.activeDocumentProjectId);
+  if (!taskId || (!store.tasks[taskId] && !isDocument)) return;
   const enteringFocusMode = !store.focusMode;
   if (store.activeTaskId !== taskId) setActiveTask(taskId);
   toggleFocusMode();

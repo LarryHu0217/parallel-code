@@ -1,12 +1,40 @@
+import { parseCompletionRecord } from '../../electron/shared/completion-report';
+import { delegationRequest, taskAuthorityInput } from './delegation';
+import { restoreCanvasTaskLinks } from '../lib/canvas-task-links';
+import { restoreMindMap } from '../graph/model';
 import { produce } from 'solid-js/store';
 import { invoke } from '../lib/ipc';
 import { IPC } from '../../electron/ipc/channels';
+import { isChatPermissionMode, restoreChatSessions } from '../../electron/shared/agent-chat-types';
+import { isSessionId } from '../../electron/shared/session-record';
+import {
+  defaultAskCodeModel,
+  isAskCodeModel,
+  type AskCodeProvider,
+} from '../../electron/shared/ask-code-models';
 import { store, setStore } from './core';
 import { startRemoteAccess } from './remote';
 import { effectiveAgentId } from './agent-select';
 import { randomPastelColor } from './projects';
 import { markAgentSpawned } from './taskStatus';
 import { clampCoordinatorConcurrentTasks } from '../lib/coordinator-limits';
+import { MAX_PROMPT_HISTORY } from '../lib/prompt-history';
+import { normalizeReasoningProfile } from '../investigation/profiles';
+import { restoreReasoningWorkspaces } from '../investigation/editing';
+import { isValidSpId } from '../../electron/shared/super-productivity';
+
+/** A map that fails validation is kept aside rather than crashing load or being overwritten
+ *  by the next save; the user is told once. */
+function restoreTaskMindMap(
+  pt: PersistedTask,
+  unreadable: string[],
+): Pick<Task, 'mindMap' | 'mindMapUnreadable'> {
+  if (pt.mindMap === undefined || pt.mindMap === null) return {};
+  const document = restoreMindMap(pt.mindMap);
+  if (document) return { mindMap: document };
+  unreadable.push(pt.name || 'a task');
+  return { mindMapUnreadable: pt.mindMap };
+}
 
 // Hand-edited state files may hold anything; the IPC layer rejects non-integers.
 function restoredMaxConcurrentTasks(value: unknown): number | undefined {
@@ -18,20 +46,37 @@ import type {
   Task,
   PersistedState,
   PersistedTask,
+  SuperProductivityLink,
   PersistedWindowState,
   Project,
 } from './types';
 import type { AgentDef } from '../ipc/types';
 import { inferDockerSource } from '../lib/docker';
 import { DEFAULT_TERMINAL_FONT } from '../lib/fonts';
-import { isLookPreset } from '../lib/look';
+import { defaultPresetForTone, isLookPreset } from '../lib/look';
 import { validateCustomTheme, parseThemeCss, themeToCss } from '../lib/custom-theme';
 import type { CustomTheme } from '../lib/custom-theme';
 import { syncTerminalCounter } from './terminals';
 import { showNotification, NOTIFICATION_ERROR_MS } from './notification';
-import { errMessage } from '../lib/log';
+import { errMessage, warn as logWarn } from '../lib/log';
 import { canvasTabKey } from '../lib/canvas-tabs';
 import { documentAgentTaskIds } from '../documents/task-id';
+
+function restoredCodexHandoff(value: unknown): Task['codexChatHandoff'] {
+  if (!value || typeof value !== 'object') return;
+  const session = value as Record<string, unknown>;
+  if (
+    typeof session.threadId !== 'string' ||
+    !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(session.threadId)
+  )
+    return;
+  return {
+    threadId: session.threadId,
+    model: typeof session.model === 'string' ? session.model : undefined,
+    reasoningEffort:
+      typeof session.reasoningEffort === 'string' ? session.reasoningEffort : undefined,
+  };
+}
 
 const RESTORED_AGENT_SPAWN_STAGGER_MS = 1_000;
 
@@ -102,12 +147,58 @@ function restoredPromptedAgentIds(pt: PersistedTask, agentIds: string[]): string
   return valid.length > 0 ? valid : undefined;
 }
 
+/**
+ * Session ids for the panes that actually came back.
+ *
+ * `restoredAgentIds` mints a replacement when a persisted agent id is missing
+ * or already taken, and an entry left keyed to the old id would attach that
+ * session to whichever pane later reused it. Dropping those costs the pane its
+ * exact resume and returns it to the positional default — the safe direction.
+ */
+function restoredAgentSessionIds(
+  pt: PersistedTask,
+  agentIds: string[],
+): Record<string, string> | undefined {
+  const raw: unknown = pt.agentSessionIds;
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const restored: Record<string, string> = {};
+  for (const agentId of agentIds) {
+    // Shape-checked, not merely non-empty: the profile is a file on disk and
+    // these ids end up as arguments to a spawned CLI.
+    const sessionId = (raw as Record<string, unknown>)[agentId];
+    if (isSessionId(sessionId)) restored[agentId] = sessionId;
+  }
+  return Object.keys(restored).length > 0 ? restored : undefined;
+}
+
 function validPromptedAgentIndexes(value: unknown): number[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const valid = value.filter(
     (index): index is number => Number.isInteger(index) && index >= 0 && index < 100,
   );
   return valid.length > 0 ? valid : undefined;
+}
+
+function restoredPromptHistory(value: unknown): Task['promptHistory'] {
+  if (!Array.isArray(value)) return undefined;
+  // Drop the malformed entries before capping, so junk at the tail of an old save cannot
+  // push out prompts the user can still read.
+  const entries = value.flatMap((entry: unknown) => {
+    if (!entry || typeof entry !== 'object' || !('text' in entry)) return [];
+    if (typeof entry.text !== 'string' || !entry.text.trim()) return [];
+    return [
+      {
+        text: entry.text,
+        sentAt:
+          'sentAt' in entry && typeof entry.sentAt === 'number' && Number.isFinite(entry.sentAt)
+            ? entry.sentAt
+            : undefined,
+        agentId:
+          'agentId' in entry && typeof entry.agentId === 'string' ? entry.agentId : undefined,
+      },
+    ];
+  });
+  return entries.slice(-MAX_PROMPT_HISTORY);
 }
 
 function validAgentId(value: unknown, agentIds: string[]): string | undefined {
@@ -126,7 +217,13 @@ function validAgentIndex(value: unknown): number | undefined {
 /** The canvas tabs of a persisted task; a pre-tabs `canvasPath` becomes one tab. */
 function restoredCanvas(pt: PersistedTask): Pick<Task, 'canvasTabs' | 'canvasActiveTab'> {
   const tabs = Array.isArray(pt.canvasTabs)
-    ? pt.canvasTabs.filter((t) => t?.kind === 'markdown' && typeof t.path === 'string')
+    ? pt.canvasTabs.filter(
+        (t) =>
+          t?.kind === 'mindmap' ||
+          t?.kind === 'reasoning' ||
+          (t?.kind === 'markdown' && typeof t.path === 'string') ||
+          (t?.kind === 'browser' && t.path === 'preview'),
+      )
     : typeof pt.canvasPath === 'string'
       ? [{ kind: 'markdown' as const, path: pt.canvasPath }]
       : [];
@@ -134,6 +231,14 @@ function restoredCanvas(pt: PersistedTask): Pick<Task, 'canvasTabs' | 'canvasAct
   const keys = tabs.map(canvasTabKey);
   const active = keys.includes(pt.canvasActiveTab ?? '') ? pt.canvasActiveTab : keys[0];
   return { canvasTabs: tabs, canvasActiveTab: active };
+}
+
+function restoreSuperProductivityLink(value: unknown): SuperProductivityLink | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const { taskId, syncedTitle } = value as Record<string, unknown>;
+  return isValidSpId(taskId) && typeof syncedTitle === 'string'
+    ? { taskId, syncedTitle }
+    : undefined;
 }
 
 function validBranch(value: unknown, exclude?: string): string | undefined {
@@ -156,14 +261,22 @@ function toPersistedTask(task: Task, agentDefs: AgentDef[], collapsed?: boolean)
     notes: task.notes,
     promptDraft: task.promptDraft,
     lastPrompt: task.lastPrompt,
+    promptHistory: task.promptHistory,
     promptedAgentIds: task.promptedAgentIds,
     initialPrompt: task.initialPrompt,
     shellCount: task.shellAgentIds.length,
     agentDef: agentDefs[0] ?? null,
     agentDefs: agentDefs.length > 1 ? agentDefs : undefined,
     agentIds: task.agentIds.length > 0 ? [...task.agentIds] : undefined,
+    agentSessionIds: task.agentSessionIds,
     selectedAgentId: task.selectedAgentId,
     aiTerminalLayout: task.aiTerminalLayout,
+    mainAgentView: task.mainAgentView,
+    codexChatThreadId: task.codexChatThreadId,
+    codexChatHandoff: task.codexChatHandoff,
+    claudeChatSessionId: task.claudeChatSessionId,
+    chatSessions: task.chatSessions,
+    chatPermissionMode: task.chatPermissionMode,
     gitIsolation: task.gitIsolation,
     baseBranch: task.baseBranch,
     externalWorktree: task.externalWorktree,
@@ -173,23 +286,37 @@ function toPersistedTask(task: Task, agentDefs: AgentDef[], collapsed?: boolean)
     dockerImage: task.dockerImage,
     githubUrl: task.githubUrl,
     prUrl: task.prUrl,
+    superProductivity: task.superProductivity,
     savedInitialPrompt: task.savedInitialPrompt,
     savedSelectedAgentIndex: task.savedSelectedAgentIndex,
+    savedAgentSessionIds: task.savedAgentSessionIds,
     savedPromptedAgentIndexes: task.savedPromptedAgentIndexes,
     planFileName: task.planFileName,
     canvasTabs: task.canvasTabs,
     canvasActiveTab: task.canvasActiveTab,
+    browserUrl: task.browserUrl,
+    canvasTaskLinks: task.canvasTaskLinks,
+    mindMap: task.mindMap ?? task.mindMapUnreadable,
+    reasoningProfile: task.reasoningProfile,
+    reasoningWorkspaces: task.reasoningWorkspaces,
     stepsEnabled: task.stepsEnabled,
     branchAdoptedFrom: task.branchAdoptedFrom,
     branchOfferDismissed: task.branchOfferDismissed,
     ...(collapsed ? { collapsed: true } : {}),
+    delegationParent: task.delegationParent,
+    delegationPaused: task.delegationPaused,
+    integrationPolicy: task.integrationPolicy,
     coordinatorMode: task.coordinatorMode,
+    autoMergeChildren: task.autoMergeChildren,
+    autoSendChildUpdates: task.autoSendChildUpdates,
     propagateSkipPermissions: task.propagateSkipPermissions,
     maxConcurrentTasks: task.maxConcurrentTasks,
     coordinatedBy: task.coordinatedBy,
     controlledBy: task.controlledBy,
     mcpConfigPath: task.mcpConfigPath,
     autoDiscoveredMcpConfig: task.autoDiscoveredMcpConfig,
+    completion: task.completion,
+    reviewRevision: task.reviewRevision,
     signalDoneReceived: task.signalDoneReceived,
     signalDoneAt: task.signalDoneAt,
     signalDoneConsumed: task.signalDoneConsumed,
@@ -212,7 +339,13 @@ function restoredVerificationRun(
   return run;
 }
 
+// The renderer can receive input while startup IPC waits for the login shell.
+// Never serialize its initial empty store over a session we have not restored.
+let stateLoaded = false;
+
 export async function saveState(): Promise<void> {
+  if (!stateLoaded) return;
+
   const persisted: PersistedState = {
     projects: store.projects.map((p) => ({ ...p })),
     lastProjectId: store.lastProjectId,
@@ -246,6 +379,10 @@ export async function saveState(): Promise<void> {
     editorCommand: store.editorCommand || undefined,
     dockerImage: store.dockerImage !== 'parallel-code-agent:latest' ? store.dockerImage : undefined,
     askCodeProvider: store.askCodeProvider !== 'claude' ? store.askCodeProvider : undefined,
+    askCodeModel:
+      store.askCodeModel !== defaultAskCodeModel(store.askCodeProvider)
+        ? store.askCodeModel
+        : undefined,
     customAgents: store.customAgents.length > 0 ? [...store.customAgents] : undefined,
     agentEnvFiles:
       Object.keys(store.agentEnvFiles).length > 0 ? { ...store.agentEnvFiles } : undefined,
@@ -259,18 +396,20 @@ export async function saveState(): Promise<void> {
     shareDockerAgentAuth: store.shareDockerAgentAuth || undefined,
     activeCustomThemeId: store.activeCustomThemeId ?? undefined,
     appearanceMode: store.appearanceMode !== 'dark' ? store.appearanceMode : undefined,
-    lightThemePreset:
-      store.lightThemePreset !== 'islands-light' ? store.lightThemePreset : undefined,
+    lightThemePreset: store.lightThemePreset,
     lightThemeCustomId: store.lightThemeCustomId ?? undefined,
-    darkThemePreset: store.darkThemePreset !== 'islands-dark' ? store.darkThemePreset : undefined,
+    darkThemePreset: store.darkThemePreset,
     darkThemeCustomId: store.darkThemeCustomId ?? undefined,
-    coordinatorModeEnabled: store.coordinatorModeEnabled || undefined,
+    mcpOrchestrationEnabled: store.mcpOrchestrationEnabled,
     documentWorkspacesEnabled: store.documentWorkspacesEnabled || undefined,
     documentFullWidth: store.documentFullWidth || undefined,
     coordinatorControlHintDismissed: store.coordinatorControlHintDismissed || undefined,
+    preferUiMode: store.preferUiMode || undefined,
     defaultStepsEnabled: store.defaultStepsEnabled || undefined,
     defaultSkipPermissions: store.defaultSkipPermissions || undefined,
     defaultPropagateSkipPermissions: store.defaultPropagateSkipPermissions || undefined,
+    // Default on: only an explicit opt-out is stored.
+    canvasOwnershipBadges: store.canvasOwnershipBadges ? undefined : false,
     autoStartRemoteAccess: store.autoStartRemoteAccess || undefined,
   };
 
@@ -438,6 +577,7 @@ interface LegacyPersistedState {
   editorCommand?: unknown;
   dockerImage?: unknown;
   askCodeProvider?: unknown;
+  askCodeModel?: unknown;
   minimaxApiKey?: unknown;
   customAgents?: unknown;
   agentEnvFiles?: unknown;
@@ -454,19 +594,26 @@ interface LegacyPersistedState {
   lightThemeCustomId?: unknown;
   darkThemePreset?: unknown;
   darkThemeCustomId?: unknown;
-  coordinatorModeEnabled?: unknown;
+  mcpOrchestrationEnabled?: unknown;
   documentWorkspacesEnabled?: unknown;
   documentFullWidth?: unknown;
   coordinatorControlHintDismissed?: unknown;
+  preferUiMode?: unknown;
   defaultStepsEnabled?: unknown;
   defaultSkipPermissions?: unknown;
   defaultPropagateSkipPermissions?: unknown;
+  canvasOwnershipBadges?: unknown;
   autoStartRemoteAccess?: unknown;
 }
 
 export async function loadState(): Promise<void> {
-  const json = await invoke<string | null>(IPC.LoadAppState).catch(() => null);
-  if (!json) return;
+  stateLoaded = false;
+  const json = await invoke<string | null>(IPC.LoadAppState);
+  if (!json) {
+    await delegationRequest({ action: 'orchestrationSetting', enabled: true });
+    stateLoaded = true;
+    return;
+  }
 
   let raw: LegacyPersistedState;
   try {
@@ -496,6 +643,7 @@ export async function loadState(): Promise<void> {
   // Also migrate defaultDirectMode -> defaultGitIsolation
   for (const p of projects) {
     if (!p.color) p.color = randomPastelColor();
+    p.allowPeerAccess = p.allowPeerAccess === true;
     if (typeof p.coverageReportPath === 'string') {
       const trimmed = p.coverageReportPath.trim();
       p.coverageReportPath = trimmed ? trimmed : undefined;
@@ -503,8 +651,16 @@ export async function loadState(): Promise<void> {
       p.coverageReportPath = undefined;
     }
     p.tasksCollapsed = typeof p.tasksCollapsed === 'boolean' ? p.tasksCollapsed : undefined;
+    p.superProductivityProjectId = isValidSpId(p.superProductivityProjectId)
+      ? p.superProductivityProjectId
+      : undefined;
     // Migrate defaultDirectMode -> defaultGitIsolation
-    const legacy = p as Project & { defaultDirectMode?: boolean };
+    const legacy = p as Project & {
+      defaultDirectMode?: boolean;
+      allowAgentTaskCreation?: boolean;
+    };
+    // Task creation now follows the global MCP setting, independently of old project consent.
+    delete legacy.allowAgentTaskCreation;
     if (legacy.defaultDirectMode !== undefined && p.defaultGitIsolation === undefined) {
       p.defaultGitIsolation = legacy.defaultDirectMode ? 'direct' : undefined;
       delete (legacy as unknown as Record<string, unknown>).defaultDirectMode;
@@ -527,7 +683,72 @@ export async function loadState(): Promise<void> {
     }
   }
 
+  // Apply the global gate before authority registration or terminal restoration.
+  // A failure must abort startup so autosave cannot replace the unrestored session.
+  try {
+    await delegationRequest({
+      action: 'orchestrationSetting',
+      enabled: raw.mcpOrchestrationEnabled !== false,
+    });
+  } catch (error) {
+    showNotification(`Could not restore MCP settings. Restart the app to retry: ${String(error)}`, {
+      durationMs: NOTIFICATION_ERROR_MS,
+    });
+    throw error;
+  }
+
+  // Restore acknowledged authority before store insertion can mount and spawn terminals.
+  for (const project of projects) {
+    await delegationRequest({
+      action: 'projectPolicy',
+      policy: {
+        projectId: project.id,
+        allowPeerAccess: project.allowPeerAccess === true,
+      },
+    }).catch((error: unknown) => console.warn('Could not restore project permissions:', error));
+  }
+  const detachedRestores: string[] = [];
+  for (const task of Object.values(raw.tasks)) {
+    const legacy = task as PersistedTask & { directMode?: boolean };
+    task.gitIsolation = legacy.gitIsolation ?? (legacy.directMode ? 'direct' : 'worktree');
+    if (!task.coordinatedBy || raw.tasks[task.coordinatedBy]) continue;
+    detachedRestores.push(task.name);
+    task.coordinatedBy = undefined;
+    task.controlledBy = undefined;
+    task.mcpConfigPath = undefined;
+    task.integrationPolicy = undefined;
+    task.delegationPaused = true;
+  }
+  const authorityErrors = new Map<string, string>();
+  const authorityTasks = Object.values(raw.tasks).sort(
+    (a, b) => Number(!!a.coordinatedBy) - Number(!!b.coordinatedBy),
+  );
+  for (const task of authorityTasks) {
+    const project = projects.find((p) => p.id === task.projectId);
+    if (!project || project.kind === 'document') continue;
+    const agent = task.agentDefs?.[0] ?? task.agentDef ?? undefined;
+    try {
+      await delegationRequest({
+        action: 'register',
+        task: taskAuthorityInput(
+          task,
+          project,
+          agent,
+          agent &&
+            raw.agentEnvFiles &&
+            typeof raw.agentEnvFiles === 'object' &&
+            typeof (raw.agentEnvFiles as Record<string, unknown>)[agent.id] === 'string'
+            ? (raw.agentEnvFiles as Record<string, string>)[agent.id]
+            : undefined,
+        ),
+      });
+    } catch (error) {
+      authorityErrors.set(task.id, String(error));
+    }
+  }
+
   const restoredRunningAgentIds: string[] = [];
+  const unreadableMindMaps: string[] = [];
   const usedRestoredAgentIds = new Set<string>();
   const today = getLocalDateKey();
 
@@ -596,7 +817,7 @@ export async function loadState(): Promise<void> {
       s.inactiveColumnOpacity =
         typeof rawOpacity === 'number' &&
         Number.isFinite(rawOpacity) &&
-        rawOpacity >= 0.3 &&
+        rawOpacity >= 0.1 &&
         rawOpacity <= 1.0
           ? Math.round(rawOpacity * 100) / 100
           : 0.6;
@@ -629,7 +850,16 @@ export async function loadState(): Promise<void> {
         savedMode === 'light' || savedMode === 'dark' || savedMode === 'system'
           ? savedMode
           : 'dark';
-      s.darkThemePreset = isLookPreset(raw.darkThemePreset) ? raw.darkThemePreset : 'islands-dark';
+      // Older saves omitted the Islands Dark slot. Preserve that preference;
+      // new saves write the slot explicitly so future defaults can change safely.
+      s.darkThemePreset = isLookPreset(raw.darkThemePreset)
+        ? raw.darkThemePreset
+        : raw.darkThemePreset === undefined && savedMode
+          ? 'islands-dark'
+          : defaultPresetForTone('dark');
+      // Saves before Obsidian Light omitted the slot when it held the old
+      // Islands Light default, so a missing slot keeps Islands Light. Only
+      // fresh installs (no saved state) start on defaultPresetForTone('light').
       s.lightThemePreset = isLookPreset(raw.lightThemePreset)
         ? raw.lightThemePreset
         : 'islands-light';
@@ -654,7 +884,7 @@ export async function loadState(): Promise<void> {
         }
       }
 
-      s.coordinatorModeEnabled = raw.coordinatorModeEnabled === true;
+      s.mcpOrchestrationEnabled = raw.mcpOrchestrationEnabled !== false;
       s.documentWorkspacesEnabled = raw.documentWorkspacesEnabled === true;
       s.documentFullWidth = raw.documentFullWidth === true;
 
@@ -669,8 +899,10 @@ export async function loadState(): Promise<void> {
           : 'defaultStepsEnabled' in (raw as object)
             ? false
             : raw.showSteps === true;
+      s.preferUiMode = raw.preferUiMode === true;
       s.defaultSkipPermissions = raw.defaultSkipPermissions === true;
       s.defaultPropagateSkipPermissions = raw.defaultPropagateSkipPermissions === true;
+      s.canvasOwnershipBadges = raw.canvasOwnershipBadges !== false;
 
       s.autoStartRemoteAccess = raw.autoStartRemoteAccess === true;
 
@@ -680,7 +912,14 @@ export async function loadState(): Promise<void> {
           ? rawDockerImage.trim()
           : 'parallel-code-agent:latest';
 
-      s.askCodeProvider = raw.askCodeProvider === 'minimax' ? 'minimax' : 'claude';
+      const provider: AskCodeProvider =
+        raw.askCodeProvider === 'minimax' || raw.askCodeProvider === 'codex'
+          ? raw.askCodeProvider
+          : 'claude';
+      s.askCodeProvider = provider;
+      s.askCodeModel = isAskCodeModel(provider, raw.askCodeModel)
+        ? raw.askCodeModel
+        : defaultAskCodeModel(provider);
 
       // Restore custom agents
       if (Array.isArray(raw.customAgents)) {
@@ -742,12 +981,25 @@ export async function loadState(): Promise<void> {
             ? (projects.find((project) => project.id === pt.projectId)?.path ?? pt.worktreePath)
             : pt.worktreePath,
           agentIds,
+          agentSessionIds: restoredAgentSessionIds(pt, agentIds),
           selectedAgentId: validAgentId(pt.selectedAgentId, agentIds) ?? agentIds[0],
           aiTerminalLayout: pt.aiTerminalLayout === 'tabs' ? 'tabs' : undefined,
+          mainAgentView: pt.mainAgentView === 'chat' ? 'chat' : undefined,
+          codexChatThreadId:
+            typeof pt.codexChatThreadId === 'string' ? pt.codexChatThreadId : undefined,
+          codexChatHandoff: restoredCodexHandoff(pt.codexChatHandoff),
+          chatPermissionMode: isChatPermissionMode(pt.chatPermissionMode)
+            ? pt.chatPermissionMode
+            : undefined,
+          chatSessions: restoreChatSessions(pt.chatSessions),
+          claudeChatSessionId:
+            typeof pt.claudeChatSessionId === 'string' ? pt.claudeChatSessionId : undefined,
           shellAgentIds,
           notes: pt.notes,
           promptDraft: typeof pt.promptDraft === 'string' ? pt.promptDraft : undefined,
+          browserUrl: typeof pt.browserUrl === 'string' ? pt.browserUrl : undefined,
           lastPrompt: pt.lastPrompt,
+          promptHistory: restoredPromptHistory(pt.promptHistory),
           promptedAgentIds: restoredPromptedAgentIds(pt, agentIds),
           initialPrompt: typeof pt.initialPrompt === 'string' ? pt.initialPrompt : undefined,
           gitIsolation: legacy.gitIsolation ?? (legacy.directMode ? 'direct' : 'worktree'),
@@ -763,15 +1015,30 @@ export async function loadState(): Promise<void> {
           dockerImage: typeof pt.dockerImage === 'string' ? pt.dockerImage : undefined,
           githubUrl: pt.githubUrl,
           prUrl: pt.prUrl,
+          superProductivity: restoreSuperProductivityLink(pt.superProductivity),
           savedInitialPrompt: pt.savedInitialPrompt,
           savedSelectedAgentIndex: validAgentIndex(pt.savedSelectedAgentIndex),
           savedPromptedAgentIndexes: validPromptedAgentIndexes(pt.savedPromptedAgentIndexes),
           planFileName: pt.planFileName,
           ...restoredCanvas(pt),
+          ...restoreTaskMindMap(pt, unreadableMindMaps),
+          reasoningProfile: normalizeReasoningProfile(pt.reasoningProfile),
+          canvasTaskLinks: restoreCanvasTaskLinks(pt.canvasTaskLinks),
+          reasoningWorkspaces: restoreReasoningWorkspaces(pt.reasoningWorkspaces),
           stepsEnabled: pt.stepsEnabled,
           branchAdoptedFrom: validBranch(pt.branchAdoptedFrom, pt.branchName),
           branchOfferDismissed: validBranch(pt.branchOfferDismissed),
+          delegationParent: pt.delegationParent === true,
+          delegationPaused: pt.delegationPaused === true,
+          integrationPolicy:
+            pt.integrationPolicy === 'review'
+              ? 'review'
+              : pt.integrationPolicy === 'automatic'
+                ? 'automatic'
+                : undefined,
           coordinatorMode: pt.coordinatorMode,
+          autoMergeChildren: pt.autoMergeChildren,
+          autoSendChildUpdates: pt.autoSendChildUpdates,
           propagateSkipPermissions: pt.propagateSkipPermissions,
           maxConcurrentTasks: restoredMaxConcurrentTasks(pt.maxConcurrentTasks),
           coordinatedBy: pt.coordinatedBy,
@@ -783,6 +1050,11 @@ export async function loadState(): Promise<void> {
             pt.coordinatorMode || pt.coordinatedBy ? ('pending' as const) : undefined,
           mcpConfigPath: pt.mcpConfigPath,
           autoDiscoveredMcpConfig: pt.autoDiscoveredMcpConfig,
+          completion: parseCompletionRecord(pt.completion),
+          reviewRevision:
+            Number.isSafeInteger(pt.reviewRevision) && (pt.reviewRevision ?? -1) >= 0
+              ? pt.reviewRevision
+              : undefined,
           signalDoneReceived: pt.signalDoneReceived,
           signalDoneAt: pt.signalDoneAt,
           signalDoneConsumed: pt.signalDoneConsumed,
@@ -855,10 +1127,22 @@ export async function loadState(): Promise<void> {
           agentIds: [],
           selectedAgentId: undefined,
           aiTerminalLayout: pt.aiTerminalLayout === 'tabs' ? 'tabs' : undefined,
+          mainAgentView: pt.mainAgentView === 'chat' ? 'chat' : undefined,
+          codexChatThreadId:
+            typeof pt.codexChatThreadId === 'string' ? pt.codexChatThreadId : undefined,
+          codexChatHandoff: restoredCodexHandoff(pt.codexChatHandoff),
+          chatPermissionMode: isChatPermissionMode(pt.chatPermissionMode)
+            ? pt.chatPermissionMode
+            : undefined,
+          chatSessions: restoreChatSessions(pt.chatSessions),
+          claudeChatSessionId:
+            typeof pt.claudeChatSessionId === 'string' ? pt.claudeChatSessionId : undefined,
           shellAgentIds: [],
           notes: pt.notes,
           promptDraft: typeof pt.promptDraft === 'string' ? pt.promptDraft : undefined,
+          browserUrl: typeof pt.browserUrl === 'string' ? pt.browserUrl : undefined,
           lastPrompt: pt.lastPrompt,
+          promptHistory: restoredPromptHistory(pt.promptHistory),
           promptedAgentIds: restoredPromptedAgentIds(pt, []),
           initialPrompt: typeof pt.initialPrompt === 'string' ? pt.initialPrompt : undefined,
           gitIsolation:
@@ -875,18 +1159,39 @@ export async function loadState(): Promise<void> {
           dockerImage: typeof pt.dockerImage === 'string' ? pt.dockerImage : undefined,
           githubUrl: pt.githubUrl,
           prUrl: pt.prUrl,
+          superProductivity: restoreSuperProductivityLink(pt.superProductivity),
           savedInitialPrompt: pt.savedInitialPrompt,
           savedSelectedAgentIndex: validAgentIndex(pt.savedSelectedAgentIndex),
           savedPromptedAgentIndexes: validPromptedAgentIndexes(pt.savedPromptedAgentIndexes),
           planFileName: pt.planFileName,
           ...restoredCanvas(pt),
+          ...restoreTaskMindMap(pt, unreadableMindMaps),
+          reasoningProfile: normalizeReasoningProfile(pt.reasoningProfile),
+          canvasTaskLinks: restoreCanvasTaskLinks(pt.canvasTaskLinks),
+          reasoningWorkspaces: restoreReasoningWorkspaces(pt.reasoningWorkspaces),
           stepsEnabled: pt.stepsEnabled,
           branchAdoptedFrom: validBranch(pt.branchAdoptedFrom, pt.branchName),
           branchOfferDismissed: validBranch(pt.branchOfferDismissed),
           collapsed: true,
+          savedAgentSessionIds: Array.isArray(pt.savedAgentSessionIds)
+            ? agentDefs.map((_, index) => {
+                const id = pt.savedAgentSessionIds?.[index];
+                return isSessionId(id) ? id : null;
+              })
+            : undefined,
           savedAgentDef: agentDefs[0],
           savedAgentDefs: agentDefs.length > 0 ? agentDefs : undefined,
+          delegationParent: pt.delegationParent === true,
+          delegationPaused: pt.delegationPaused === true,
+          integrationPolicy:
+            pt.integrationPolicy === 'review'
+              ? 'review'
+              : pt.integrationPolicy === 'automatic'
+                ? 'automatic'
+                : undefined,
           coordinatorMode: pt.coordinatorMode,
+          autoMergeChildren: pt.autoMergeChildren,
+          autoSendChildUpdates: pt.autoSendChildUpdates,
           propagateSkipPermissions: pt.propagateSkipPermissions,
           maxConcurrentTasks: restoredMaxConcurrentTasks(pt.maxConcurrentTasks),
           coordinatedBy: pt.coordinatedBy,
@@ -896,6 +1201,11 @@ export async function loadState(): Promise<void> {
             pt.coordinatorMode || pt.coordinatedBy ? ('pending' as const) : undefined,
           mcpConfigPath: pt.mcpConfigPath,
           autoDiscoveredMcpConfig: pt.autoDiscoveredMcpConfig,
+          completion: parseCompletionRecord(pt.completion),
+          reviewRevision:
+            Number.isSafeInteger(pt.reviewRevision) && (pt.reviewRevision ?? -1) >= 0
+              ? pt.reviewRevision
+              : undefined,
           signalDoneReceived: pt.signalDoneReceived,
           signalDoneAt: pt.signalDoneAt,
           signalDoneConsumed: pt.signalDoneConsumed,
@@ -936,6 +1246,16 @@ export async function loadState(): Promise<void> {
     }),
   );
 
+  if (detachedRestores.length > 0) {
+    showNotification(
+      `Restored ${detachedRestores.join(', ')} as independent tasks because their parent is missing. Work is preserved; child launches are paused.`,
+    );
+  }
+  for (const [taskId, error] of authorityErrors) {
+    if (store.tasks[taskId])
+      showNotification(`Delegation unavailable for ${store.tasks[taskId].name}: ${error}`);
+  }
+
   // Restored agents are considered running; reflect that immediately in task status dots.
   for (const agentId of restoredRunningAgentIds) {
     markAgentSpawned(agentId);
@@ -965,17 +1285,18 @@ export async function loadState(): Promise<void> {
     if (migrations.length > 0) await Promise.allSettled(migrations);
   }
 
-  // Notify backend to initialize coordinator module if the feature was enabled.
-  if (store.coordinatorModeEnabled) {
-    invoke(IPC.SetCoordinatorModeEnabled, { enabled: true }).catch((e) =>
-      console.warn('Failed to notify backend of coordinator mode:', e),
-    );
-  }
-
   // Auto-start the remote (Connect Phone) server so a phone can connect without
   // opening the modal first. Best-effort — a failure (e.g. coordinator active)
   // must not block app startup.
   if (store.autoStartRemoteAccess) {
     startRemoteAccess().catch((e) => console.warn('Failed to auto-start remote access:', e));
   }
+  if (unreadableMindMaps.length) {
+    logWarn('persistence', 'Kept unreadable mind maps aside', { tasks: unreadableMindMaps });
+    showNotification(
+      `The saved mind map of ${unreadableMindMaps.join(', ')} could not be read; it is kept on disk but cannot be shown.`,
+      { durationMs: NOTIFICATION_ERROR_MS },
+    );
+  }
+  stateLoaded = true;
 }

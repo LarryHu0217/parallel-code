@@ -1,5 +1,12 @@
+import { batch } from 'solid-js';
+import { documentAgentTaskId } from '../documents/task-id';
 import { store, setStore } from './core';
-import { getTaskFocusedPanel, setTaskFocusedPanel } from './focused-panel';
+import {
+  getTaskFocusedPanel,
+  scheduleTaskFocus,
+  setTaskFocusedPanel,
+  triggerFocus,
+} from './focused-panel';
 import { showNotification } from './notification';
 import { pickAndAddProject } from './projects';
 import { reorderTask } from './tasks';
@@ -22,10 +29,21 @@ function selectedAgentIdForTask(task: {
     : null;
 }
 
+/** Visible tile order; the single document workspace follows coding tasks. */
+export function openPanelOrder(): string[] {
+  return store.activeDocumentProjectId
+    ? [...store.taskOrder, documentAgentTaskId(store.activeDocumentProjectId)]
+    : store.taskOrder;
+}
+
 export function setActiveTask(id: string): void {
   const task = store.tasks[id];
   const terminal = store.terminals[id];
-  if (!task && !terminal) return;
+  const isDocument =
+    store.activeDocumentProjectId && id === documentAgentTaskId(store.activeDocumentProjectId);
+  if (!task && !terminal && !isDocument) return;
+  setStore('newTaskPanelFocused', false);
+  setStore('placeholderFocused', false);
   let activeAgentId: string | null = null;
   if (task) {
     activeAgentId =
@@ -40,6 +58,23 @@ export function setActiveTask(id: string): void {
   setStore('activeAgentId', activeAgentId);
 }
 
+/** Activate a task from a click or tap into its column. Unlike `setActiveTask`,
+ *  which keyboard jumps share, this also takes focus away from the sidebar. */
+export function activateTaskFromPointer(id: string): void {
+  const leavingSidebar = store.sidebarFocused;
+  const wasActive = store.activeTaskId === id;
+  batch(() => {
+    setActiveTask(id);
+    // Only when the id was one setActiveTask accepted.
+    if (store.activeTaskId === id) setStore('sidebarFocused', false);
+  });
+  // A column that was already active re-runs none of its focus effects, so
+  // nothing else would move DOM focus back into it.
+  if (leavingSidebar && wasActive && store.activeTaskId === id) {
+    scheduleTaskFocus(id, getTaskFocusedPanel(id));
+  }
+}
+
 export function setActiveAgent(agentId: string): void {
   setStore('activeAgentId', agentId);
   const taskId = store.activeTaskId;
@@ -50,6 +85,7 @@ export function setActiveAgent(agentId: string): void {
 }
 
 export function moveActiveTask(direction: 'left' | 'right'): void {
+  if (store.newTaskPanelFocused) return;
   const { taskOrder, activeTaskId } = store;
   if (!activeTaskId || taskOrder.length < 2) return;
   const idx = taskOrder.indexOf(activeTaskId);
@@ -62,9 +98,9 @@ export function moveActiveTask(direction: 'left' | 'right'): void {
 }
 
 export function jumpToTask(index: number): void {
-  // Index against taskOrder so Cmd+N matches the left-to-right tile order
+  // Index against visible panels so Cmd+N matches the left-to-right tile order
   // shown in the main area (and the order Cmd+Left/Right cycles through).
-  const id = store.taskOrder[index];
+  const id = openPanelOrder()[index];
   if (!id) return;
   setActiveTask(id);
   if (store.sidebarFocused) {
@@ -73,16 +109,21 @@ export function jumpToTask(index: number): void {
   }
 }
 
-export function toggleNewTaskDialog(show?: boolean): void {
-  const shouldShow = show ?? !store.showNewTaskDialog;
+export function toggleNewTaskPanel(show?: boolean): void {
+  const shouldShow = show ?? !store.showNewTaskPanel;
   if (shouldShow && store.projects.length === 0) {
     showNotification('Add a project first');
     pickAndAddProject();
     return;
   }
-  if (!shouldShow) {
+  if (shouldShow) {
+    setStore('sidebarFocused', false);
+    setStore('placeholderFocused', false);
+  } else {
+    setStore('newTaskPanelFocused', false);
     setStore('newTaskDropUrl', null);
     setStore('newTaskPrefillPrompt', null);
   }
-  setStore('showNewTaskDialog', shouldShow);
+  setStore('showNewTaskPanel', shouldShow);
+  if (shouldShow) triggerFocus('new-task');
 }

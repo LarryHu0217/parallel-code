@@ -2,6 +2,7 @@ import DOMPurify from 'dompurify';
 import { Marked, type Token, type Tokens } from 'marked';
 import { highlightLines } from '../lib/shiki-highlighter';
 import { SANITIZE_UNTRUSTED } from '../lib/sanitize';
+import { tableScrollRenderer } from '../lib/marked-table';
 
 /**
  * A top-level markdown block with its source line range. Blocks are the unit
@@ -24,6 +25,11 @@ export interface DocumentBlock {
 }
 
 export type BlockChange = 'same' | 'added' | 'changed' | 'removed';
+
+export interface BlockRange {
+  start: number;
+  end: number;
+}
 
 interface TokenLike {
   type: string;
@@ -91,6 +97,7 @@ export async function renderDocumentBlocks(rawSource: string): Promise<DocumentB
   let codeIndex = 0;
   marked.use({
     renderer: {
+      ...tableScrollRenderer,
       code(token: Tokens.Code): string {
         if (token.lang === 'mermaid') {
           return `<div class="mermaid-block" data-mermaid="${escapeAttr(token.text ?? '')}">${escapeHtml(token.text ?? '')}</div>`;

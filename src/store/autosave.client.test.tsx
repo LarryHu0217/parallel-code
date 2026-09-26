@@ -6,7 +6,11 @@ import { createRoot } from 'solid-js';
 import { produce } from 'solid-js/store';
 import { store, setStore } from './core';
 import { setupAutosave, AUTOSAVE_DEBOUNCE_MS, AUTOSAVE_MAX_WAIT_MS } from './autosave';
-import { setTaskPromptDraft } from './tasks';
+import { createAgentRecord, setTaskPromptDraft } from './tasks';
+import { restartAgent } from './agents';
+import { clearAgentActivity } from './taskStatus';
+import { setTaskReasoningWorkspace } from './canvas';
+import { emptyWorkspace, updateDraft } from '../investigation/editing';
 
 const { mockSaveState } = vi.hoisted(() => ({ mockSaveState: vi.fn(async () => {}) }));
 vi.mock('./persistence', async (importOriginal) => ({
@@ -83,6 +87,106 @@ describe('setupAutosave scheduling', () => {
     });
   });
 
+  it('autosaves a fresh session after restarting an exited pane', () => {
+    const id = 'session-autosave';
+    const previousOrder = [...store.taskOrder];
+    const previousSession = 'fb4f2bc6-62d9-4b29-a795-240caf2fc459';
+    setStore('tasks', id, {
+      id,
+      name: 'Session',
+      projectId: 'p1',
+      worktreePath: '/session',
+      branchName: '',
+      agentIds: [id],
+      shellAgentIds: [],
+      notes: '',
+      lastPrompt: '',
+      gitIsolation: 'worktree',
+      agentSessionIds: { [id]: previousSession },
+    });
+    setStore('agents', id, {
+      ...createAgentRecord({
+        id,
+        taskId: id,
+        def: {
+          id: 'claude',
+          name: 'Claude',
+          command: 'claude',
+          args: [],
+          resume_args: ['--continue'],
+          skip_permissions_args: [],
+          description: '',
+        },
+      }),
+      status: 'exited',
+    });
+    setStore('taskOrder', [...previousOrder, id]);
+    try {
+      withAutosave(() => {
+        restartAgent(id, false);
+        expect(store.tasks[id].agentSessionIds?.[id]).not.toBe(previousSession);
+        vi.advanceTimersByTime(AUTOSAVE_DEBOUNCE_MS);
+        expect(mockSaveState).toHaveBeenCalledTimes(1);
+      });
+    } finally {
+      clearAgentActivity(id);
+      setStore('taskOrder', previousOrder);
+      setStore(
+        produce((state) => {
+          delete state.tasks['session-autosave'];
+          delete state.agents['session-autosave'];
+        }),
+      );
+    }
+  });
+
+  it('autosaves reasoning drafts and retains their deletion for active and collapsed tasks', () => {
+    const id = 'reasoning-autosave';
+    const previousOrder = [...store.taskOrder];
+    const previousCollapsed = [...store.collapsedTaskOrder];
+    setStore('tasks', id, {
+      id,
+      name: 'Graph',
+      projectId: 'p1',
+      worktreePath: '/graph',
+      branchName: '',
+      agentIds: [],
+      shellAgentIds: [],
+      notes: '',
+      lastPrompt: '',
+    });
+    setStore('taskOrder', [...previousOrder, id]);
+    const workspace = updateDraft(emptyWorkspace(), 'goal', {
+      title: 'Draft',
+      detail: '',
+      base: { title: 'Goal', detail: '' },
+      question: '',
+    });
+    try {
+      withAutosave(() => {
+        setTaskReasoningWorkspace(id, 'run', workspace);
+        vi.advanceTimersByTime(AUTOSAVE_DEBOUNCE_MS);
+        expect(mockSaveState).toHaveBeenCalledTimes(1);
+        setStore('taskOrder', previousOrder);
+        setStore('collapsedTaskOrder', [...previousCollapsed, id]);
+        vi.advanceTimersByTime(AUTOSAVE_DEBOUNCE_MS);
+        mockSaveState.mockClear();
+        setTaskReasoningWorkspace(id, 'run', updateDraft(workspace, 'goal', undefined));
+        expect(store.tasks[id].reasoningWorkspaces?.run.drafts).toEqual({});
+        vi.advanceTimersByTime(AUTOSAVE_DEBOUNCE_MS);
+        expect(mockSaveState).toHaveBeenCalledTimes(1);
+      });
+    } finally {
+      setStore('taskOrder', previousOrder);
+      setStore('collapsedTaskOrder', previousCollapsed);
+      setStore(
+        produce((state) => {
+          delete state.tasks['reasoning-autosave'];
+        }),
+      );
+    }
+  });
+
   it('autosaves drafts of hidden document tasks after typing settles', () => {
     const id = 'doc-agent-autosave-docs';
     const previousProjects = [...store.projects];
@@ -120,6 +224,45 @@ describe('setupAutosave scheduling', () => {
       setStore(
         produce((s) => {
           delete s.tasks['doc-agent-autosave-docs'];
+        }),
+      );
+    }
+  });
+
+  it('does not re-serialize large task data on each keystroke, but still saves the text', () => {
+    const id = 'typing-autosave';
+    const previousOrder = [...store.taskOrder];
+    const bigText = 'x'.repeat(100_000);
+    setStore('tasks', id, {
+      id,
+      name: 'Typing',
+      projectId: 'p1',
+      worktreePath: '/typing',
+      branchName: '',
+      agentIds: [],
+      shellAgentIds: [],
+      notes: '',
+      lastPrompt: '',
+      promptHistory: [{ text: bigText, sentAt: 1 }],
+    });
+    setStore('taskOrder', [...previousOrder, id]);
+    const stringify = vi.spyOn(JSON, 'stringify');
+    try {
+      withAutosave(() => {
+        stringify.mockClear();
+        for (const text of ['h', 'he', 'hel']) setTaskPromptDraft(id, text);
+        for (const text of ['n', 'no']) setStore('tasks', id, 'notes', text);
+        const serialized = stringify.mock.results.map((r) => String(r.value));
+        expect(serialized.every((s) => s.length < bigText.length)).toBe(true);
+        vi.advanceTimersByTime(AUTOSAVE_DEBOUNCE_MS);
+        expect(mockSaveState).toHaveBeenCalledTimes(1);
+      });
+    } finally {
+      stringify.mockRestore();
+      setStore('taskOrder', previousOrder);
+      setStore(
+        produce((state) => {
+          delete state.tasks['typing-autosave'];
         }),
       );
     }

@@ -15,16 +15,23 @@
 
 export const HOOK_ENV_ENDPOINT = 'PARALLEL_CODE_HOOK_ENDPOINT';
 export const HOOK_ENV_AGENT_ID = 'PARALLEL_CODE_AGENT_ID';
+export const HOOK_ENV_LAUNCH_ID = 'PARALLEL_CODE_LAUNCH_ID';
 export const HOOK_ENV_TASK_ID = 'PARALLEL_CODE_TASK_ID';
 export const HOOK_ENV_PORT = 'PARALLEL_CODE_HOOK_PORT';
 export const HOOK_ENV_TOKEN = 'PARALLEL_CODE_HOOK_TOKEN';
 
 export const HOOK_TOKEN_HEADER = 'x-parallel-code-hook-token';
 export const HOOK_AGENT_ID_HEADER = 'x-parallel-code-agent-id';
+export const HOOK_LAUNCH_ID_HEADER = 'x-parallel-code-launch-id';
 export const HOOK_TASK_ID_HEADER = 'x-parallel-code-task-id';
 
 /** Env vars the PTY layer injects; env files must never be allowed to set them. */
-export const HOOK_PTY_ENV_KEYS = [HOOK_ENV_ENDPOINT, HOOK_ENV_AGENT_ID, HOOK_ENV_TASK_ID] as const;
+export const HOOK_PTY_ENV_KEYS = [
+  HOOK_ENV_ENDPOINT,
+  HOOK_ENV_AGENT_ID,
+  HOOK_ENV_TASK_ID,
+  HOOK_ENV_LAUNCH_ID,
+] as const;
 
 export function buildHookScript(): string {
   return `#!/bin/sh
@@ -38,6 +45,7 @@ payload=$({ command -p cat 2>/dev/null || cat; })
 [ -z "\${CLAUDE_JOB_DIR-}" ] || exit 0
 [ -n "\${${HOOK_ENV_ENDPOINT}-}" ] || exit 0
 [ -n "\${${HOOK_ENV_AGENT_ID}-}" ] || exit 0
+[ -n "\${${HOOK_ENV_LAUNCH_ID}-}" ] || exit 0
 [ -r "$${HOOK_ENV_ENDPOINT}" ] || exit 0
 . "$${HOOK_ENV_ENDPOINT}" 2>/dev/null || exit 0
 [ -n "\${${HOOK_ENV_PORT}-}" ] || exit 0
@@ -47,6 +55,7 @@ printf '%s' "$payload" | curl -sS -X POST "http://127.0.0.1:$${HOOK_ENV_PORT}/ho
   -H "Content-Type: application/json" \\
   -H "${HOOK_TOKEN_HEADER}: $${HOOK_ENV_TOKEN}" \\
   -H "${HOOK_AGENT_ID_HEADER}: $${HOOK_ENV_AGENT_ID}" \\
+  -H "${HOOK_LAUNCH_ID_HEADER}: $${HOOK_ENV_LAUNCH_ID}" \\
   -H "${HOOK_TASK_ID_HEADER}: \${${HOOK_ENV_TASK_ID}-}" \\
   --data-binary @- >/dev/null 2>&1 || :
 exit 0

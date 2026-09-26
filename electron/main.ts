@@ -1,90 +1,37 @@
+import { registerBrowserHandlers } from './ipc/browser.js';
 import { app, autoUpdater, BrowserWindow, Menu, ipcMain, session, shell } from 'electron';
 import { buildMenuTemplate } from './menu-template.js';
 import { restoreWindow } from './window-restore.js';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath, pathToFileURL } from 'url';
-import { execFileSync } from 'child_process';
 import { registerAllHandlers } from './ipc/register.js';
-import { registerLogHandler } from './log.js';
+import { registerLogHandler, warn as logWarn } from './log.js';
+import { loadAppState } from './ipc/persistence.js';
+import { reconcileWorktreeIntents } from './ipc/worktree-intents.js';
+import { getUserDataDir } from './user-data-dir.js';
 import { installIpcTracing } from './ipc/trace.js';
 import { startAgentHookRuntime, stopAgentHookRuntime } from './agent-hooks/runtime.js';
 import { killAllAgents } from './ipc/pty.js';
+import { removeAllCanvasConfigs } from './mcp/canvas-config.js';
 import { stopAllPlanWatchers } from './ipc/plans.js';
 import { stopAllDocumentWork } from './documents/register.js';
 import { stopAllStepsWatchers } from './ipc/steps.js';
 import { verificationRunner } from './ipc/verify.js';
 import { IPC } from './ipc/channels.js';
-import { resolveUserShell } from './user-shell.js';
+import { gateIpcHandlersOn, resolveLoginShellEnv } from './login-env.js';
+import {
+  findProtocolUrl,
+  handleProtocolUrl,
+  registerParallelCodeProtocol,
+} from './super-productivity/protocol.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// When launched from a .desktop file (e.g. AppImage), the environment is
-// minimal — often just PATH=/usr/bin:/bin. Resolve the user's full
-// login-interactive shell environment and merge it into process.env so
-// spawned PTYs can find CLI tools (claude, codex, gemini, etc.) and
-// inherit other expected variables (SSH_AGENT_LAUNCHER, KUBECONFIG, etc.).
-//
-// Uses -ilc (interactive + login) to source both .zprofile/.profile AND
-// .zshrc/.bashrc, where version managers (nvm, volta, fnm) add to PATH.
-// A perl one-liner dumps every env var as null-delimited key=value pairs,
-// bounded by sentinel markers to isolate the data from noisy shell init.
-//
-// Trade-off: -i (interactive) triggers .zshrc side effects (compinit, conda,
-// welcome messages). Login-only (-lc) would be quieter but would miss tools
-// that are only added to PATH in .bashrc/.zshrc (e.g. nvm). We accept the
-// side effects since the sentinel-based parsing discards all other output.
-// Another trade-off: inheriting the *full* environment (rather than just PATH)
-// can pull in large variables (certificates, tokens, kubeconfig). We set a
-// generous maxBuffer and fall back to the original environment on failure.
-//
-// Skip vars that would alter Electron/Node runtime behavior if a user's shell
-// rc sets them — those belong to our process, not the login shell.
-const PROTECTED_ENV_KEYS = new Set([
-  'ELECTRON_RUN_AS_NODE',
-  'NODE_OPTIONS',
-  'NODE_EXTRA_CA_CERTS',
-  'LD_PRELOAD',
-  'LD_LIBRARY_PATH',
-  'DYLD_INSERT_LIBRARIES',
-  'DYLD_LIBRARY_PATH',
-]);
-
-function fixEnv(): void {
-  if (process.platform === 'win32') return;
-  try {
-    const loginShell = resolveUserShell();
-    const sentinel = '__PCODE_ENV__';
-    const result = execFileSync(
-      loginShell,
-      [
-        '-ilc',
-        `printf '${sentinel}' && perl -e 'print "$_=$ENV{$_}\\0" for keys %ENV' && printf '${sentinel}'`,
-      ],
-      { encoding: 'utf8', timeout: 5000, maxBuffer: 10 * 1024 * 1024 },
-    );
-    const startIdx = result.indexOf(sentinel);
-    const endIdx = result.lastIndexOf(sentinel);
-    if (startIdx === -1 || endIdx === -1 || startIdx === endIdx) return;
-
-    const envBlock = result.slice(startIdx + sentinel.length, endIdx);
-    for (const entry of envBlock.split('\0')) {
-      if (!entry) continue;
-      const eqIdx = entry.indexOf('=');
-      if (eqIdx <= 0) continue;
-      const key = entry.slice(0, eqIdx);
-      if (PROTECTED_ENV_KEYS.has(key)) continue;
-      process.env[key] = entry.slice(eqIdx + 1);
-    }
-  } catch (err) {
-    console.warn('[fixEnv] Failed to resolve login shell environment:', err);
-  }
-}
-
 // One running copy per profile, and the lock is taken here rather than beside the
 // window wiring because Electron's guidance is to take it as early as possible and
-// this file gives that guidance teeth: fixEnv() above spawns an interactive login
+// this file gives that guidance teeth: resolveLoginShellEnv() below spawns an interactive login
 // shell, which on a normal rc file (nvm, conda, compinit) costs on the order of half
 // a second. A second launch is going to quit — spending that first would put the
 // delay squarely on the icon-relaunch path the lock exists to make instant.
@@ -97,13 +44,12 @@ const singleInstanceLockHeld = app.isPackaged && app.requestSingleInstanceLock()
 // which is why one flag covering both would be wrong under either name.
 const shouldStartApp = !app.isPackaged || singleInstanceLockHeld;
 
-if (!shouldStartApp) {
-  app.quit();
-} else {
-  // Only the primary instance ever spawns a PTY, so it is the only one that needs
-  // the resolved login-shell environment.
-  fixEnv();
-}
+// Only the primary instance ever spawns a PTY, so it is the only one that needs
+// the resolved login-shell environment. Resolved in the background so Electron
+// startup, window creation and renderer load overlap the ~1 s shell; IPC
+// handlers wait for it (see gateIpcHandlersOn in createWindow).
+const loginEnvReady: Promise<void> = shouldStartApp ? resolveLoginShellEnv() : Promise.resolve();
+if (!shouldStartApp) app.quit();
 
 // Blink evicts the oldest WebGL context past 16 per renderer process, and every
 // mounted terminal pane holds one — hidden task/tab terminals included. Past 16
@@ -175,6 +121,17 @@ function setupApplicationMenu(): void {
   );
 }
 
+/** Report task worktrees an interrupted creation left behind. Runs before the
+ *  window exists, so no task can be created before the journal is open. */
+function reportOrphanedWorktrees(): void {
+  const journal = path.join(getUserDataDir(), 'worktree-intents.json');
+  for (const orphan of reconcileWorktreeIntents(journal, loadAppState())) {
+    logWarn('worktrees', 'orphaned worktree: task creation was interrupted before save', {
+      ...orphan,
+    });
+  }
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
@@ -183,10 +140,20 @@ function createWindow() {
     frame: process.platform === 'darwin',
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : undefined,
     resizable: true,
+    // Paints until the renderer loads, avoiding a white flash. Matches the
+    // default Obsidian background. shortcut: fixed colour, so light-theme users
+    // see a dark frame first; read the saved preset here if that matters.
+    backgroundColor: '#171717',
     webPreferences: {
       preload: path.join(__dirname, '..', 'electron', 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
+      // Terminal output is parsed on requestAnimationFrame, which a throttled
+      // background window (hidden, minimized or occluded on macOS) stops
+      // running. TUIs that query the terminal then time out waiting for the
+      // reply. Cursor-position queries, which Codex exits over, are answered
+      // in main (ipc/terminal-query-responder.ts); the rest still come from here.
+      backgroundThrottling: false,
     },
   });
 
@@ -195,7 +162,9 @@ function createWindow() {
   // debug traces (which would triple log volume in dev/verbose).
   registerLogHandler(ipcMain);
   installIpcTracing(ipcMain);
+  gateIpcHandlersOn(ipcMain, loginEnvReady);
   registerAllHandlers(mainWindow);
+  registerBrowserHandlers(mainWindow);
 
   // Open links in external browser instead of inside Electron
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -262,8 +231,20 @@ function createWindow() {
 // launch. With the lock, a second launch becomes "show the window".
 if (shouldStartApp) {
   // A second launch (icon, CLI, file manager) reaches the instance that owns
-  // the lock as this event instead of starting a process of its own.
-  app.on('second-instance', () => restoreWindow(mainWindow));
+  // the lock as this event instead of starting a process of its own. On Linux
+  // a `parallelcode://` link arrives the same way, as an argv entry.
+  app.on('second-instance', (_event, argv) => {
+    const url = findProtocolUrl(argv);
+    if (url) handleProtocolUrl(url, mainWindow);
+    else restoreWindow(mainWindow);
+  });
+
+  // macOS delivers links here, possibly before `ready` on a cold start — hence
+  // registered at top level. The link is parked until the renderer asks.
+  app.on('open-url', (event, url) => {
+    event.preventDefault();
+    handleProtocolUrl(url, mainWindow);
+  });
 
   app.whenReady().then(async () => {
     // Grant microphone and clipboard access (deny camera/video)
@@ -298,7 +279,12 @@ if (shouldStartApp) {
     // agent that misses its hooks. Failure falls back to PTY heuristics.
     await startAgentHookRuntime(() => mainWindow);
     setupApplicationMenu();
+    reportOrphanedWorktrees();
     createWindow();
+    registerParallelCodeProtocol();
+    // Linux/Windows cold start: the link is a launch argument.
+    const launchUrl = findProtocolUrl(process.argv);
+    if (launchUrl) handleProtocolUrl(launchUrl, mainWindow);
   });
 }
 
@@ -337,6 +323,8 @@ app.on('will-quit', () => {
   // cancelled quit correctly keeps the lock. A no-op when none is held.
   app.releaseSingleInstanceLock();
   killAllAgents();
+  // Killed agents may not report exit before the process ends; drop their credential files now.
+  removeAllCanvasConfigs();
   // Detached process groups would outlive Electron otherwise.
   verificationRunner.cancelAll();
   stopAgentHookRuntime();

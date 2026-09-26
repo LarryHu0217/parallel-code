@@ -29,8 +29,18 @@ export {
   removeCustomAgent,
   setAgentEnvFile,
 } from './agents';
+export { publishAgentTour } from './agent-tour';
 export {
   openCanvasDocument,
+  openCanvasBrowser,
+  setTaskBrowserUrl,
+  appendBrowserReference,
+  markBrowserFocused,
+  openCanvasReasoning,
+  openCanvasMindMap,
+  setTaskMindMap,
+  setTaskReasoningProfile,
+  setTaskReasoningWorkspace,
   activateCanvasTab,
   closeCanvasTab,
   openTaskCanvas,
@@ -85,10 +95,11 @@ export {
 export { updateTaskBranch, undoBranchAdoption, dismissBranchAdoptionNotice } from './task-branch';
 export {
   setActiveTask,
+  activateTaskFromPointer,
   setActiveAgent,
   moveActiveTask,
   jumpToTask,
-  toggleNewTaskDialog,
+  toggleNewTaskPanel,
 } from './navigation';
 export {
   registerFocusFn,
@@ -102,6 +113,7 @@ export {
   aiTerminalPanelId,
   shellPanelId,
   isPanelFocused,
+  isPanelFocusedOrDefault,
   isPanelFocusedPrefix,
   focusSidebar,
   unfocusSidebar,
@@ -159,11 +171,13 @@ export {
   setDockerAvailable,
   setShareDockerAgentAuth,
   setAskCodeProvider,
+  setAskCodeModel,
   setMinimaxApiKey,
   setWindowState,
-  setCoordinatorModeEnabled,
+  setPreferUiMode,
   setDefaultStepsEnabled,
   setDefaultSkipPermissions,
+  setCanvasOwnershipBadges,
   setDefaultPropagateSkipPermissions,
 } from './ui';
 export {
@@ -240,3 +254,19 @@ export {
   stopMCPStatusPolling,
 } from './mcpStatus';
 export { refreshUsage, startUsagePolling, stopUsagePolling, USAGE_PROVIDERS } from './usage';
+
+export { setMcpOrchestrationEnabled } from './delegation';
+export {
+  spConnection,
+  spBanner,
+  refreshSpConnection,
+  connectSuperProductivity,
+  disconnectSuperProductivity,
+  listSpProjects,
+  setProjectSpMapping,
+  trackTaskInSp,
+  dismissSpBanner,
+  armSpCompletion,
+  startSuperProductivitySync,
+} from './superProductivity';
+export { startSpOpenListener } from './superProductivityOpen';
