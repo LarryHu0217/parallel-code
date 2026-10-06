@@ -1,9 +1,12 @@
 import { expectDefined } from '../store/test-helpers';
-import { Show, createEffect, createSignal, onCleanup, type ComponentProps } from 'solid-js';
+import { For, Show, createEffect, createSignal, onCleanup, type ComponentProps } from 'solid-js';
 import { render } from 'solid-js/web';
 import { createStore } from 'solid-js/store';
 import { afterEach, expect, it, vi } from 'vitest';
 import { TaskPanel } from './TaskPanel';
+import { IPC } from '../../electron/ipc/channels';
+import type { CommitInfo } from '../ipc/types';
+import { invoke } from '../lib/ipc';
 import {
   openCanvasReasoning,
   openCanvasMindMap,
@@ -14,6 +17,8 @@ import {
 } from '../store/store';
 import { GIST_LABEL } from '../lib/understanding-tour';
 import type { Task } from '../store/types';
+import type { FinishDialog } from './FinishDialog';
+import { UNCOMMITTED_SELECTION } from './CommitNavBar';
 import type { DiffViewerDialog } from './DiffViewerDialog';
 import type { TaskNotesBody } from './TaskNotesBody';
 import type { UnderstandingTourDialog } from './UnderstandingTourDialog';
@@ -106,8 +111,27 @@ vi.mock('./PromptInput', () => ({
   PromptInput: () => <textarea class="test-prompt" value="Draft" />,
 }));
 vi.mock('./CloseTaskDialog', () => ({ CloseTaskDialog: () => null }));
-vi.mock('./MergeDialog', () => ({ MergeDialog: () => null }));
-vi.mock('./PushDialog', () => ({ PushDialog: () => null }));
+vi.mock('./FinishDialog', () => ({
+  FinishDialog: (props: ComponentProps<typeof FinishDialog>) => (
+    <Show when={props.open}>
+      <button
+        class="test-evidence-review"
+        onClick={() => {
+          props.onClose();
+          props.onDiffFileClick({
+            path: 'src/earlier.ts',
+            status: 'M',
+            lines_added: 1,
+            lines_removed: 0,
+            committed: true,
+          });
+        }}
+      >
+        Review evidence file
+      </button>
+    </Show>
+  ),
+}));
 vi.mock('./DiffViewerDialog', () => ({
   DiffViewerDialog: (props: ComponentProps<typeof DiffViewerDialog>) => (
     <div
@@ -119,6 +143,12 @@ vi.mock('./DiffViewerDialog', () => ({
       <button class="test-diff-select" onClick={() => props.onCommitNavigate?.('old-commit')}>
         Select commit
       </button>
+      <button
+        class="test-diff-uncommitted"
+        onClick={() => props.onCommitNavigate?.(UNCOMMITTED_SELECTION)}
+      >
+        Select uncommitted changes
+      </button>
       <button class="test-diff-close" onClick={() => props.onClose()}>
         Close
       </button>
@@ -127,7 +157,13 @@ vi.mock('./DiffViewerDialog', () => ({
 }));
 vi.mock('./PlanViewerDialog', () => ({ PlanViewerDialog: () => null }));
 vi.mock('./EditProjectDialog', () => ({ EditProjectDialog: () => null }));
-vi.mock('./TaskTitleBar', () => ({ TaskTitleBar: () => null }));
+vi.mock('./TaskTitleBar', () => ({
+  TaskTitleBar: (props: { onFinish: () => void }) => (
+    <button class="test-finish-open" onClick={() => props.onFinish()}>
+      Finish
+    </button>
+  ),
+}));
 vi.mock('./TaskBranchInfoBar', () => ({ TaskBranchInfoBar: () => null }));
 vi.mock('./TaskBranchAdoptionBanner', () => ({ TaskBranchAdoptionBanner: () => null }));
 vi.mock('./TaskSuperProductivityBanner', () => ({ TaskSuperProductivityBanner: () => null }));
@@ -162,13 +198,22 @@ vi.mock('./UnderstandingTourDialog', () => ({
   ),
 }));
 vi.mock('./TaskChangedFilesSection', () => ({
-  TaskChangedFilesSection: (props: { onFileCountChange?: (count: number) => void }) => {
+  TaskChangedFilesSection: (props: {
+    onFileCountChange?: (count: number) => void;
+    commitList: CommitInfo[];
+  }) => {
     fileInventory.mounts++;
     createEffect(() => {
       fileInventory.report = props.onFileCountChange ?? (() => {});
     });
     onCleanup(() => fileInventory.disposals++);
-    return <div class="test-files" />;
+    return (
+      <div class="test-files">
+        <For each={props.commitList}>
+          {(commit) => <span data-commit-hash={commit.hash}>{commit.message}</span>}
+        </For>
+      </div>
+    );
   },
 }));
 vi.mock('./TaskShellSection', () => ({ TaskShellSection: () => null }));
@@ -193,6 +238,9 @@ afterEach(() => {
   document.body.replaceChildren();
   channels.length = 0;
   vi.mocked(showNotification).mockClear();
+  vi.mocked(invoke).mockReset();
+  vi.mocked(invoke).mockResolvedValue(undefined);
+  vi.useRealTimers();
 });
 
 const tourCard = (title: string, label = 'KEY DECISION') => ({
@@ -511,6 +559,39 @@ function mountEmptyTask() {
   return { container, setTask };
 }
 
+it('preserves commit rows on unchanged polls and updates changed messages, order and length', async () => {
+  vi.useFakeTimers();
+  let commits: CommitInfo[] = [
+    { hash: 'a', message: 'First' },
+    { hash: 'b', message: 'Second' },
+  ];
+  vi.mocked(invoke).mockImplementation(async (cmd) =>
+    cmd === IPC.GetBranchCommits ? commits.map((commit) => ({ ...commit })) : undefined,
+  );
+  const { container } = mountEmptyTask();
+  await flush();
+  const rows = () => [...container.querySelectorAll<HTMLElement>('[data-commit-hash]')];
+  const initial = rows();
+  expect(initial.map((row) => row.textContent)).toEqual(['First', 'Second']);
+
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(rows()[0]).toBe(initial[0]);
+  expect(rows()[1]).toBe(initial[1]);
+
+  commits = [{ hash: 'a', message: 'Reworded' }, commits[1]];
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(rows().map((row) => row.textContent)).toEqual(['Reworded', 'Second']);
+  commits = [commits[1], commits[0]];
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(rows().map((row) => row.dataset.commitHash)).toEqual(['b', 'a']);
+  commits = [commits[0]];
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(rows()).toHaveLength(1);
+  commits = [{ hash: 'c', message: 'New hash' }];
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(rows()[0].dataset.commitHash).toBe('c');
+});
+
 it('collapses empty support panels without disposing file watching or terminal state', () => {
   const mounts = fileInventory.mounts;
   const disposals = fileInventory.disposals;
@@ -588,4 +669,24 @@ it('keeps prompt focus when incoming files reopen the supporting column', async 
   } finally {
     width.mockRestore();
   }
+});
+
+it.each([
+  ['.test-diff-select', 'old-commit'],
+  ['.test-diff-uncommitted', UNCOMMITTED_SELECTION],
+])('opens evidence in the cumulative diff after selecting %s', (selectionButton, selection) => {
+  const { container } = mountEmptyTask();
+  const click = (selector: string) =>
+    expectDefined(container.querySelector<HTMLButtonElement>(selector)).click();
+  const diff = () => expectDefined(container.querySelector<HTMLElement>('.test-diff'));
+  click('.test-chat-review');
+  click(selectionButton);
+  expect(diff().dataset.commit).toBe(selection);
+  click('.test-diff-close');
+  click('.test-finish-open');
+  click('.test-evidence-review');
+  expect(diff().dataset.open).toBe('true');
+  expect(diff().dataset.file).toBe('src/earlier.ts');
+  expect(diff().dataset.commit).toBe('all');
+  expect(container.querySelector('.test-evidence-review')).toBeNull();
 });

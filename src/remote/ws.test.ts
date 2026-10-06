@@ -63,6 +63,29 @@ async function connected() {
 }
 
 describe('phone message delivery', () => {
+  it('reconnects and subscribes for fresh scrollback after the server terminates a slow socket', async () => {
+    const { client, socket } = await connected();
+    const stopOutput = client.onOutput('agent-1', vi.fn());
+    const scrollback = vi.fn();
+    const stopScrollback = client.onScrollback('agent-1', scrollback);
+    socket.disconnect(1006);
+    await vi.advanceTimersByTimeAsync(3000);
+    const replacement = Socket.instances[1];
+    replacement.open();
+    expect(replacement.sent).toContainEqual({ type: 'auth', token: 'control' });
+    expect(replacement.sent).toContainEqual({ type: 'subscribe', agentId: 'agent-1' });
+    replacement.receive({
+      type: 'scrollback',
+      agentId: 'agent-1',
+      data: 'ZnJlc2g=',
+      cols: 80,
+      rows: 24,
+    });
+    expect(scrollback).toHaveBeenCalledWith('ZnJlc2g=', 80, 24);
+    stopOutput();
+    stopScrollback();
+  });
+
   it.each([false, true])('recovers a stalled handshake (socket open: %s)', async (opened) => {
     const client = await import('./ws');
     client.connect();

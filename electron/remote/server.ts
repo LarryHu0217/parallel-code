@@ -2,12 +2,13 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'http';
 import { existsSync, readFile, readFileSync, rmSync, statSync } from 'fs';
-import { join, resolve, relative, extname, isAbsolute } from 'path';
+import { join, resolve, relative, extname, isAbsolute, dirname } from 'path';
 import { WebSocketServer, WebSocket } from 'ws';
 import { randomBytes, randomInt, timingSafeEqual, createHash, createHmac } from 'crypto';
 import { networkInterfaces } from 'os';
 import { atomicWriteFileSync } from '../mcp/atomic.js';
 import { warn } from '../log.js';
+import { createMobilePush, parsePushSubscription } from './push.js';
 import {
   writeToAgent,
   resizeAgent,
@@ -36,6 +37,11 @@ import { parseMindMapUpdate, type MindMapDocument, type MindMapUpdate } from '..
 import { parseReasoningUpdate } from '../shared/reasoning-feed.js';
 import { parseCanvasView, type CanvasView } from '../shared/canvas-view.js';
 import { parseAgentTourPayload, type AgentTourPayload } from '../shared/agent-tour.js';
+import {
+  EVIDENCE_LIMITS,
+  parseEvidenceSubmission,
+  type EvidenceSubmission,
+} from '../shared/evidence.js';
 import type { SessionCaller, SessionCapabilities } from '../shared/delegation-types.js';
 import type { ReasoningDocument } from '../shared/reasoning.js';
 import type { ReasoningUpdate } from '../shared/reasoning-state.js';
@@ -381,8 +387,10 @@ type CanvasOps = Pick<
   | 'updateReasoning'
   | 'openCanvas'
   | 'publishTour'
+  | 'submitEvidence'
+  | 'getEvidence'
 >;
-type CanvasRoute = 'mindmaps' | 'reasoning' | 'canvas' | 'tours';
+type CanvasRoute = 'mindmaps' | 'reasoning' | 'canvas' | 'tours' | 'evidence';
 /** A published tour inlines its own context; the shared parser caps it again. */
 const TOUR_MAX_BODY_BYTES = 256 * 1024;
 const CANVAS_MAX_IN_FLIGHT = 4;
@@ -402,6 +410,20 @@ function canvasErrorStatus(err: unknown): number {
   if (message.includes('Body too large')) return 413;
   if (CANVAS_CONFLICT.test(message)) return 409;
   return CANVAS_UNAVAILABLE.test(message) ? 503 : 400;
+}
+
+async function evidenceRequest(
+  ops: CanvasOps,
+  req: IncomingMessage,
+  taskId: string,
+): Promise<unknown> {
+  if (req.method === 'GET') {
+    if (!ops.getEvidence) throw httpError(503, 'Evidence unavailable');
+    return ops.getEvidence(taskId);
+  }
+  if (!ops.submitEvidence) throw httpError(503, 'Evidence unavailable');
+  const body = await readJsonBody(req, EVIDENCE_LIMITS.submissionBytes * 2);
+  return ops.submitEvidence(taskId, parseEvidenceSubmission(body));
 }
 
 async function canvasRequest(
@@ -424,6 +446,7 @@ async function canvasRequest(
     await ops.publishTour(taskId, payload);
     return { ok: true, subject: payload.subject };
   }
+  if (route === 'evidence') return evidenceRequest(ops, req, taskId);
   const reasoning = route === 'reasoning';
   if (req.method === 'GET') {
     const read = reasoning ? ops.readReasoning : ops.readMindMap;
@@ -930,6 +953,10 @@ export function startRemoteServer(opts: {
   openCanvas?: (taskId: string, view: CanvasView) => Promise<void>;
   /** Show a tour the agent wrote for its own task (renderer-backed). */
   publishTour?: (taskId: string, payload: AgentTourPayload) => Promise<unknown>;
+  /** Record the agent's handoff claim and start building evidence (renderer-backed). */
+  submitEvidence?: (taskId: string, submission: EvidenceSubmission) => Promise<unknown>;
+  /** The app's evidence status for the agent's own task (renderer-backed). */
+  getEvidence?: (taskId: string) => Promise<unknown>;
   /** Read a task's notes (renderer-backed). */
   getTaskNotes?: (taskId: string) => Promise<string>;
   /** Persist a task's notes (renderer-backed). */
@@ -1003,6 +1030,7 @@ export function startRemoteServer(opts: {
   let rememberedHashes: string[] = [];
   let pairedTokenBufs: Buffer[] = [];
   let pairedDevicesPath: string | undefined;
+  const push = createMobilePush((hash) => isPairedToken(Buffer.from(hash, 'hex')));
 
   function enableRememberedDevices(filePath: string): void {
     if (pairedDevicesPath === filePath) return;
@@ -1031,6 +1059,7 @@ export function startRemoteServer(opts: {
     pairedTokenBufs = [...hashes.map((hash) => Buffer.from(hash, 'hex')), ...pairedTokenBufs].slice(
       -MAX_PAIRED_TOKENS,
     );
+    push.enable(join(dirname(filePath), 'phone-push.json'), rememberedHashes);
   }
 
   function saveRememberedDevices(hashes: string[]): void {
@@ -1050,6 +1079,7 @@ export function startRemoteServer(opts: {
     // full disk — must not leave every paired phone holding a working token.
     pairedTokenBufs = [];
     rememberedHashes = [];
+    push.revoke();
     for (const [client, type] of clientTokenTypes) if (type === 'paired') client.terminate();
     if (!pairedDevicesPath) return;
     try {
@@ -1157,6 +1187,7 @@ export function startRemoteServer(opts: {
       saveRememberedDevices(nextRemembered);
     }
     pairedTokenBufs = nextTokens;
+    push.retainOwners();
     return { ok: true, token: pairedToken };
   }
 
@@ -1195,7 +1226,9 @@ export function startRemoteServer(opts: {
         res.end(JSON.stringify(body));
       };
 
-      const mapMatch = url.pathname.match(/^\/api\/(mindmaps|reasoning|canvas|tours)\/([^/]+)$/);
+      const mapMatch = url.pathname.match(
+        /^\/api\/(mindmaps|reasoning|canvas|tours|evidence)\/([^/]+)$/,
+      );
       if (mapMatch) {
         const route = mapMatch[1] as CanvasRoute;
         let taskId: string;
@@ -1279,6 +1312,45 @@ export function startRemoteServer(opts: {
         return;
       }
       if (tokenClass === 'canvas') return jsonEnd(403, { error: 'forbidden' });
+
+      if (url.pathname === '/api/mobile/push') {
+        if (tokenClass !== 'paired') return jsonEnd(403, { error: 'pairing required' });
+        const owner = createHash('sha256')
+          .update(rawToken ?? '')
+          .digest('hex');
+        if (req.method === 'GET') {
+          try {
+            jsonEnd(200, push.status(owner));
+          } catch {
+            jsonEnd(503, { error: 'Phone notifications unavailable' });
+          }
+          return;
+        }
+        if (req.method !== 'PUT' && req.method !== 'DELETE')
+          return jsonEnd(405, { error: 'Method not allowed' });
+        void readJsonBody(req, 4096, true)
+          .then((body) => {
+            // Authentication happened before reading the body; disconnect may have happened since.
+            if (stopping || !isPairedToken(Buffer.from(owner, 'hex')))
+              return jsonEnd(401, { error: 'Phone disconnected' });
+            try {
+              if (req.method === 'PUT') parsePushSubscription(body);
+              else if (!body || typeof body.endpoint !== 'string')
+                throw new Error('Invalid push endpoint');
+            } catch {
+              return jsonEnd(400, { error: 'Invalid push subscription' });
+            }
+            try {
+              if (req.method === 'PUT') push.replace(owner, body);
+              else push.remove(owner, body.endpoint);
+              jsonEnd(200, { ok: true });
+            } catch {
+              jsonEnd(503, { error: 'Could not save phone notification settings' });
+            }
+          })
+          .catch(() => jsonEnd(400, { error: 'Invalid push subscription' }));
+        return;
+      }
 
       // --- Device pairing (mobile → paired elevation) ---
       // A phone holding the read-only mobile token submits the PIN shown on the
@@ -1634,7 +1706,7 @@ export function startRemoteServer(opts: {
     // URLs, so cache them briefly rather than immutably. Only Vite's hashed
     // JS/CSS bundles are safe to pin immutable for a year.
     let cacheControl: string;
-    if (ext === '.html' || ext === '.webmanifest') {
+    if (ext === '.html' || ext === '.webmanifest' || filePath === '/sw.js') {
       cacheControl = 'no-cache';
     } else if (ext === '.png' || ext === '.svg' || ext === '.ico') {
       cacheControl = 'public, max-age=86400';
@@ -1671,7 +1743,7 @@ export function startRemoteServer(opts: {
   const clientChats = new WeakMap<WebSocket, ReturnType<typeof createChatSubscriptions>>();
   // A phone on a slow link cannot drain a full conversation every frame interval;
   // past this backlog, chat frames wait rather than pile up in the send buffer.
-  const CHAT_SOCKET_BACKLOG_BYTES = 1024 * 1024;
+  const SOCKET_BACKLOG_BYTES = 1024 * 1024;
 
   function broadcast(msg: ServerMessage): void {
     const json = JSON.stringify(msg);
@@ -1682,21 +1754,22 @@ export function startRemoteServer(opts: {
     }
   }
 
-  const unsubSpawn = onPtyEvent('spawn', () => {
+  // Baseline existing tasks so enabling remote access does not replay old requests.
+  push.snapshot(agentList());
+  const publishAgents = () => {
     const list = agentList();
+    push.snapshot(list);
     broadcast({ type: 'agents', list });
-  });
+  };
+  const unsubSpawn = onPtyEvent('spawn', publishAgents);
 
   const unsubChats =
     opts.chats?.onChange(() => {
-      broadcast({ type: 'agents', list: agentList() });
+      publishAgents();
       for (const client of wss.clients) clientChats.get(client)?.rebind();
     }) ?? (() => {});
 
-  const unsubListChanged = onPtyEvent('list-changed', () => {
-    const list = agentList();
-    broadcast({ type: 'agents', list });
-  });
+  const unsubListChanged = onPtyEvent('list-changed', publishAgents);
 
   const unsubExit = onPtyEvent('exit', (agentId, data) => {
     canvasAgents.delete(agentId);
@@ -1707,8 +1780,7 @@ export function startRemoteServer(opts: {
       clientSubs.get(client)?.delete(agentId);
     }
     setTimeout(() => {
-      const list = agentList();
-      broadcast({ type: 'agents', list });
+      publishAgents();
     }, 100);
   });
 
@@ -1722,7 +1794,7 @@ export function startRemoteServer(opts: {
           (message) => {
             if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
           },
-          () => ws.bufferedAmount > CHAT_SOCKET_BACKLOG_BYTES,
+          () => ws.bufferedAmount > SOCKET_BACKLOG_BYTES,
         ),
       );
 
@@ -1930,6 +2002,12 @@ export function startRemoteServer(opts: {
 
           const cb = (encoded: string) => {
             if (ws.readyState === WebSocket.OPEN) {
+              if (ws.bufferedAmount > SOCKET_BACKLOG_BYTES) {
+                // Terminal chunks cannot be skipped safely. Release the queued bytes;
+                // the phone reconnects and resets its terminal from scrollback replay.
+                ws.terminate();
+                return;
+              }
               ws.send(
                 JSON.stringify({
                   type: 'output',
@@ -2083,6 +2161,7 @@ export function startRemoteServer(opts: {
       // server.close() drains pending HTTP bodies. They must not mint new
       // credentials after explicit disconnect has revoked remembered phones.
       stopping = true;
+      push.stop();
       pairing = null;
       return new Promise<void>((resolve) => {
         for (const timer of pendingSubmissions.values()) clearTimeout(timer);
@@ -2104,6 +2183,7 @@ export function startRemoteServer(opts: {
 
   return new Promise<RemoteServer>((resolve, reject) => {
     const onError = (err: NodeJS.ErrnoException) => {
+      push.stop();
       unsubSpawn();
       unsubExit();
       unsubListChanged();

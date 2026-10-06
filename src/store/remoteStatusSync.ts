@@ -1,6 +1,6 @@
 // Pushes the desktop's per-task attention state (working, needs input, ready,
-// error, …) to the main process so the mobile overview can show the same
-// richer status instead of just running/exited. The renderer owns this
+// error, …) to the main process so the mobile overview can show a richer
+// status, prioritizing unanswered questions. The renderer owns this
 // computation because it depends on reactive terminal/git/steps state; main
 // simply caches the latest snapshot and re-broadcasts it to connected phones.
 //
@@ -10,7 +10,12 @@
 
 import { createEffect, createRoot, onCleanup, untrack } from 'solid-js';
 import { store } from './store';
-import { getTaskAttentionState, getAgentOutputTail, stripAnsi } from './taskStatus';
+import {
+  getTaskAttentionState,
+  getTaskOpenQuestion,
+  getAgentOutputTail,
+  stripAnsi,
+} from './taskStatus';
 import { taskUsesAgentChat } from './agent-chat';
 import { fireAndForget } from '../lib/ipc';
 import { IPC } from '../../electron/ipc/channels';
@@ -75,7 +80,11 @@ export function startRemoteStatusSync(): () => void {
         Pick<RemoteAgent, 'projectName' | 'projectColor' | 'agentName' | 'lastLine'>
       > = {};
       for (const taskId of [...store.taskOrder, ...store.collapsedTaskOrder]) {
-        statuses[taskId] = getTaskAttentionState(taskId);
+        // Like the desktop attention tray, surface unanswered questions even
+        // when a review flag or another agent's failure masks the task status.
+        statuses[taskId] = getTaskOpenQuestion(taskId)
+          ? 'needs_input'
+          : getTaskAttentionState(taskId);
         const task = store.tasks[taskId];
         if (!task) continue;
         const agentId =

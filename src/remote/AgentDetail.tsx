@@ -67,11 +67,16 @@ export function AgentDetail(props: AgentDetailProps) {
   const [notesSaved, setNotesSaved] = createSignal(false);
   const agent = () => agents().find((a) => a.agentId === props.agentId);
   const taskId = () => agent()?.taskId;
-  const nextTask = () =>
+  const nextAttentionTask = () =>
     agents().find(
       (a) =>
         a.agentId !== props.agentId && (a.attention === 'needs_input' || a.attention === 'error'),
     );
+  const nextTask = () => {
+    const list = agents();
+    if (list.length < 2) return undefined;
+    return list[(list.findIndex((a) => a.agentId === props.agentId) + 1) % list.length];
+  };
 
   createEffect(() => writeLocal(draftKey, inputText()));
   createEffect(() => writeLocal(bashKey, bashMode() ? 'true' : ''));
@@ -424,7 +429,20 @@ export function AgentDetail(props: AgentDetailProps) {
         taskName={props.taskName}
         onBack={props.onBack}
         onNeedsPairing={props.onNeedsPairing}
-      />
+      >
+        <Show when={!nextAttentionTask() && nextTask()}>
+          {(next) => (
+            <button
+              class="mobile-button quiet mobile-next-task"
+              aria-label={`Next task: ${next().taskName}`}
+              title={`Next task: ${next().taskName}`}
+              onClick={() => props.onNextTask(next().taskId)}
+            >
+              <span aria-hidden="true">→</span>
+            </button>
+          )}
+        </Show>
+      </TaskHeader>
       <div class="mobile-tabs">
         <nav class="mobile-view-tabs" aria-label="Task views">
           <For
@@ -505,12 +523,7 @@ export function AgentDetail(props: AgentDetailProps) {
         </Show>
         <Show when={view() === 'terminal'}>
           <div class="mobile-output-actions">
-            <Show when={!terminalBottom()}>
-              <button class="mobile-button" onClick={jumpToLatest}>
-                ↓ Latest output
-              </button>
-            </Show>
-            <Show when={nextTask()}>
+            <Show when={nextAttentionTask()}>
               {(next) => (
                 <button
                   class="mobile-button mobile-next-task"
@@ -520,6 +533,11 @@ export function AgentDetail(props: AgentDetailProps) {
                   Next task →
                 </button>
               )}
+            </Show>
+            <Show when={!terminalBottom()}>
+              <button class="mobile-button" onClick={jumpToLatest}>
+                ↓ Latest output
+              </button>
             </Show>
           </div>
         </Show>

@@ -119,6 +119,46 @@ describe('mobile token over WebSocket', () => {
     ws.close();
   });
 
+  it('disconnects a congested terminal subscriber while healthy clients keep receiving output', async () => {
+    vi.mocked(pty.subscribeToAgent).mockReturnValueOnce(true).mockReturnValueOnce(true);
+    const sent = vi.spyOn(WebSocket.prototype, 'send');
+    const slow = await connectAndAuth(mobileToken);
+    const slowServer = sent.mock.contexts.find((socket) => socket !== slow);
+    sent.mockRestore();
+    if (!slowServer) throw new Error('Server socket missing');
+    const healthy = await connectAndAuth(mobileToken);
+    slow.send(JSON.stringify({ type: 'subscribe', agentId: 'slow-agent' }));
+    healthy.send(JSON.stringify({ type: 'subscribe', agentId: 'healthy-agent' }));
+    await vi.waitFor(() => expect(pty.subscribeToAgent).toHaveBeenCalledTimes(2));
+    const slowOutput = vi
+      .mocked(pty.subscribeToAgent)
+      .mock.calls.find(([id]) => id === 'slow-agent')?.[1];
+    const healthyOutput = vi
+      .mocked(pty.subscribeToAgent)
+      .mock.calls.find(([id]) => id === 'healthy-agent')?.[1];
+    if (!slowOutput || !healthyOutput) throw new Error('Output subscriptions missing');
+
+    // Deterministic stalled transport, without relying on OS socket buffer sizes.
+    Object.defineProperty(slowServer, 'bufferedAmount', { value: 1024 * 1024 + 1 });
+    const closed = waitForClose(slow);
+    slowOutput('c2xvdw==');
+    expect(await closed).toBe(1006);
+    await vi.waitFor(() =>
+      expect(pty.unsubscribeFromAgent).toHaveBeenCalledWith('slow-agent', slowOutput),
+    );
+    const received = new Promise<string>((resolve) =>
+      healthy.once('message', (raw) => resolve(String(raw))),
+    );
+    healthyOutput('b2s=');
+    expect(JSON.parse(await received)).toEqual({
+      type: 'output',
+      agentId: 'healthy-agent',
+      data: 'b2s=',
+    });
+    expect(healthy.readyState).toBe(WebSocket.OPEN);
+    healthy.close();
+  });
+
   it('rejects input with 4003 (pairing required) and never reaches the PTY', async () => {
     const ws = await connectAndAuth(mobileToken);
     const closed = waitForClose(ws);

@@ -103,6 +103,7 @@ function structuralSnapshot(): string {
             needsReview: t.needsReview,
             verification: t.verification,
             verificationRun: t.verificationRun,
+            evidence: t.evidence,
             landingState: t.landingState,
             landingReason: t.landingReason,
             landingSummary: t.landingSummary,

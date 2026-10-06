@@ -37,29 +37,46 @@ export function CandidateOutputDialog() {
   const candidate = createMemo(() => run()?.candidates.find((c) => c.id === target()?.candidateId));
   const projectRoot = () =>
     documentStore.projectId ? getProject(documentStore.projectId)?.path : undefined;
+  let reading = false;
+  let disposed = false;
+  onCleanup(() => (disposed = true));
 
   async function load() {
+    if (reading || disposed) return;
     const t = target();
     const root = projectRoot();
     if (!t || !root) return;
+    // Store objects can be updated in place; keep the requested IDs as values.
+    const { runId, candidateId } = t;
+    const isCurrent = () =>
+      projectRoot() === root && target()?.runId === runId && target()?.candidateId === candidateId;
+    reading = true;
     try {
-      const log = await invoke<string>(IPC.ReadDocumentCandidateLog, { projectRoot: root, ...t });
-      if (workspaceUi.output !== t) return;
+      const log = await invoke<string>(IPC.ReadDocumentCandidateLog, {
+        projectRoot: root,
+        runId,
+        candidateId,
+      });
+      if (disposed || !isCurrent()) return;
       const stuck =
         !!bodyRef && bodyRef.scrollTop + bodyRef.clientHeight >= bodyRef.scrollHeight - 8;
       setText(log);
       setError(null);
       if (stuck) requestAnimationFrame(() => bodyRef?.scrollTo({ top: bodyRef.scrollHeight }));
     } catch (err) {
-      setError(errMessage(err));
+      if (!disposed && isCurrent()) setError(errMessage(err));
+    } finally {
+      reading = false;
+      // A target selected during the read must load even if it has finished polling.
+      if (!disposed && !isCurrent()) void load();
     }
   }
 
   createEffect(
-    on(target, (t) => {
+    on([() => target()?.runId, () => target()?.candidateId, projectRoot], () => {
       setText('');
       setError(null);
-      if (!t) return;
+      if (!target()) return;
       void load();
       // Focus moves into the dialog as it opens, as in the app's other dialogs.
       requestAnimationFrame(() => closeRef?.focus());

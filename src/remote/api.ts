@@ -98,3 +98,22 @@ export async function saveNotes(taskId: string, notes: string): Promise<void> {
     token,
   });
 }
+
+/** Notification delivery is owned by this paired phone, independently of its live socket. */
+export function fetchPushSettings(): Promise<{ publicKey: string; endpoint: string | null }> {
+  const token = getPairedToken();
+  if (!token) throw new ApiError('Authorize this phone first', 401);
+  return request('/api/mobile/push', { token });
+}
+
+export function savePushSubscription(subscription: PushSubscriptionJSON): Promise<{ ok: true }> {
+  const token = getPairedToken();
+  if (!token) throw new ApiError('Authorize this phone first', 401);
+  return request('/api/mobile/push', { token, method: 'PUT', body: subscription });
+}
+
+export function removePushSubscription(endpoint: string): Promise<{ ok: true }> {
+  const token = getPairedToken();
+  if (!token) throw new ApiError('Authorize this phone first', 401);
+  return request('/api/mobile/push', { token, method: 'DELETE', body: { endpoint } });
+}

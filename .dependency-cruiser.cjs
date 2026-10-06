@@ -66,6 +66,8 @@ module.exports = {
           'types\\.(ts|tsx)$',
           '^src/main\\.tsx$',
           '^src/remote/main\\.tsx$',
+          // Registered by URL in the phone UI rather than imported as a module.
+          '^src/remote/public/sw\\.js$',
           '^electron/main\\.ts$',
           '^electron/preload\\.cjs$',
           '^electron/mcp/server\\.ts$',

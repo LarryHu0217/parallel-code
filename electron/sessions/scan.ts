@@ -41,6 +41,8 @@ const MAX_CODEX_FILES = 400;
  * files for one task, not the whole `MAX_CODEX_FILES` cap.
  */
 const CODEX_TITLE_BYTES = 512 * 1024;
+/** Keep repeated scans useful without retaining every transcript ever visited. */
+const MAX_CACHE_ENTRIES = MAX_CODEX_FILES * 2;
 
 export interface SessionScanOptions {
   /** Defaults to `~/.claude/projects`. */
@@ -136,6 +138,10 @@ async function codexTitle(filePath: string, mtimeMs: number): Promise<string | u
     await handle?.close().catch(() => undefined);
   }
   titles.set(filePath, { mtimeMs, title });
+  if (titles.size > MAX_CACHE_ENTRIES) {
+    const oldest = titles.keys().next().value;
+    if (oldest !== undefined) titles.delete(oldest);
+  }
   return title;
 }
 
@@ -146,6 +152,8 @@ async function readRecord(filePath: string, parse: Parse): Promise<SessionRecord
   try {
     stat = await fs.stat(filePath);
   } catch {
+    cache.delete(filePath);
+    titles.delete(filePath);
     return null;
   }
   const cached = cache.get(filePath);
@@ -155,6 +163,10 @@ async function readRecord(filePath: string, parse: Parse): Promise<SessionRecord
   const parsed = entries.length > 0 ? parse(entries) : null;
   const record = parsed ? { ...parsed, updatedAt: stat.mtimeMs } : null;
   cache.set(filePath, { mtimeMs: stat.mtimeMs, record });
+  if (cache.size > MAX_CACHE_ENTRIES) {
+    const oldest = cache.keys().next().value;
+    if (oldest !== undefined) cache.delete(oldest);
+  }
   return record;
 }
 

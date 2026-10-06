@@ -1056,7 +1056,12 @@ export function ScrollingDiffView(props: ScrollingDiffViewProps) {
             file={file}
             worktreePath={props.worktreePath}
             baseBranch={props.baseBranch}
-            ref={(el) => sectionRefs.set(file.path, el)}
+            ref={(el) => {
+              sectionRefs.set(file.path, el);
+              onCleanup(() => {
+                if (sectionRefs.get(file.path) === el) sectionRefs.delete(file.path);
+              });
+            }}
             collapsed={collapsedFiles().has(file.path)}
             onCollapsedChange={(collapsed) =>
               setCollapsedFiles((previous) => {

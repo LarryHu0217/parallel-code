@@ -571,10 +571,9 @@ export interface TaskOpenQuestion {
  *  Deliberately independent of `getTaskAttentionState`: that function reports a
  *  single prioritized status, so an exited-non-zero agent (`error`) or a review
  *  flag hides a question another agent is still blocked on. The sidebar tray
- *  reads this instead. The desktop-notification watcher and `remoteStatusSync`
- *  still classify `needs_input` from the attention state and so inherit that
- *  masking — knowingly unconverted, since changing when a notification fires is
- *  a product decision, not a mechanical follow-through. */
+ *  and mobile status sync read this instead. The desktop-notification watcher
+ *  still classifies `needs_input` from the attention state and inherits that
+ *  masking. */
 export function getTaskOpenQuestion(taskId: string): TaskOpenQuestion | null {
   return getTaskOpenQuestions(taskId)[0] ?? null;
 }

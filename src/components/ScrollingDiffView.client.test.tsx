@@ -1,4 +1,5 @@
 import { render } from 'solid-js/web';
+import { createSignal } from 'solid-js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { invoke } from '../lib/ipc';
 import { LARGE_DIFF_FILE_THRESHOLD, LARGE_DIFF_LINE_THRESHOLD } from '../lib/diff-collapse';
@@ -19,6 +20,8 @@ afterEach(() => {
   while (disposers.length > 0) disposers.pop()?.();
   document.body.replaceChildren();
   vi.mocked(invoke).mockReset();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 function file(path: string, changedLines: number): FileDiff {
@@ -73,6 +76,49 @@ function contextFetchedFiles(): Set<string> {
 }
 
 describe('ScrollingDiffView large-diff collapsing', () => {
+  it('forgets removed sections and preserves the replacement for the same path', () => {
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    const [files, setFiles] = createSignal([file('a.ts', 1)]);
+    const [target, setTarget] = createSignal<string | null>(null);
+    const host = document.createElement('div');
+    document.body.append(host);
+    disposers.push(
+      render(
+        () => (
+          <ReviewProvider open compilePrompt={() => ''}>
+            <ScrollingDiffView files={files()} scrollToPath={target()} worktreePath="/wt" />
+          </ReviewProvider>
+        ),
+        host,
+      ),
+    );
+    const section = () => host.firstElementChild?.firstElementChild;
+    const removed = section();
+    if (!(removed instanceof HTMLElement)) throw new Error('Missing file section');
+    const removedBounds = vi.spyOn(removed, 'getBoundingClientRect');
+
+    setFiles([file('a.ts', 2)]);
+    const replacement = section();
+    if (!(replacement instanceof HTMLElement)) throw new Error('Missing replacement section');
+    expect(replacement).not.toBe(removed);
+    const replacementBounds = vi.spyOn(replacement, 'getBoundingClientRect');
+    setTarget('a.ts');
+    while (frames.length > 0) frames.shift()?.(0);
+    expect(removedBounds).not.toHaveBeenCalled();
+    expect(replacementBounds).toHaveBeenCalledTimes(1);
+
+    setTarget(null);
+    setFiles([file('b.ts', 1)]);
+    expect(replacement.isConnected).toBe(false);
+    setTarget('a.ts');
+    while (frames.length > 0) frames.shift()?.(0);
+    expect(replacementBounds).toHaveBeenCalledTimes(1);
+  });
+
   it('renders rows for the target file only when the diff is long', () => {
     const host = mount(
       [file('a.ts', LARGE_DIFF_LINE_THRESHOLD + 1), file('b.ts', 20), file('c.ts', 20)],

@@ -77,9 +77,14 @@ describe('exact user approval under the Git repository lock', () => {
     },
   );
 
-  it('invalidates a second queued approval after the first moves the destination', async () => {
-    const { merge } = fixture();
+  it('invalidates the remaining concurrent approval after a merge moves the destination', async () => {
+    const { root, approval, merge } = fixture();
     const outcomes = await Promise.allSettled([merge(), merge()]);
-    expect(outcomes.map((outcome) => outcome.status)).toEqual(['fulfilled', 'rejected']);
+    // Repository lock discovery is asynchronous, so either call can acquire it first.
+    expect(outcomes.map((outcome) => outcome.status).sort()).toEqual(['fulfilled', 'rejected']);
+    expect(outcomes.find((outcome) => outcome.status === 'rejected')?.reason).toEqual(
+      new Error('The reviewed result or integration target changed. Review again before merging.'),
+    );
+    expect(git(root, 'rev-parse', 'HEAD')).toBe(approval.expectedCommit);
   });
 });

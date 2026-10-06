@@ -31,6 +31,7 @@ button:disabled {
   opacity: 0.5;
 }
 button:focus-visible,
+summary:focus-visible,
 a:focus-visible,
 input:focus-visible,
 textarea:focus-visible,
@@ -45,6 +46,29 @@ select:focus-visible {
   min-height: 0;
   background: var(--mobile-bg);
   padding-inline: env(safe-area-inset-left) env(safe-area-inset-right);
+}
+.mobile-notifications {
+  padding: 12px;
+  margin-bottom: 16px;
+  border: 1px solid var(--mobile-border);
+  border-radius: 12px;
+  background: var(--mobile-panel);
+  font-size: 14px;
+  line-height: 1.5;
+}
+.mobile-notifications summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.mobile-notifications p {
+  margin: 12px 0 0;
+  color: var(--mobile-muted);
+}
+.mobile-notifications a {
+  color: var(--mobile-accent);
+}
+.mobile-notifications button {
+  margin-top: 12px;
 }
 .mobile-header {
   display: flex;
@@ -452,9 +476,6 @@ textarea.mobile-input {
   min-width: 0;
   max-height: 160px;
   resize: none;
-}
-.mobile-next-task {
-  margin-left: auto;
 }
 .mobile-composer > .mobile-error {
   margin-bottom: 8px;

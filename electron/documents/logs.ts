@@ -5,6 +5,7 @@
  * part of the record that travels with the repository.
  */
 import fs from 'fs';
+import fsPromises from 'fs/promises';
 import path from 'path';
 import { appendGitInfoExcludeBlock } from '../ipc/git-exclude.js';
 
@@ -13,6 +14,8 @@ const EXCLUDE_HEADER = '# parallel-code: document run output';
 const EXCLUDE_PATTERN = '/.parallel/logs/';
 /** Longest log handed back to the renderer; the tail is what matters. */
 const MAX_READ_CHARS = 2_000_000;
+// UTF-8 needs at most three bytes per UTF-16 code unit, plus a boundary sequence.
+const MAX_READ_BYTES = MAX_READ_CHARS * 3 + 3;
 
 const ID_RE = /^[a-z0-9-]{1,64}$/i;
 
@@ -47,16 +50,39 @@ export function appendCandidateLog(
 }
 
 /** The log so far; empty when the candidate printed nothing (or never ran here). */
-export function readCandidateLog(
+export async function readCandidateLog(
   projectRoot: string,
   runId: unknown,
   candidateId: unknown,
-): string {
+): Promise<string> {
   if (typeof runId !== 'string' || typeof candidateId !== 'string') return '';
+  let handle: fsPromises.FileHandle | undefined;
   try {
-    const text = fs.readFileSync(logPath(projectRoot, runId, candidateId), 'utf-8');
-    return text.length > MAX_READ_CHARS ? text.slice(-MAX_READ_CHARS) : text;
+    handle = await fsPromises.open(logPath(projectRoot, runId, candidateId), 'r');
+    const { size } = await handle.stat();
+    const length = Math.min(size, MAX_READ_BYTES);
+    const position = size - length;
+    const buffer = Buffer.alloc(length);
+    let bytesRead = 0;
+    while (bytesRead < length) {
+      const result = await handle.read(buffer, bytesRead, length - bytesRead, position + bytesRead);
+      if (result.bytesRead === 0) break;
+      bytesRead += result.bytesRead;
+    }
+    // A tail can begin inside a UTF-8 sequence. Drop its continuation bytes
+    // before decoding so the read boundary does not introduce replacement chars.
+    let start = 0;
+    if (position > 0) {
+      while (start < bytesRead && (buffer[start] & 0xc0) === 0x80) start++;
+    }
+    const text = buffer.toString('utf8', start, bytesRead);
+    const tail = text.slice(-MAX_READ_CHARS);
+    // The character cap can bisect a surrogate pair, too.
+    const first = tail.charCodeAt(0);
+    return first >= 0xdc00 && first <= 0xdfff ? tail.slice(1) : tail;
   } catch {
     return '';
+  } finally {
+    await handle?.close().catch(() => undefined);
   }
 }

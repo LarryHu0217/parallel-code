@@ -1,4 +1,4 @@
-import { Show } from 'solid-js';
+import { Show, type JSX } from 'solid-js';
 import { agentStatusDisplay } from './attention';
 import { ConnectionBanner } from './ConnectionBanner';
 import { agents, canControl, status } from './ws';
@@ -9,6 +9,7 @@ export function TaskHeader(props: {
   taskName: string;
   onBack: () => void;
   onNeedsPairing: () => void;
+  children?: JSX.Element;
 }) {
   const agent = () => agents().find((a) => a.agentId === props.agentId);
   const display = () => agentStatusDisplay(agent() ?? { status: 'exited', attention: 'idle' });
@@ -34,6 +35,7 @@ export function TaskHeader(props: {
             </span>
           </div>
         </div>
+        {props.children}
       </header>
       <ConnectionBanner />
       <Show when={status() === 'connected' && !canControl()}>

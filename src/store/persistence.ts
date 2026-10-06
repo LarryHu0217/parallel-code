@@ -1,4 +1,9 @@
 import { parseCompletionRecord } from '../../electron/shared/completion-report';
+import { persistedEvidence, restoredEvidence } from '../lib/evidence-package';
+import {
+  parseEvidenceModelSettings,
+  parseProjectChecks,
+} from '../../electron/shared/evidence-settings';
 import { delegationRequest, taskAuthorityInput } from './delegation';
 import { restoreCanvasTaskLinks } from '../lib/canvas-task-links';
 import { restoreMindMap } from '../graph/model';
@@ -323,6 +328,7 @@ function toPersistedTask(task: Task, agentDefs: AgentDef[], collapsed?: boolean)
     needsReview: task.needsReview,
     verification: task.verification,
     verificationRun: task.verificationRun,
+    evidence: persistedEvidence(task.evidence),
     landingState: task.landingState,
     landingReason: task.landingReason,
     landingSummary: task.landingSummary,
@@ -651,6 +657,9 @@ export async function loadState(): Promise<void> {
       p.coverageReportPath = undefined;
     }
     p.tasksCollapsed = typeof p.tasksCollapsed === 'boolean' ? p.tasksCollapsed : undefined;
+    p.evidenceChecks = parseProjectChecks(p.evidenceChecks);
+    p.evidenceModel = parseEvidenceModelSettings(p.evidenceModel);
+    p.evidenceAutoBuild = p.evidenceAutoBuild === true ? true : undefined;
     p.superProductivityProjectId = isValidSpId(p.superProductivityProjectId)
       ? p.superProductivityProjectId
       : undefined;
@@ -1061,6 +1070,7 @@ export async function loadState(): Promise<void> {
           needsReview: pt.needsReview,
           verification: pt.verification,
           verificationRun: restoredVerificationRun(pt.verificationRun),
+          evidence: restoredEvidence(pt.evidence),
           landingState: pt.landingState,
           landingReason: pt.landingReason,
           landingSummary: pt.landingSummary,
@@ -1212,6 +1222,7 @@ export async function loadState(): Promise<void> {
           needsReview: pt.needsReview,
           verification: pt.verification,
           verificationRun: restoredVerificationRun(pt.verificationRun),
+          evidence: restoredEvidence(pt.evidence),
           landingState: pt.landingState,
           landingReason: pt.landingReason,
           landingSummary: pt.landingSummary,

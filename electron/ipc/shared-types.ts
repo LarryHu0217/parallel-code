@@ -103,6 +103,10 @@ export interface VerificationRun {
   headSha: string | null;
   /** True when the worktree had uncommitted changes when the run started. */
   dirty: boolean;
+  /** HEAD and dirty state once the command ended. A difference from the start
+   *  means the code changed during the run, so the result covers neither. */
+  headShaAfter?: string | null;
+  dirtyAfter?: boolean;
   startedAt: string;
   finishedAt: string | null;
   /** Bounded tail of combined stdout and stderr, ANSI stripped. */
@@ -166,6 +170,9 @@ export interface PrChecksUpdatePayload {
    *  closed). The renderer should drop its bookkeeping so a later restart of
    *  the watcher (e.g. PR reopened) goes through cleanly. */
   cleared: boolean;
+  /** Set with `cleared` when the PR was merged rather than closed. Absent for
+   *  older senders. */
+  merged?: boolean;
 }
 
 export interface BranchPrDetectionResult {

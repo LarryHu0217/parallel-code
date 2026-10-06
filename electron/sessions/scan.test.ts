@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
@@ -91,6 +91,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await fs.rm(root, { recursive: true, force: true });
 });
 
@@ -202,6 +203,48 @@ describe('listSessionsForCwd', () => {
     );
     await fs.utimes(file, new Date(3_000_000), new Date(3_000_000));
     expect((await scan())[0]?.title).toBe('Second');
+  });
+
+  it('bounds both caches and reuses records and titles that remain cached', async () => {
+    await Promise.all(
+      Array.from({ length: 801 }, (_, index) =>
+        writeCodex(CWD, `${index.toString(16).padStart(8, '0')}-0000-7000-8000-000000000001`),
+      ),
+    );
+    const options = { claudeRoot, codexRoot, maxCodexFiles: 801 };
+    const open = vi.spyOn(fs, 'open');
+    expect(await listSessionsForCwd(CWD, options)).toHaveLength(801);
+
+    open.mockClear();
+    // The first file scanned was evicted from both FIFO caches after file 801.
+    expect(await listSessionsForCwd(CWD, { ...options, maxCodexFiles: 1 })).toHaveLength(1);
+    expect(open).toHaveBeenCalledTimes(2);
+
+    open.mockClear();
+    expect(await listSessionsForCwd(CWD, { ...options, maxCodexFiles: 1 })).toHaveLength(1);
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it('evicts stale records and titles when a transcript stat fails', async () => {
+    const file = await writeCodex(CWD, ID_B, '01', [codexUserTurn('Original title')]);
+    const timestamp = new Date(1_000_000);
+    await fs.utimes(file, timestamp, timestamp);
+    expect((await scan())[0]?.title).toBe('Original title');
+
+    const stat = vi.spyOn(fs, 'stat').mockRejectedValueOnce(new Error('transcript disappeared'));
+    await expect(scan()).resolves.toEqual([]);
+    stat.mockRestore();
+
+    await fs.writeFile(
+      file,
+      jsonl([
+        { type: 'session_meta', payload: { id: ID_D, cwd: CWD } },
+        codexUserTurn('Replacement title'),
+      ]),
+    );
+    // A recreated transcript can have the old mtime; neither cached value applies.
+    await fs.utimes(file, timestamp, timestamp);
+    expect((await scan())[0]).toMatchObject({ id: ID_D, title: 'Replacement title' });
   });
 
   // Codex buries the user's first words behind a few hundred KB of injected
