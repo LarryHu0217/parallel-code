@@ -256,3 +256,62 @@ it('omits automation selected before switching to the current branch', async () 
   expect(directTask()?.autoSendChildUpdates).toBeUndefined();
   expect(directTask()?.maxConcurrentTasks).toBeUndefined();
 });
+
+it('checks out a picked PR while keeping the text the user typed', async () => {
+  const pr = {
+    kind: 'pr',
+    number: 7,
+    title: 'Fix login',
+    url: 'https://github.com/o/r/pull/7',
+    author: 'dev',
+    updatedAt: '2026-10-01T00:00:00Z',
+    labels: [],
+    isDraft: false,
+    baseRefName: 'main',
+    isCrossRepository: false,
+  };
+  const originalInvoke = vi.mocked(invoke).getMockImplementation();
+  vi.mocked(invoke).mockImplementation((channel, args) => {
+    if (channel === IPC.ListGitHubWorkItems) return Promise.resolve([pr]);
+    if (channel === IPC.CreatePrTask)
+      return Promise.resolve({
+        id: 'pr-task',
+        branch_name: 'fix-login',
+        worktree_path: '/project/.worktrees/fix-login',
+        pr_url: pr.url,
+        base_branch: 'main',
+      });
+    return Promise.resolve(originalInvoke?.(channel, args));
+  });
+  const submit = host.querySelector<HTMLButtonElement>('button[type="submit"]');
+  await vi.waitFor(() => expect(submit?.disabled).toBe(false));
+  const prompt = host.querySelector('textarea');
+  if (!prompt) throw new Error('Missing prompt editor');
+  prompt.value = 'Also check perf';
+  prompt.dispatchEvent(new Event('input', { bubbles: true }));
+
+  const pickPr = async () => {
+    const open = [...host.querySelectorAll('button')].find((b) => b.textContent === 'From GitHub…');
+    open?.click();
+    await vi.waitFor(() => expect(host.querySelector('.github-item-option')).not.toBeNull());
+    host.querySelector<HTMLButtonElement>('.github-item-option')?.click();
+  };
+  await pickPr();
+  // Picking again replaces the generated text instead of stacking it.
+  await pickPr();
+  expect(prompt.value).toBe(
+    'Review pull request #7: Fix login\nhttps://github.com/o/r/pull/7\n\nAlso check perf',
+  );
+  expect(host.textContent).toContain('Checks out PR #7 (base main).');
+
+  host
+    .querySelector('form')
+    ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  await vi.waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith(
+      IPC.CreatePrTask,
+      expect.objectContaining({ projectRoot: '/project', prNumber: 7 }),
+    ),
+  );
+  expect(vi.mocked(invoke).mock.calls.some(([channel]) => channel === IPC.CreateTask)).toBe(false);
+});

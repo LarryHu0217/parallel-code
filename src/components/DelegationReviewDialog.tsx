@@ -46,7 +46,9 @@ export function DelegationReviewDialog(props: { task: Task; open: boolean; onClo
       width="850px"
     >
       <div class="delegation-surface">
-        <h2>Review child result: {props.task.name}</h2>
+        <h2>
+          {landed() ? 'Review merged changes' : 'Review changes'}: {props.task.name}
+        </h2>
         <Show
           when={landed()}
           fallback={

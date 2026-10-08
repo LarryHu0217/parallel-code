@@ -39,7 +39,7 @@ import { truncateDiffForTool } from './diff-format.js';
 const execAsync = promisify(execFile);
 import type { Notify } from '../ipc/notify.js';
 import { createTask as createBackendTask, deleteTask } from '../ipc/tasks.js';
-import { getSkipPermissionsArgs } from '../shared/skip-permissions.js';
+import { getSkipPermissionsArgs, stripPermissionBypassArgs } from '../shared/skip-permissions.js';
 import {
   spawnAgent,
   writeToAgent,
@@ -106,6 +106,16 @@ interface MergedLines {
 }
 
 const DEFAULT_WAIT_TIMEOUT_MS = 300_000; // 5 minutes
+// setTimeout fires after ~1ms for values above 2^31-1 and immediately for <= 0, so
+// out-of-range caller input must be clamped. The floor stays small because callers
+// legitimately poll with short waits; the cap is far below the setTimeout limit.
+const MIN_WAIT_TIMEOUT_MS = 10;
+const MAX_WAIT_TIMEOUT_MS = 60 * 60_000; // 1 hour
+
+function clampWaitTimeoutMs(timeoutMs: number): number {
+  if (Number.isNaN(timeoutMs)) return DEFAULT_WAIT_TIMEOUT_MS;
+  return Math.min(MAX_WAIT_TIMEOUT_MS, Math.max(MIN_WAIT_TIMEOUT_MS, timeoutMs));
+}
 const PROMPT_WRITE_DELAY_MS = 50;
 const GIT_LOCK_RETRY_DELAY_MS = 2_000;
 const INITIAL_PROMPT_READY_DELAY_MS = 1_500;
@@ -279,6 +289,9 @@ export class Coordinator {
     Array<(result: { reason: 'idle' | 'human_control' | 'exited' | 'removed' }) => void>
   >();
   private anySignalResolvers = new Map<string, Array<(result: WaitForSignalDoneResult) => void>>();
+  // Cancels a pending wait_for_signal_done without caching a result, keyed by
+  // coordinator + requestId, so a retry can supersede its orphaned original.
+  private pendingSignalWaitsByRequest = new Map<string, () => void>();
   private subscribers = new Map<string, (encoded: string) => void>();
   private decoders = new Map<string, TextDecoder>();
   private controlMap = new Map<string, 'coordinator' | 'human'>();
@@ -289,6 +302,7 @@ export class Coordinator {
   private queuedPromptFlushTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private bracketedPasteAgentIds = new Set<string>();
   private closingTaskIds = new Set<string>();
+  private cleanupsInFlight = new Map<string, Promise<void>>();
   private integratingTaskIds = new Set<string>();
   private orchestrationEnabled = true;
   private orchestrationEpoch = 0;
@@ -308,6 +322,7 @@ export class Coordinator {
     this.clearQueuedPromptFlushTimer(task.id);
     task.initialPrompt = undefined;
     task.pendingPrompts = undefined;
+    task.unsubmittedPrompt = false;
     this.notifyRenderer(IPC.MCP_TaskStateSync, {
       taskId: task.id,
       initialPrompt: null,
@@ -382,29 +397,7 @@ export class Coordinator {
             this.idleResolvers.delete(task.id);
           }
           if (this.closingTaskIds.has(task.id)) break;
-          // Resolve any signal waiters so wait_for_signal_done doesn't hang
-          // when the last sub-task exits without calling signal_done.
-          const coordinatorId = task.coordinatorTaskId;
-          const anyResolvers = this.anySignalResolvers.get(coordinatorId);
-          const firstAnyResolver = anyResolvers?.length ? anyResolvers.shift() : undefined;
-          if (firstAnyResolver) {
-            // Suppress the exit notification — the signal waiter receives the
-            // exit info as its return value (mirrors the signalDone path).
-            if (this.coordinators.get(coordinatorId)?.automaticNotifications !== false) {
-              this.suppressPendingNotificationForTask(task);
-              task.reviewNotificationQueued = true;
-            }
-            const remaining = this.countRemaining(coordinatorId);
-            // The resolver IS `complete` from waitForSignalDone — it handles
-            // finishSignalWait, replay-cache write, and timer cleanup itself.
-            firstAnyResolver({
-              taskId: task.id,
-              name: task.name,
-              status: 'exited',
-              signalDoneAt: new Date().toISOString(),
-              remaining,
-            });
-          }
+          this.deliverExitToSignalWaiter(task);
           this.maybeQueueReviewNotification(task, 'exited', exitCode ?? null);
           break;
         }
@@ -428,7 +421,11 @@ export class Coordinator {
           task.exitCode = null;
         }
         if (task.agentId === agentId) {
-          if (!reattached) this.advanceReviewRevision(task);
+          if (!reattached) {
+            // A fresh process has an empty input line.
+            task.unsubmittedPrompt = false;
+            this.advanceReviewRevision(task);
+          }
           this.updateTailFromScrollback(task);
         }
       }
@@ -446,12 +443,38 @@ export class Coordinator {
     // report capture. Focus, draft edits and secondary panes do not advance it.
     onPtyEvent('prompt-submitted', (agentId) => {
       const task = this.findTaskByAgentId(agentId);
-      if (task) this.advanceReviewRevision(task);
+      if (!task) return;
+      // Any Enter, the human's included, submits a body whose own Enter failed.
+      task.unsubmittedPrompt = false;
+      this.advanceReviewRevision(task);
     });
 
     // Hook events (Claude Code lifecycle hooks) are the authoritative state
     // channel for agents that emit them; see handleAgentHookEvent.
     onAgentHookEvent((evt) => this.handleAgentHookEvent(evt));
+  }
+
+  /** Hand an exited task to the first wait_for_signal_done waiter so it doesn't hang
+   *  when the last sub-task exits without calling signal_done. */
+  private deliverExitToSignalWaiter(task: CoordinatedTask): void {
+    const coordinatorId = task.coordinatorTaskId;
+    const firstAnyResolver = this.anySignalResolvers.get(coordinatorId)?.shift();
+    if (!firstAnyResolver) return;
+    // Suppress the exit notification — the signal waiter receives the
+    // exit info as its return value (mirrors the signalDone path).
+    if (this.coordinators.get(coordinatorId)?.automaticNotifications !== false) {
+      this.suppressPendingNotificationForTask(task);
+      task.reviewNotificationQueued = true;
+    }
+    // The resolver IS `complete` from waitForSignalDone — it handles
+    // finishSignalWait, replay-cache write, and timer cleanup itself.
+    firstAnyResolver({
+      taskId: task.id,
+      name: task.name,
+      status: 'exited',
+      signalDoneAt: new Date().toISOString(),
+      remaining: this.countRemaining(coordinatorId),
+    });
   }
 
   private findTaskByAgentId(agentId: string): CoordinatedTask | undefined {
@@ -537,7 +560,8 @@ export class Coordinator {
         this.clearInitialPromptTimer(task.id);
         this.scheduleInitialPromptDelivery(task, 0);
       } else if (task?.pendingPrompts?.length) {
-        void this.flushNextQueuedPrompt(task);
+        // Human use may have left the agent mid-turn; wait for a rendered prompt.
+        this.scheduleQueuedPromptFlush(task);
       }
     }
   }
@@ -579,8 +603,12 @@ export class Coordinator {
     const hasAgentPrompt = this.tailHasAgentPrompt(task);
     if (hasAgentPrompt) {
       this.scheduleInitialPromptDelivery(task, INITIAL_PROMPT_READY_DELAY_MS, true);
-      task.status = 'idle';
-      this.maybeQueueReviewNotification(task, 'idle', null);
+      // Replayed scrollback may hold a stale ❯ from a mid-turn frame: hook-live
+      // agents go idle on Stop only, and an undelivered assignment is not idle.
+      if (!this.awaitingInitialPrompt(task) && !this.hookLiveAgentIds.has(task.agentId)) {
+        task.status = 'idle';
+        this.maybeQueueReviewNotification(task, 'idle', null);
+      }
     }
     return hasAgentPrompt;
   }
@@ -602,7 +630,7 @@ export class Coordinator {
   private scheduleQueuedPromptFlush(task: CoordinatedTask): void {
     if (
       !this.orchestrationEnabled ||
-      !task.pendingPrompts?.length ||
+      !this.hasQueuedWork(task) ||
       this.queuedPromptFlushTimers.has(task.id)
     )
       return;
@@ -610,7 +638,7 @@ export class Coordinator {
       this.queuedPromptFlushTimers.delete(task.id);
       if (!this.orchestrationEnabled || !this.tasks.has(task.id)) return;
       if (this.controlMap.get(task.id) === 'human') return;
-      if (!task.pendingPrompts?.length) return;
+      if (!this.hasQueuedWork(task)) return;
       if (!this.tailHasAgentPrompt(task)) return;
       if (this.writingPromptTaskIds.has(task.id)) {
         this.scheduleQueuedPromptFlush(task);
@@ -747,9 +775,9 @@ export class Coordinator {
     this.scheduleInitialPromptDelivery(task, INITIAL_PROMPT_READY_DELAY_MS, source === 'regex');
     if (
       !task.initialPrompt &&
-      task.assignedPromptDelivered &&
+      !this.awaitingInitialPrompt(task) &&
       this.controlMap.get(task.id) !== 'human' &&
-      task.pendingPrompts?.length
+      this.hasQueuedWork(task)
     ) {
       if (stableAgentPrompt && !this.writingPromptTaskIds.has(task.id)) {
         void this.flushNextQueuedPrompt(task);
@@ -764,6 +792,11 @@ export class Coordinator {
     if (source === 'regex' && this.hookLiveAgentIds.has(task.agentId)) {
       return;
     }
+    // Before the assignment is delivered this ❯ (or startup hook) is just the
+    // empty startup prompt; reporting idle would resolve wait_for_idle early.
+    if (this.awaitingInitialPrompt(task)) return;
+    // A typed but unsubmitted body is not a finished turn, even under human control.
+    if (task.unsubmittedPrompt) return;
     if (task.suppressIdleUntil !== undefined && this.suppressPromptEchoIdleIfNeeded(task)) {
       return;
     }
@@ -786,7 +819,10 @@ export class Coordinator {
     if (task.status === 'exited' || task.status === 'error') return;
 
     const readiness = getAgentPromptReadiness(this.normalizedTail(task.agentId));
-    const promptReady = this.initialPromptReadyTasks.has(taskId) || readiness.ready;
+    // The sticky ready flag only covers a blank tail; a trust dialog, MCP boot or
+    // busy marker that appeared since must still block delivery.
+    const blocked = readiness.reason === 'startup_or_dialog' || readiness.reason === 'busy';
+    const promptReady = !blocked && (this.initialPromptReadyTasks.has(taskId) || readiness.ready);
     if (!promptReady) {
       logInfo('coordinator.initial_prompt', 'waiting_for_prompt', {
         taskId: task.id,
@@ -829,6 +865,10 @@ export class Coordinator {
             err: err.message,
           },
         );
+        // The body is in the agent's input, so the assignment counts as handed over;
+        // leaving it undelivered would strand prompts queued behind it. Not
+        // markPromptDelivered: the agent has not started work.
+        task.assignedPromptDelivered = true;
         this.notifyRenderer(IPC.MCP_TaskStateSync, {
           taskId: task.id,
           initialPrompt: null,
@@ -1321,6 +1361,9 @@ export class Coordinator {
     },
   ): Promise<CoordinatedTask> {
     const { coordinatorId, coordinatorState, onInserted, assertLaunch, assertNativeLaunch } = ctx;
+    // Checked first so a missing notifier cannot strand a worktree or a 'creating' task.
+    const notify = this.notify;
+    if (!notify) throw new Error('No notifier set on coordinator');
     const root = opts.projectRoot ?? coordinatorState.projectRoot ?? this.projectRoot;
     const projId = opts.projectId ?? coordinatorState.projectId ?? this.projectId;
     if (!root || !projId) throw new Error('No project configured for coordinator');
@@ -1408,8 +1451,13 @@ export class Coordinator {
     const outputCb = this.createAgentOutputMonitor(task);
     this.subscribers.set(agentId, outputCb);
 
-    // Spawn the agent process
-    if (!this.notify) throw new Error('No notifier set on coordinator');
+    // closeTask/removeCoordinatedTask can delete the task while we are awaiting;
+    // continuing would spawn into a deleted worktree and announce a dead task.
+    const assertStillPresent = () => {
+      if (this.tasks.get(task.id) !== task || this.closingTaskIds.has(task.id)) {
+        throw new Error(`Task ${task.id} was closed during creation`);
+      }
+    };
 
     const agentCommand = opts.agentCommand ?? coordinatorState.spawnDefaults.command;
     task.agentCommand = agentCommand;
@@ -1426,6 +1474,7 @@ export class Coordinator {
         integrationPolicy: task.integrationPolicy,
       });
       task.preambleFileExistedBefore = preambleInjection.existedBefore;
+      assertStillPresent();
 
       // Write a per-sub-task MCP config so the agent can call signal_done.
       // In Docker mode, write to the coordinator's .parallel-code/ dir (which IS the explicitly
@@ -1451,16 +1500,20 @@ export class Coordinator {
         await writeSubTaskMcpConfig(configPath, mcpConfig);
         subTaskMcpConfigPath = configPath;
         task.mcpConfigPath = configPath;
+        assertStillPresent();
         this.writeKimiAutoDiscoveredMcpConfig(task, mcpConfig);
       }
 
-      const agentArgs = opts.agentArgs ?? coordinatorState.spawnDefaults.args;
-      const baseArgs = [
-        ...agentArgs,
-        ...((opts.skipPermissions ?? coordinatorState.propagateSkipPermissions)
-          ? getSkipPermissionsArgs(agentCommand)
-          : []),
-      ];
+      const skipPermissions = opts.skipPermissions ?? coordinatorState.propagateSkipPermissions;
+      const inheritedArgs = opts.agentArgs ?? coordinatorState.spawnDefaults.args;
+      // Custom agent args may carry their own bypass flags; without propagation
+      // the child must not inherit them.
+      const agentArgs = skipPermissions
+        ? inheritedArgs
+        : stripPermissionBypassArgs(agentCommand, inheritedArgs);
+      // Some CLIs (clap) reject a repeated flag, so add only what is missing.
+      const bypassArgs = skipPermissions ? getSkipPermissionsArgs(agentCommand) : [];
+      const baseArgs = [...agentArgs, ...bypassArgs.filter((arg) => !agentArgs.includes(arg))];
       const mcpArgs = subTaskMcpConfig
         ? this.buildTaskMcpLaunchArgs(agentCommand, subTaskMcpConfigPath, subTaskMcpConfig)
         : [];
@@ -1472,8 +1525,9 @@ export class Coordinator {
       const channelId = randomUUID();
 
       await assertLaunch();
+      assertStillPresent();
       await spawnAgent(
-        this.notify,
+        notify,
         {
           taskId: task.id,
           agentId,
@@ -1498,6 +1552,15 @@ export class Coordinator {
         },
         assertNativeLaunch,
       );
+
+      try {
+        assertStillPresent();
+      } catch (err) {
+        // Closed while spawning: the close already killed any earlier PTY, so this
+        // late one is ours to stop.
+        this.killAgentBestEffort(agentId);
+        throw err;
+      }
 
       // Subscribe for output monitoring
       subscribeToAgent(agentId, outputCb);
@@ -1553,8 +1616,24 @@ export class Coordinator {
       // If cleanup fails the task stays in this.tasks; as 'error' it no longer
       // occupies a concurrency slot and hook events cannot revive it.
       task.status = 'error';
-      this.cleanupTask(task.id).catch(() => {});
+      this.cleanupTask(task.id).catch((cleanupErr) => {
+        logWarn('coordinator.create_task', 'cleanup after failed creation failed', {
+          taskId: task.id,
+          err: cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr),
+        });
+      });
       throw err;
+    }
+  }
+
+  private killAgentBestEffort(agentId: string): void {
+    try {
+      killAgent(agentId);
+    } catch (err) {
+      logWarn('coordinator.kill_agent', 'kill failed (agent may already be gone)', {
+        agentId,
+        err: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 
@@ -1658,9 +1737,32 @@ export class Coordinator {
       await this.writePromptToTask(task, prompt);
     } finally {
       this.writingPromptTaskIds.delete(task.id);
-      void this.flushNextQueuedPrompt(task);
+      // The write cleared the tail, so this waits for the next rendered prompt
+      // instead of typing a queued prompt into a busy agent.
+      this.scheduleQueuedPromptFlush(task);
     }
     return { queued: false };
+  }
+
+  /** A body whose Enter failed is still in the agent's input. Submit it instead of
+   *  typing the next prompt onto it; the queue flushes on the following ready prompt. */
+  private submitStrandedPrompt(task: CoordinatedTask, epoch: number): void {
+    try {
+      this.assertOrchestrationEnabled(epoch);
+      writeToAgent(task.agentId, '\r');
+    } catch (err) {
+      logWarn('coordinator.prompt_queue', 'Enter retry for an unsubmitted prompt failed', {
+        taskId: task.id,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
+    task.unsubmittedPrompt = false;
+    task.status = 'running';
+    // The ❯ that triggered this is stale; wait for a fresh one before the next prompt.
+    this.tailBuffers.set(task.agentId, '');
+    this.promptReadySeenAt.delete(task.id);
+    this.scheduleQueuedPromptFlush(task);
   }
 
   private async flushNextQueuedPrompt(task: CoordinatedTask): Promise<void> {
@@ -1669,6 +1771,10 @@ export class Coordinator {
     if (this.controlMap.get(task.id) === 'human') return;
     if (task.initialPrompt && !task.assignedPromptDelivered) return;
     if (this.writingPromptTaskIds.has(task.id)) return;
+    if (task.unsubmittedPrompt) {
+      this.submitStrandedPrompt(task, epoch);
+      return;
+    }
     const prompt = task.pendingPrompts?.shift();
     if (!prompt) {
       task.pendingPrompts = undefined;
@@ -1739,8 +1845,14 @@ export class Coordinator {
       await new Promise((r) => setTimeout(r, submitDelayMs));
       try {
         this.assertOrchestrationEnabled(epoch);
+      } catch (err) {
+        // Cancelled, not stranded: disabling orchestration discarded this prompt.
+        throw new PromptWriteError('Prompt Enter write failed', 'enter', err);
+      }
+      try {
         writeToAgent(task.agentId, '\r');
       } catch (err) {
+        task.unsubmittedPrompt = true;
         throw new PromptWriteError('Prompt Enter write failed', 'enter', err);
       }
       logInfo('coordinator.prompt_write', 'enter_written', {
@@ -1748,6 +1860,8 @@ export class Coordinator {
         agentId: task.agentId,
         delayMs: submitDelayMs,
       });
+      // A direct write's Enter also submits any body stranded before it.
+      task.unsubmittedPrompt = false;
       task.status = 'running';
       task.signalDoneAt = undefined;
       task.lastPromptEchoText = stripAnsi(prompt)
@@ -1791,7 +1905,26 @@ export class Coordinator {
     taskId: string,
     timeoutMs?: number,
   ): Promise<{ reason: 'idle' | 'human_control' | 'exited' | 'removed' }> {
-    return this.waitForIdleInternal(taskId, timeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS);
+    return this.waitForIdleInternal(
+      taskId,
+      clampWaitTimeoutMs(timeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS),
+    );
+  }
+
+  /** True while the initial assignment is queued or mid-write. Tasks created without a
+   *  prompt never have an assignment, though assignedPromptDelivered stays unset. */
+  private awaitingInitialPrompt(task: CoordinatedTask): boolean {
+    if (task.assignedPromptDelivered) return false;
+    return Boolean(task.initialPrompt) || this.writingPromptTaskIds.has(task.id);
+  }
+
+  private hasUndeliveredPrompt(task: CoordinatedTask): boolean {
+    return this.awaitingInitialPrompt(task) || this.hasQueuedWork(task);
+  }
+
+  /** Queued prompts, or a typed body still waiting for its Enter. */
+  private hasQueuedWork(task: CoordinatedTask): boolean {
+    return Boolean(task.pendingPrompts?.length) || task.unsubmittedPrompt === true;
   }
 
   private waitForIdleInternal(
@@ -1807,7 +1940,13 @@ export class Coordinator {
       return Promise.resolve({ reason: 'human_control' }); // resolve immediately — caller gets control-change event instead
     }
     if (task.status === 'exited') return Promise.resolve({ reason: 'exited' });
-    if (task.status === 'idle') return Promise.resolve({ reason: 'idle' });
+    // An errored task never reaches idle; 'exited' is the closest terminal reason.
+    if (task.status === 'error') return Promise.resolve({ reason: 'exited' });
+    // Idle only counts once the assignment was delivered and nothing is queued;
+    // otherwise the ❯ seen so far is the startup prompt, not finished work.
+    if (task.status === 'idle' && !this.hasUndeliveredPrompt(task)) {
+      return Promise.resolve({ reason: 'idle' });
+    }
 
     return this.waitForIdleResolver(taskId, timeoutMs);
   }
@@ -2148,11 +2287,13 @@ export class Coordinator {
     }
   }
 
-  /** Drop the per-agent output buffers (tail, bracketed-paste flag, decoder). */
+  /** Drop the per-agent output buffers (tail, bracketed-paste flag, decoder) and hook state. */
   private clearAgentBuffers(agentId: string): void {
     this.tailBuffers.delete(agentId);
     this.bracketedPasteAgentIds.delete(agentId);
     this.decoders.delete(agentId);
+    this.hookLiveAgentIds.delete(agentId);
+    this.interruptedAt.delete(agentId);
   }
 
   private clearAgentOutputState(task: CoordinatedTask): void {
@@ -2936,13 +3077,37 @@ export class Coordinator {
 
     this.tasks.delete(taskId);
     this.clearTaskControlState(taskId);
+    this.resolveSignalWaitersIfNoneRemain(task.coordinatorTaskId);
+  }
+
+  /** A removed child never signals; without this the last wait_for_signal_done
+   *  would sit until its timeout once nothing is left to wait for. */
+  private resolveSignalWaitersIfNoneRemain(coordinatorId: string): void {
+    if (this.countRemaining(coordinatorId) > 0) return;
+    const waiters = this.anySignalResolvers.get(coordinatorId);
+    if (!waiters?.length) return;
+    // Snapshot: each resolver splices itself out of the array.
+    for (const resolve of [...waiters]) resolve({ remaining: 0 });
   }
 
   /** `merged` says the task leaves because it was merged (for the renderer's
    *  Super Productivity note); a plain close or failed start passes nothing. */
-  private async cleanupTask(taskId: string, merged?: MergedLines): Promise<void> {
+  private cleanupTask(taskId: string, merged?: MergedLines): Promise<void> {
+    // Concurrent closes share one run so deleteTask is not issued twice.
+    const inFlight = this.cleanupsInFlight.get(taskId);
+    if (inFlight) return inFlight;
+    const run = this.cleanupTaskOnce(taskId, merged).finally(() => {
+      this.cleanupsInFlight.delete(taskId);
+    });
+    this.cleanupsInFlight.set(taskId, run);
+    return run;
+  }
+
+  private async cleanupTaskOnce(taskId: string, merged?: MergedLines): Promise<void> {
     const task = this.tasks.get(taskId);
     if (!task) return;
+    // An exit before this close was already reported; only one landing during it is new.
+    const exitedBeforeClose = task.status === 'exited';
     this.closingTaskIds.add(taskId);
     this.suppressPendingNotificationForTask(task, true);
 
@@ -2975,6 +3140,9 @@ export class Coordinator {
       console.warn('Failed to delete coordinated task worktree:', err);
       this.clearPromptDeliveryState(taskId);
       this.closingTaskIds.delete(taskId);
+      // The exit handler skips signal waiters while a task is closing, so an
+      // exit that landed during this attempt would otherwise leave them hanging.
+      if (!exitedBeforeClose && task.status === 'exited') this.deliverExitToSignalWaiter(task);
       this.notifyRenderer(IPC.MCP_TaskCleanupFailed, {
         taskId,
         error: err instanceof Error ? err.message : String(err),
@@ -2985,26 +3153,10 @@ export class Coordinator {
     // Clean up internal state — resolve idle and signal waiters before deleting
     // so callers don't hang until their own timeout fires.
     this.resolveIdleWaiters(taskId, 'exited');
-    const coordinatorId = task.coordinatorTaskId;
-    const anyResolvers = this.anySignalResolvers.get(coordinatorId);
     // Guard against double-resolve: the PTY exit handler (onPtyEvent 'exit') may have
     // already consumed a resolver if the process exited between killAgent and here.
     // reviewNotificationQueued is set by whichever path runs first.
-    const firstAnyResolver =
-      !task.reviewNotificationQueued && anyResolvers?.length ? anyResolvers.shift() : undefined;
-    if (firstAnyResolver) {
-      this.suppressPendingNotificationForTask(task);
-      task.reviewNotificationQueued = true;
-      const remaining = this.countRemaining(coordinatorId);
-      // Resolver `complete` from waitForSignalDone handles finishSignalWait.
-      firstAnyResolver({
-        taskId: task.id,
-        name: task.name,
-        status: 'exited',
-        signalDoneAt: new Date().toISOString(),
-        remaining,
-      });
-    }
+    if (!task.reviewNotificationQueued) this.deliverExitToSignalWaiter(task);
     this.clearAgentBuffers(task.agentId);
     this.clearTaskMcpConfig(task);
     this.tasks.delete(taskId);
@@ -3810,9 +3962,10 @@ export class Coordinator {
 
   waitForSignalDone(
     coordinatorTaskId: string,
-    timeoutMs = DEFAULT_WAIT_TIMEOUT_MS,
+    rawTimeoutMs = DEFAULT_WAIT_TIMEOUT_MS,
     requestId?: string,
   ): Promise<WaitForSignalDoneResult> {
+    const timeoutMs = clampWaitTimeoutMs(rawTimeoutMs);
     if (!this.coordinators.has(coordinatorTaskId)) {
       return Promise.reject(new Error(`Coordinator not found: ${coordinatorTaskId}`));
     }
@@ -3823,7 +3976,83 @@ export class Coordinator {
       const cached = this.recentlyDelivered.get(coordinatorTaskId, requestId);
       if (cached) return Promise.resolve(cached);
     }
-    // Return immediately if there's an unconsumed signal
+    // A retry with the same requestId means the original HTTP request is dead; its
+    // server-side waiter would otherwise swallow the next signal.
+    const requestKey = requestId ? `${coordinatorTaskId}\0${requestId}` : undefined;
+    const orphan = requestKey ? this.pendingSignalWaitsByRequest.get(requestKey) : undefined;
+    const immediate = this.takeImmediateSignalResult(coordinatorTaskId, requestId);
+    if (immediate) {
+      orphan?.();
+      return Promise.resolve(immediate);
+    }
+
+    // Take the new slot before releasing the orphan's so the count never touches 0.
+    this.beginSignalWait(coordinatorTaskId);
+    orphan?.();
+    logWarn('coordinator.signal_wait', 'wait_for_signal_done start', {
+      coordinatorTaskId,
+      activeWaitCount: this.activeSignalWaitCounts.get(coordinatorTaskId) ?? 0,
+      timeoutMs,
+    });
+
+    return new Promise((resolve) => {
+      const timerRef = { value: undefined as ReturnType<typeof setTimeout> | undefined };
+      let settled = false;
+
+      // Single termination path: timer cleanup, resolver removal, active-wait
+      // bookkeeping, replay-cache write, and promise resolution all happen here
+      // regardless of whether the result came from a signal, an exit, a
+      // coordinator close, or the timeout. Idempotent — repeated calls are a
+      // no-op so external callers can shift the resolver out before invoking.
+      const settle = (result: WaitForSignalDoneResult, superseded: boolean) => {
+        if (settled) return;
+        settled = true;
+        if (timerRef.value !== undefined) clearTimeout(timerRef.value);
+        if (requestKey && this.pendingSignalWaitsByRequest.get(requestKey) === supersede) {
+          this.pendingSignalWaitsByRequest.delete(requestKey);
+        }
+        const resolvers = this.anySignalResolvers.get(coordinatorTaskId);
+        if (resolvers) {
+          const idx = resolvers.indexOf(complete);
+          if (idx >= 0) resolvers.splice(idx, 1);
+        }
+        this.finishSignalWait(coordinatorTaskId);
+        // A superseded waiter must not poison the replay cache the retry relies on.
+        if (requestId && !superseded) {
+          this.recentlyDelivered.set(coordinatorTaskId, requestId, result);
+        }
+        resolve(result);
+      };
+      const complete = (result: WaitForSignalDoneResult) => settle(result, false);
+      const supersede = () => settle({ remaining: this.countRemaining(coordinatorTaskId) }, true);
+      if (requestKey) this.pendingSignalWaitsByRequest.set(requestKey, supersede);
+
+      timerRef.value = setTimeout(() => {
+        logWarn('coordinator.signal_wait', `wait_for_signal_done timed out after ${timeoutMs}ms`, {
+          coordinatorTaskId,
+          reason: 'timeout',
+          timeoutMs,
+          activeWaitCount: this.activeSignalWaitCounts.get(coordinatorTaskId) ?? 0,
+        });
+        const remaining = this.countRemaining(coordinatorTaskId);
+        complete({ remaining, timedOut: true });
+      }, timeoutMs);
+
+      let resolvers = this.anySignalResolvers.get(coordinatorTaskId);
+      if (!resolvers) {
+        resolvers = [];
+        this.anySignalResolvers.set(coordinatorTaskId, resolvers);
+      }
+      resolvers.push(complete);
+    });
+  }
+
+  /** Result for a wait that can be answered without waiting: an unconsumed signal,
+   *  or nothing left to wait for when automatic notifications are off. */
+  private takeImmediateSignalResult(
+    coordinatorTaskId: string,
+    requestId: string | undefined,
+  ): WaitForSignalDoneResult | undefined {
     for (const task of this.tasks.values()) {
       if (
         task.coordinatorTaskId === coordinatorTaskId &&
@@ -3850,7 +4079,7 @@ export class Coordinator {
           remaining,
         };
         if (requestId) this.recentlyDelivered.set(coordinatorTaskId, requestId, result);
-        return Promise.resolve(result);
+        return result;
       }
     }
 
@@ -3858,56 +4087,8 @@ export class Coordinator {
       this.coordinators.get(coordinatorTaskId)?.automaticNotifications === false &&
       this.countRemaining(coordinatorTaskId) === 0
     )
-      return Promise.resolve({ remaining: 0 });
-
-    this.beginSignalWait(coordinatorTaskId);
-    logWarn('coordinator.signal_wait', 'wait_for_signal_done start', {
-      coordinatorTaskId,
-      activeWaitCount: this.activeSignalWaitCounts.get(coordinatorTaskId) ?? 0,
-      timeoutMs,
-    });
-
-    return new Promise((resolve) => {
-      const timerRef = { value: undefined as ReturnType<typeof setTimeout> | undefined };
-      let settled = false;
-
-      // Single termination path: timer cleanup, resolver removal, active-wait
-      // bookkeeping, replay-cache write, and promise resolution all happen here
-      // regardless of whether the result came from a signal, an exit, a
-      // coordinator close, or the timeout. Idempotent — repeated calls are a
-      // no-op so external callers can shift the resolver out before invoking.
-      const complete = (result: WaitForSignalDoneResult) => {
-        if (settled) return;
-        settled = true;
-        if (timerRef.value !== undefined) clearTimeout(timerRef.value);
-        const resolvers = this.anySignalResolvers.get(coordinatorTaskId);
-        if (resolvers) {
-          const idx = resolvers.indexOf(complete);
-          if (idx >= 0) resolvers.splice(idx, 1);
-        }
-        this.finishSignalWait(coordinatorTaskId);
-        if (requestId) this.recentlyDelivered.set(coordinatorTaskId, requestId, result);
-        resolve(result);
-      };
-
-      timerRef.value = setTimeout(() => {
-        logWarn('coordinator.signal_wait', `wait_for_signal_done timed out after ${timeoutMs}ms`, {
-          coordinatorTaskId,
-          reason: 'timeout',
-          timeoutMs,
-          activeWaitCount: this.activeSignalWaitCounts.get(coordinatorTaskId) ?? 0,
-        });
-        const remaining = this.countRemaining(coordinatorTaskId);
-        complete({ remaining, timedOut: true });
-      }, timeoutMs);
-
-      let resolvers = this.anySignalResolvers.get(coordinatorTaskId);
-      if (!resolvers) {
-        resolvers = [];
-        this.anySignalResolvers.set(coordinatorTaskId, resolvers);
-      }
-      resolvers.push(complete);
-    });
+      return { remaining: 0 };
+    return undefined;
   }
 
   private countRemaining(coordinatorTaskId: string): number {

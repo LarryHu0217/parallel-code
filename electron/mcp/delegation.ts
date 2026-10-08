@@ -2,14 +2,13 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { realpath } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { Coordinator } from './coordinator.js';
 import type { CoordinatedTask } from './types.js';
 import { parseSignalDoneInput } from '../shared/completion-report.js';
 import { getAgentPromptReadiness, stripAnsi } from './prompt-detect.js';
 import { canConfigureCanvasMcp } from './canvas-config.js';
 import { validateBranchName } from './validation.js';
-import { getSkipPermissionsArgs } from '../shared/skip-permissions.js';
 import {
   MAX_COORDINATOR_CONCURRENT_TASKS,
   MIN_COORDINATOR_CONCURRENT_TASKS,
@@ -41,7 +40,14 @@ import type {
 
 const exec = promisify(execFile);
 const MAX_PROMPT_BYTES = 64 * 1024;
+// One sender may fill only a quarter of an inbox and a quarter of the global ceiling,
+// so a chatty agent cannot lock its peers out of a recipient or the project.
 const MAX_MESSAGES = 200;
+const MAX_WAITING_PER_PAIR = MAX_MESSAGES / 4;
+const MAX_WAITING_PER_SENDER = 500;
+const MAX_REQUESTS_PER_SENDER = 2000;
+const MAX_TOTAL_MESSAGES = 2000;
+const MAX_TOTAL_REQUESTS = 20000;
 const ID = /^[a-zA-Z0-9_-]{1,128}$/;
 // Peer text is untrusted; the envelope keeps it from reading as a user instruction.
 // Markers stay distinct on one line because the non-bracketed paste flattens newlines.
@@ -115,7 +121,13 @@ export class DelegationService {
   >();
   private readonly attempts = new Map<string, DelegationAttempt>();
   private readonly messages = new Map<string, PeerMessage>();
-  private readonly messageRequests = new Map<string, { payload: string; deliveryId: string }>();
+  /** sessionInstanceId → requestId → request. Keeps a payload hash, not the prompt,
+   *  so retained requests cost constant memory. */
+  private readonly messageRequests = new Map<
+    string,
+    Map<string, { payloadHash: string; deliveryId: string }>
+  >();
+  private messageRequestCount = 0;
   private readonly messageWaiters = new Set<() => void>();
   private readonly delivering = new Set<string>();
   private readonly readyMessages = new Map<string, { text: string; since: number }>();
@@ -378,10 +390,8 @@ export class DelegationService {
           `Parent has ${snapshot.changedFileCount} changed files. Review/commit first or explicitly use the last commit (${snapshot.headSha}).`,
         );
       const command = assignment.agentCommand ?? task.agentCommand;
-      const bypassFlags = new Set([...getSkipPermissionsArgs(command), '--yolo']);
-      const args = (assignment.agentArgs ?? task.agentArgs).filter(
-        (arg) => !bypassFlags.has(arg.split('=')[0]),
-      );
+      // createTask strips bypass flags itself unless permissions propagate.
+      const args = assignment.agentArgs ?? task.agentArgs;
       if (!canConfigureCanvasMcp(command, args))
         throw new DelegationError('Select a supported agent without custom MCP configuration');
       task.branchName = snapshot.branchName;
@@ -667,22 +677,37 @@ export class DelegationService {
     if (PEER_MARKER.test(prompt))
       throw new DelegationError('Prompt must not contain peer message markers');
     const requestId = id(params.requestId, 'requestId');
-    const key = `${caller.sessionInstanceId}:${requestId}`;
-    const payload = JSON.stringify([target.agentId, target.sessionInstanceId, prompt]);
-    const old = this.messageRequests.get(key);
+    const payloadHash = createHash('sha256')
+      .update(JSON.stringify([target.agentId, target.sessionInstanceId, prompt]))
+      .digest('base64');
+    const senderRequests = this.messageRequests.get(caller.sessionInstanceId);
+    const old = senderRequests?.get(requestId);
     if (old) {
-      if (old.payload !== payload)
+      if (old.payloadHash !== payloadHash)
         throw new DelegationError('Request ID reused with different content');
       const message = this.messages.get(old.deliveryId);
       if (!message) throw new DelegationError('Receipt expired; do not automatically resend', 410);
       return this.receipt(message);
     }
-    if (this.messageRequests.size >= 2000)
+    const messages = [...this.messages.values()];
+    const senderWaiting = messages.filter(
+      (entry) =>
+        entry.state === 'waiting' && entry.sender.sessionInstanceId === caller.sessionInstanceId,
+    );
+    const inbox = messages.filter((entry) => entry.recipient.taskId === target.taskId);
+    const pairWaiting = senderWaiting.filter((entry) => entry.recipient.taskId === target.taskId);
+    if (
+      (senderRequests?.size ?? 0) >= MAX_REQUESTS_PER_SENDER ||
+      this.messageRequestCount >= MAX_TOTAL_REQUESTS ||
+      senderWaiting.length >= MAX_WAITING_PER_SENDER ||
+      pairWaiting.length >= MAX_WAITING_PER_PAIR
+    )
       throw new DelegationError('Session message limit reached', 429);
-    if (this.messages.size >= MAX_MESSAGES) {
+    if (inbox.length >= MAX_MESSAGES || this.messages.size >= MAX_TOTAL_MESSAGES) {
       // Evict the oldest settled receipt, preferring acknowledged ones. Unacknowledged
       // failures go last but must not block every sender; only waiting messages do.
-      const settled = [...this.messages.values()].filter((entry) => entry.state !== 'waiting');
+      const candidates = inbox.length >= MAX_MESSAGES ? inbox : messages;
+      const settled = candidates.filter((entry) => entry.state !== 'waiting');
       const evicted = settled.find((entry) => !entry.deliveryFailed) ?? settled[0];
       if (!evicted) throw new DelegationError('Incoming message queue is full', 429);
       this.messages.delete(evicted.deliveryId);
@@ -697,7 +722,10 @@ export class DelegationService {
       state: 'waiting',
     };
     this.messages.set(message.deliveryId, message);
-    this.messageRequests.set(key, { payload, deliveryId: message.deliveryId });
+    const requests = senderRequests ?? new Map();
+    requests.set(requestId, { payloadHash, deliveryId: message.deliveryId });
+    this.messageRequests.set(caller.sessionInstanceId, requests);
+    this.messageRequestCount++;
     this.messageChanged(message);
     return this.receipt(message);
   }
@@ -717,8 +745,10 @@ export class DelegationService {
   expireMessages(): void {
     const sessions = this.options.sessions();
     const liveInstances = new Set(sessions.map((session) => session.sessionInstanceId));
-    for (const key of this.messageRequests.keys()) {
-      if (!liveInstances.has(key.split(':')[0])) this.messageRequests.delete(key);
+    for (const [instance, requests] of this.messageRequests) {
+      if (liveInstances.has(instance)) continue;
+      this.messageRequestCount -= requests.size;
+      this.messageRequests.delete(instance);
     }
     for (const message of this.messages.values()) {
       if (

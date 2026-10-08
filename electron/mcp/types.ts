@@ -43,6 +43,8 @@ export interface CoordinatedTask {
   landedMetadata?: LandedMetadata;
   // Coordinator notification lifecycle flags
   assignedPromptDelivered?: boolean;
+  /** A prompt body was typed but its Enter failed; submit it before the next prompt. */
+  unsubmittedPrompt?: boolean;
   // Ignore the prompt that was already visible when a coordinator-delivered prompt was sent.
   suppressIdleUntil?: number;
   lastPromptEchoText?: string;
@@ -197,11 +199,6 @@ export interface ApiMergeResult {
   mainBranch: string;
   linesAdded: number;
   linesRemoved: number;
-}
-
-export interface ApiReviewAndMergeResult {
-  diff: ApiDiffResult;
-  merge: ApiMergeResult;
 }
 
 export interface ApiLandSelfResult extends ApiMergeResult {

@@ -7,6 +7,7 @@ import { invoke } from '../lib/ipc';
 import { setStore, store } from '../store/core';
 import type { Task } from '../store/types';
 import { DelegationPanel } from './DelegationPanel';
+import { SubTaskStrip } from './SubTaskStrip';
 import { DelegationReviewDialog } from './DelegationReviewDialog';
 import { setDelegationStates, canUsePeerComposer, usePeerComposer } from '../store/delegation';
 
@@ -101,74 +102,95 @@ it.each(['delegationParent', 'coordinatorMode'] as const)(
     setStore('tasks', 'parent', parentFlag, true);
     setStore('tasks', 'parent', 'maxConcurrentTasks', 6);
     dispose = render(() => <DelegationPanel task={store.tasks.parent} />, host);
-    expect(host.textContent).toContain('0 child task(s)');
+    expect(host.textContent).toContain('0 subtasks');
     expect(host.querySelector<HTMLInputElement>('input[type="number"]')?.value).toBe('6');
   },
 );
 
-it('reviews and manually copies held messages without touching drafts or sending terminal input', async () => {
-  const sender = {
-    agentId: 'sender',
-    sessionInstanceId: 'sender-instance',
-    taskId: 'other',
-    name: 'Other task',
-    agentLabel: 'Claude',
-    branchName: 'other',
-    status: 'running',
-  };
-  state.messages = [
-    {
-      deliveryId: 'delivery',
-      sender,
-      recipient: {
-        ...sender,
+it.each(['Please inspect this patch', 'Please inspect this patch. '.repeat(12)])(
+  'copies queued messages without changing delivery or drafts (%s)',
+  async (prompt) => {
+    const sender = {
+      agentId: 'sender',
+      sessionInstanceId: 'sender-instance',
+      taskId: 'other',
+      name: 'Other task',
+      agentLabel: 'Claude',
+      branchName: 'other',
+      status: 'running',
+    };
+    state.messages = [
+      {
+        deliveryId: 'delivery',
+        sender,
+        recipient: {
+          ...sender,
+          agentId: 'agent',
+          sessionInstanceId: 'exact-instance',
+          taskId: 'parent',
+          name: 'Parent',
+        },
+        prompt,
+        state: 'waiting',
+        createdAt: new Date().toISOString(),
+      },
+    ];
+    setStore('tasks', 'parent', 'stagedNotification', {
+      batchId: 'summary',
+      notificationIds: ['child-result'],
+      text: 'Result ready',
+      autoFireAt: 0,
+      userEdited: false,
+    });
+    const copy = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: copy },
+    });
+    dispose = render(() => <DelegationPanel task={store.tasks.parent} />, host);
+    await vi.waitFor(() => expect(button('Copy text')).toBeDefined());
+    const sections = [...host.querySelectorAll('details')];
+    expect(sections).toHaveLength(2);
+    expect(sections.every((section) => !section.open)).toBe(true);
+    expect(sections[0].querySelector('summary')?.textContent).toContain('Subtask updates (1)');
+    expect(sections[1].querySelector('summary')?.textContent).toContain('Queued messages (1)');
+    sections[1].open = true;
+    if (prompt.length > 180) {
+      expect(host.querySelector('article p')?.textContent).toBe(prompt.slice(0, 180) + '…');
+      button('Show full message')?.click();
+      expect(host.querySelector('article p')?.textContent).toBe(prompt);
+      button('Show less')?.click();
+      expect(host.querySelector('article p')?.textContent).toBe(prompt.slice(0, 180) + '…');
+    } else {
+      expect(button('Show full message')).toBeUndefined();
+    }
+    expect(vi.mocked(invoke).mock.calls.some(([, args]) => args?.action === 'handleMessage')).toBe(
+      false,
+    );
+    button('Copy text')?.click();
+    await vi.waitFor(() => expect(copy).toHaveBeenCalledWith(prompt));
+    expect(vi.mocked(invoke).mock.calls.some(([, args]) => args?.action === 'handleMessage')).toBe(
+      false,
+    );
+    await vi.waitFor(() => expect(button('Cancel delivery')?.disabled).toBe(false));
+    expect(host.querySelector('[role="status"]')?.textContent).toContain('Delivery remains queued');
+    button('Cancel delivery')?.click();
+    await vi.waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith(IPC.DelegationRequest, {
+        action: 'handleMessage',
+        deliveryId: 'delivery',
         agentId: 'agent',
         sessionInstanceId: 'exact-instance',
-        taskId: 'parent',
-        name: 'Parent',
-      },
-      prompt: 'Please inspect this patch',
-      state: 'waiting',
-      createdAt: new Date().toISOString(),
-    },
-  ];
-  setStore('tasks', 'parent', 'stagedNotification', {
-    batchId: 'summary',
-    notificationIds: ['child-result'],
-    text: 'Result ready',
-    autoFireAt: 0,
-    userEdited: false,
-  });
-  const copy = vi.fn(async () => undefined);
-  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: copy } });
-  dispose = render(() => <DelegationPanel task={store.tasks.parent} />, host);
-  await vi.waitFor(() => expect(button('Copy for manual handling')).toBeDefined());
-  const sections = [...host.querySelectorAll('details')];
-  expect(sections).toHaveLength(2);
-  expect(sections.every((section) => !section.open)).toBe(true);
-  expect(sections[0].querySelector('summary')?.textContent).toContain('Child updates (1)');
-  expect(sections[1].querySelector('summary')?.textContent).toContain('Incoming messages (1)');
-  sections[1].open = true;
-  button('Review')?.click();
-  expect(vi.mocked(invoke).mock.calls.some(([, args]) => args?.action === 'handleMessage')).toBe(
-    false,
-  );
-  button('Copy for manual handling')?.click();
-  await vi.waitFor(() =>
-    expect(invoke).toHaveBeenCalledWith(IPC.DelegationRequest, {
-      action: 'handleMessage',
-      deliveryId: 'delivery',
-      agentId: 'agent',
-      sessionInstanceId: 'exact-instance',
-      state: 'handled',
-    }),
-  );
-  expect(copy).toHaveBeenCalledWith('Please inspect this patch');
-  expect(store.tasks.parent.promptDraft).toBe('Keep my draft');
-  expect(vi.mocked(invoke).mock.calls.every(([channel]) => channel !== IPC.WriteToAgent)).toBe(
-    true,
-  );
-});
+        state: 'closed',
+      }),
+    );
+    expect(copy).toHaveBeenCalledWith(prompt);
+    expect(store.tasks.parent.promptDraft).toBe('Keep my draft');
+    expect(vi.mocked(invoke).mock.calls.every(([channel]) => channel !== IPC.WriteToAgent)).toBe(
+      true,
+    );
+  },
+);
 
 it('changes the child limit only after the backend accepts it', async () => {
   setStore('tasks', 'parent', 'delegationParent', true);
@@ -332,9 +354,8 @@ it('uses only the exact recipient empty composer and marks handling without send
     ),
     host,
   );
-  await vi.waitFor(() => expect(button('Review')).toBeDefined());
-  expect(button('Use in composer')).toBeUndefined();
-  button('Review')?.click();
+  await vi.waitFor(() => expect(button('Use in composer')).toBeDefined());
+  expect(button('Show full message')).toBeUndefined();
   button('Use in composer')?.click();
   await vi.waitFor(() => expect(untrack(text)).toBe(message.prompt));
   expect(invoke).toHaveBeenCalledWith(IPC.DelegationRequest, {
@@ -386,7 +407,48 @@ it('respects explicit automatic update policy over the legacy mode marker', () =
     },
   });
   dispose = render(() => <DelegationPanel task={store.tasks.parent} />, host);
-  expect(host.textContent).toContain('ready for review');
+  expect(host.textContent).toContain('Subtask updates');
   setStore('tasks', 'parent', 'autoSendChildUpdates', true);
-  expect(host.textContent).not.toContain('ready for review');
+  expect(host.textContent).not.toContain('Subtask updates');
+});
+
+it('marks only the displayed summary batch read without approving a merge', async () => {
+  setStore('tasks', 'parent', 'stagedNotification', {
+    batchId: 'summary-batch',
+    notificationIds: ['child-result'],
+    text: 'Result ready',
+    autoFireAt: 0,
+    userEdited: false,
+  });
+  dispose = render(() => <DelegationPanel task={store.tasks.parent} />, host);
+  button('Mark read')?.click();
+  await vi.waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith(IPC.MCP_CoordinatorNotificationAck, {
+      coordinatorTaskId: 'parent',
+      batchId: 'summary-batch',
+    }),
+  );
+  expect(vi.mocked(invoke).mock.calls.some(([, args]) => args?.action === 'merge')).toBe(false);
+});
+
+it.each([
+  ['landing_failed', 'Merge failed'],
+  ['landing_escalated', 'Merge needs attention'],
+  ['landed_cleanup_failed', 'Merged · cleanup failed'],
+  ['landed_pending_review', 'Merged · review pending'],
+  ['reviewed', 'Merged'],
+] as const)('shows %s explicitly in the subtask strip', (landingState, label) => {
+  setStore('tasks', 'child', {
+    ...task,
+    id: 'child',
+    name: 'Child',
+    coordinatedBy: 'parent',
+    landingState,
+    agentIds: [],
+  });
+  setStore('taskOrder', ['parent', 'child']);
+  dispose = render(() => <SubTaskStrip coordinatorTaskId="parent" />, host);
+  const childButton = button('Child');
+  expect(childButton?.textContent).toContain(label);
+  expect(childButton?.querySelector('svg')).toBeNull();
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getSkipPermissionsArgs } from './skip-permissions.js';
+import { getSkipPermissionsArgs, stripPermissionBypassArgs } from './skip-permissions.js';
 
 describe('getSkipPermissionsArgs', () => {
   it('answers for each built-in agent that takes a flag', () => {
@@ -55,5 +55,115 @@ describe('getSkipPermissionsArgs', () => {
     first.push('--mutated');
 
     expect(getSkipPermissionsArgs('claude')).toEqual(['--dangerously-skip-permissions']);
+  });
+});
+
+describe('stripPermissionBypassArgs', () => {
+  it('drops bare bypass flags, including equivalents of the launch flag', () => {
+    expect(
+      stripPermissionBypassArgs('claude', [
+        '--allow-dangerously-skip-permissions',
+        '--model',
+        'x',
+        '--dangerously-skip-permissions',
+      ]),
+    ).toEqual(['--model', 'x']);
+    expect(stripPermissionBypassArgs('gemini', ['-y', '--yolo', '-m', 'a'])).toEqual(['-m', 'a']);
+    expect(stripPermissionBypassArgs('copilot', ['--allow-all', '--allow-all-tools'])).toEqual([]);
+  });
+
+  it('drops dangerous values in both spaced and = forms and keeps safe ones', () => {
+    expect(
+      stripPermissionBypassArgs('claude', ['--permission-mode', 'bypassPermissions', '--verbose']),
+    ).toEqual(['--verbose']);
+    expect(stripPermissionBypassArgs('claude', ['--permission-mode=bypassPermissions'])).toEqual(
+      [],
+    );
+    expect(stripPermissionBypassArgs('claude', ['--permission-mode', 'plan'])).toEqual([
+      '--permission-mode',
+      'plan',
+    ]);
+    expect(
+      stripPermissionBypassArgs('codex', ['-s', 'danger-full-access', '-a', 'never', 'go']),
+    ).toEqual(['go']);
+    expect(stripPermissionBypassArgs('codex', ['--sandbox=danger-full-access'])).toEqual([]);
+    expect(stripPermissionBypassArgs('codex', ['-s', 'workspace-write'])).toEqual([
+      '-s',
+      'workspace-write',
+    ]);
+    expect(stripPermissionBypassArgs('gemini', ['--approval-mode', 'yolo'])).toEqual([]);
+  });
+
+  it('drops codex aliases, attached short values and config overrides', () => {
+    expect(stripPermissionBypassArgs('codex', ['--yolo', 'go'])).toEqual(['go']);
+    expect(
+      stripPermissionBypassArgs('codex', ['-sdanger-full-access', '-s=danger-full-access']),
+    ).toEqual([]);
+    expect(stripPermissionBypassArgs('codex', ['-anever', '-a=never', '-auntrusted'])).toEqual([
+      '-auntrusted',
+    ]);
+    expect(
+      stripPermissionBypassArgs('codex', [
+        '-c',
+        'approval_policy="never"',
+        '--config=sandbox_mode=danger-full-access',
+        '-c',
+        'model="o3"',
+        '-c',
+        'sandbox_mode=read-only',
+      ]),
+    ).toEqual(['-c', 'model="o3"', '-c', 'sandbox_mode=read-only']);
+    expect(
+      stripPermissionBypassArgs('codex', [
+        '-c',
+        'approval_policy="never" # c',
+        '-c',
+        'approval_policy="""never"""',
+        '-c',
+        "approval_policy = 'never'",
+      ]),
+    ).toEqual([]);
+  });
+
+  it('drops profile-scoped codex overrides and hook-trust bypass', () => {
+    expect(
+      stripPermissionBypassArgs('codex', [
+        '-c',
+        'profiles.fast.approval_policy=never',
+        '--dangerously-bypass-hook-trust',
+        '-c',
+        'profiles.fast.model=o3',
+      ]),
+    ).toEqual(['-c', 'profiles.fast.model=o3']);
+  });
+
+  it('drops the camelCase gemini approval mode', () => {
+    expect(
+      stripPermissionBypassArgs('gemini', ['--approvalMode', 'yolo', '--approvalMode=yolo']),
+    ).toEqual([]);
+  });
+
+  it('drops claude settings that enable bypass mode', () => {
+    expect(
+      stripPermissionBypassArgs('claude', [
+        '--settings',
+        '{"permissions":{"defaultMode":"bypassPermissions"}}',
+        '--settings',
+        'team.json',
+      ]),
+    ).toEqual(['--settings', 'team.json']);
+  });
+
+  it('matches on basename and strips the union for unknown commands', () => {
+    expect(stripPermissionBypassArgs('/opt/bin/codex', ['--yolo'])).toEqual([]);
+    expect(stripPermissionBypassArgs('/opt/bin/claude', ['-y'])).toEqual(['-y']);
+    expect(stripPermissionBypassArgs('my-wrapper', ['--yolo', '-a', 'never', 'x'])).toEqual(['x']);
+  });
+
+  it('keeps a wrapper short flag such as npx -y but strips the wrapped agent one', () => {
+    expect(stripPermissionBypassArgs('npx', ['-y', '@google/gemini-cli', '-y', '--yolo'])).toEqual([
+      '-y',
+      '@google/gemini-cli',
+    ]);
   });
 });

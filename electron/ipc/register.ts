@@ -83,7 +83,11 @@ import type { MindMapDocument, MindMapUpdate } from '../shared/mindmap.js';
 import type { CanvasView } from '../shared/canvas-view.js';
 import type { AgentTourPayload } from '../shared/agent-tour.js';
 import type { EvidenceSubmission } from '../shared/evidence.js';
-import { buildMcpLaunchArgs } from '../mcp/agent-args.js';
+import {
+  buildMcpLaunchArgs,
+  isCodexCommand,
+  type ParallelCodeMcpConfig,
+} from '../mcp/agent-args.js';
 import {
   getSymlinkCandidates,
   getMainBranch,
@@ -116,7 +120,7 @@ import {
   getUncommittedChangedFiles,
   getUncommittedFileDiffs,
 } from './git.js';
-import { createTask, deleteTask } from './tasks.js';
+import { createPrTask, createTask, deleteTask } from './tasks.js';
 import { settleWorktreeIntents } from './worktree-intents.js';
 import { windowNotifier } from './window-notifier.js';
 import { createMcpRuntime } from './mcp-runtime.js';
@@ -162,6 +166,7 @@ import {
 } from './validate.js';
 import { registerDocumentHandlers } from '../documents/register.js';
 import { registerSuperProductivityHandlers } from '../super-productivity/register.js';
+import { registerGitHubHandlers } from '../github/register.js';
 import { listSessionsForCwd } from '../sessions/scan.js';
 import { validateBranchName as sharedValidateBranchName, validateUUID } from '../mcp/validation.js';
 import { debug as logDebug, warn as logWarn, errMessage } from '../log.js';
@@ -230,6 +235,33 @@ function isMissingCommandError(err: unknown, command: string): boolean {
   return (
     e.path === command || (typeof e.syscall === 'string' && e.syscall.includes(`spawn ${command}`))
   );
+}
+
+/** The file is absent in Docker mode or after a prior cleanup; any other failure is logged. */
+export function removeCoordinatorTempConfig(file: string): void {
+  try {
+    fs.unlinkSync(file);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT')
+      logWarn('mcp', `Could not remove coordinator MCP config: ${errMessage(err)}`);
+  }
+}
+
+/** Codex takes inline config in argv, which any local user can read via `ps`; point it at the
+ *  0600 config file for the token instead (Docker has no host-readable file, so it stays inline). */
+export function buildCoordinatorLaunchArgs(
+  command: string,
+  configPath: string | undefined,
+  config: ParallelCodeMcpConfig,
+): string[] {
+  if (!configPath || !isCodexCommand(command))
+    return buildMcpLaunchArgs(command, configPath, config);
+  const server = config.mcpServers['parallel-code'];
+  return buildMcpLaunchArgs(command, configPath, {
+    mcpServers: {
+      'parallel-code': { ...server, args: [...server.args, '--token-file', configPath], env: {} },
+    },
+  });
 }
 
 /** An empty string is allowed: it clears the command on an already-registered coordinator. */
@@ -939,6 +971,27 @@ export function registerAllHandlers(win: BrowserWindow): void {
       });
     return result;
   });
+  ipcMain.handle(IPC.CreatePrTask, (_e, args) => {
+    assertString(args.name, 'name');
+    validatePath(args.projectRoot, 'projectRoot');
+    assertStringArray(args.symlinkDirs, 'symlinkDirs');
+    assertOptionalString(args.branchPrefix, 'branchPrefix');
+    if (!Number.isInteger(args.prNumber) || args.prNumber <= 0) {
+      throw new Error('prNumber must be a positive integer');
+    }
+    const result = createPrTask(
+      args.projectRoot,
+      args.prNumber,
+      args.symlinkDirs,
+      args.branchPrefix ?? 'task',
+    );
+    result
+      .then((r: { id: string }) => taskNames.set(r.id, args.name))
+      .catch((err: unknown) => {
+        logWarn('tasks', 'createPrTask resolution failed', { err: errMessage(err) });
+      });
+    return result;
+  });
   ipcMain.handle(IPC.DeleteTask, async (_e, args) => {
     assertStringArray(args.agentIds, 'agentIds');
     validatePath(args.projectRoot, 'projectRoot');
@@ -1402,6 +1455,7 @@ export function registerAllHandlers(win: BrowserWindow): void {
 
   registerDocumentHandlers(win);
   registerSuperProductivityHandlers();
+  registerGitHubHandlers();
 
   // --- File links ---
   ipcMain.handle(IPC.OpenPath, (_e, args) => {
@@ -1887,18 +1941,13 @@ export function registerAllHandlers(win: BrowserWindow): void {
     ipcMain.handle(
       IPC.MCP_CoordinatorDeregistered,
       async (_e, args: { coordinatorTaskId: string }) => {
-        assertString(args.coordinatorTaskId, 'coordinatorTaskId');
+        // Validate before the ID is joined into a temp path below (traversal).
+        validateUUID(args.coordinatorTaskId, 'coordinatorTaskId');
         mcp.coordinator()?.deregisterCoordinator(args.coordinatorTaskId);
         // Clean up the host-temp MCP config file written by StartMCPServer (non-Docker only).
-        const tempConfigPath = path.join(
-          app.getPath('temp'),
-          `parallel-code-mcp-${args.coordinatorTaskId}.json`,
+        removeCoordinatorTempConfig(
+          path.join(app.getPath('temp'), `parallel-code-mcp-${args.coordinatorTaskId}.json`),
         );
-        try {
-          fs.unlinkSync(tempConfigPath);
-        } catch {
-          /* file may not exist in Docker mode or after prior cleanup */
-        }
         // Stop the remote server when the last coordinator exits if:
         // - MCP started the server and user hasn't separately requested manual access, OR
         // - the user explicitly requested stop while coordinator was active (pendingStop)
@@ -2119,6 +2168,13 @@ export function registerAllHandlers(win: BrowserWindow): void {
       if (!server) throw new Error('MCP transport unavailable.');
 
       const hostServerPath = hostMcpServerPath();
+      // Warn only: the agent CLI spawns this file later, so a missing bundle would
+      // otherwise surface as an opaque "MCP server failed to start" in the agent.
+      if (!fs.existsSync(hostServerPath))
+        logWarn(
+          'mcp',
+          `MCP server bundle not found at ${hostServerPath}; agent MCP tools will fail`,
+        );
 
       // In Docker mode the server is copied into the worktree so the container can reach it.
       // Compute the destination path now (pure, no side effects) so we can build mcpConfig
@@ -2232,7 +2288,7 @@ export function registerAllHandlers(win: BrowserWindow): void {
         lastMcpConfigPath = configPath;
         console.warn('[MCP] Config written to:', configPath);
       }
-      const mcpLaunchArgs = buildMcpLaunchArgs(
+      const mcpLaunchArgs = buildCoordinatorLaunchArgs(
         args.agentCommand ?? 'claude',
         configPath,
         mcpConfig,
@@ -2260,7 +2316,8 @@ export function registerAllHandlers(win: BrowserWindow): void {
     // server connects to is running — if it's up, MCP tools should work.
     const server = transport.current();
     return {
-      running: server !== null,
+      // A phone-only remote server is not MCP: require an active coordinator too.
+      running: server !== null && mcp.coordinator()?.hasActiveCoordinator() === true,
       port: server?.port ?? null,
       // TODO: Surface this from the coordinator map if the UI needs it.
       coordinatorTaskId: null,

@@ -2423,6 +2423,11 @@ html:is(
   transform: scale(0.98);
 }
 
+.github-item-option:hover,
+.github-item-option:focus-visible {
+  background: var(--bg-hover) !important;
+}
+
 .btn-secondary:hover {
   background: color-mix(in srgb, var(--accent) 8%, var(--bg-hover)) !important;
   border-color: color-mix(in srgb, var(--accent) 45%, var(--border)) !important;

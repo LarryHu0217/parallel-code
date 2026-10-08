@@ -1020,6 +1020,57 @@ describe('legacy HTTP completion handoffs', () => {
     expect(coord.signalDone).not.toHaveBeenCalled();
   });
 
+  it.each(['merge', 'review-merge'])('rejects malformed JSON on %s', async (action) => {
+    const response = await httpRequest(
+      'POST',
+      `/api/tasks/${taskA.id}/${action}`,
+      undefined,
+      COORD_A,
+      '{"squash":',
+    );
+    expect(response.status).toBe(400);
+    expect(coord.mergeTask).not.toHaveBeenCalled();
+  });
+
+  it.each(['null', '[]', '42'])('rejects non-object JSON body %s on wait routes', async (body) => {
+    for (const path of ['/api/wait-signal', `/api/tasks/${taskA.id}/wait`]) {
+      const response = await httpRequest('POST', path, undefined, COORD_A, body);
+      expect(response.status).toBe(400);
+    }
+    expect(coord.waitForSignalDone).not.toHaveBeenCalled();
+    expect(coord.waitForIdle).not.toHaveBeenCalled();
+  });
+
+  it.each([0, -5, 'soon'])('rejects timeoutMs=%j on wait routes', async (timeoutMs) => {
+    for (const path of ['/api/wait-signal', `/api/tasks/${taskA.id}/wait`]) {
+      const response = await post(path, { timeoutMs }, COORD_A);
+      expect(response.status).toBe(400);
+    }
+    expect(coord.waitForSignalDone).not.toHaveBeenCalled();
+    expect(coord.waitForIdle).not.toHaveBeenCalled();
+  });
+
+  it('caps oversized timeoutMs on wait routes', async () => {
+    const response = await post('/api/wait-signal', { timeoutMs: 1e15 }, COORD_A);
+    expect(response.status).toBe(200);
+    expect(coord.waitForSignalDone).toHaveBeenCalledWith(COORD_A, 2 ** 31 - 1, undefined);
+  });
+
+  it('rejects a coordinator agent token passed in the query string', async () => {
+    const response = await new Promise<number>((resolve, reject) => {
+      http
+        .get(
+          { hostname: '127.0.0.1', port: serverPort, path: `/api/tasks?token=${serverToken}` },
+          (res) => {
+            res.resume();
+            resolve(res.statusCode ?? 0);
+          },
+        )
+        .on('error', reject);
+    });
+    expect(response).toBe(401);
+  });
+
   it('denies publication if the done token changes during capture', async () => {
     const doneToken = vi.spyOn(coord, 'getTaskDoneToken');
     const publish = vi.fn();

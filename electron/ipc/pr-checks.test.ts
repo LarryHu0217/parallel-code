@@ -199,6 +199,7 @@ describe('fetchPrStatus', () => {
       headRefOid: 'abc123',
       isDraft: true,
       reviewDecision: 'CHANGES_REQUESTED',
+      mergeable: 'CONFLICTING',
       statusCheckRollup: [
         { name: 'build', status: 'COMPLETED', conclusion: 'SUCCESS' },
         { name: 'lint', status: 'IN_PROGRESS', conclusion: null },
@@ -214,11 +215,14 @@ describe('fetchPrStatus', () => {
     expect(calls.length).toBe(1);
     expect(calls[0][0]).toBe('pr');
     expect(calls[0][1]).toBe('view');
-    expect(calls[0]).toContain('state,headRefOid,isDraft,reviewDecision,statusCheckRollup');
+    expect(calls[0]).toContain(
+      'state,headRefOid,isDraft,reviewDecision,mergeable,statusCheckRollup',
+    );
     expect(out.state).toBe('OPEN');
     expect(out.headRefOid).toBe('abc123');
     expect(out.isDraft).toBe(true);
     expect(out.reviewDecision).toBe('CHANGES_REQUESTED');
+    expect(out.mergeable).toBe('CONFLICTING');
     expect(out.checks).toEqual([
       { name: 'build', bucket: 'pass' },
       { name: 'lint', bucket: 'pending' },
@@ -237,6 +241,7 @@ describe('fetchPrStatus', () => {
       headRefOid: '',
       isDraft: false,
       reviewDecision: null,
+      mergeable: 'UNKNOWN',
       checks: [],
     });
   });

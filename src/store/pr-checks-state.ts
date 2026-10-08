@@ -7,6 +7,7 @@ export interface PrChecksState {
   reviewDecision?: PrChecksUpdatePayload['reviewDecision'];
   /** The PR was merged on GitHub; the main process no longer watches it. */
   merged?: boolean;
+  mergeable?: PrChecksUpdatePayload['mergeable'];
   passing: number;
   pending: number;
   failing: number;

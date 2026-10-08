@@ -695,6 +695,16 @@ describe('automatic peer delivery', () => {
     return { sender, recipient, receipt, deliver };
   }
 
+  /** Fills the queued() recipient's inbox with waiting messages from four senders,
+   *  since one sender may hold only a quarter of it. */
+  async function fillInbox(sender: SessionCaller, recipient: SessionCaller) {
+    for (let i = 1; i < 50; i++) await send(sender, recipient, `m${i}`);
+    for (const name of ['s1', 's2', 's3']) {
+      await register(name);
+      for (let i = 0; i < 50; i++) await send(session(name), recipient, `${name}-${i}`);
+    }
+  }
+
   it('waits for a stable ready prompt, submits once, and reports a delivered receipt', async () => {
     vi.useFakeTimers();
     const { sender, receipt, deliver } = await queued();
@@ -768,8 +778,39 @@ describe('automatic peer delivery', () => {
 
   it('still rejects sends while the cap is full of undelivered messages', async () => {
     const { sender, recipient } = await queued();
-    for (let i = 1; i < 200; i++) await send(sender, recipient, `m${i}`);
-    await expect(send(sender, recipient, 'overflow')).rejects.toThrow('queue is full');
+    await fillInbox(sender, recipient);
+    await expect(send(session('s1'), recipient, 'overflow')).rejects.toThrow('limit reached');
+    await register('fresh');
+    await expect(send(session('fresh'), recipient, 'overflow')).rejects.toThrow('queue is full');
+  });
+
+  it('keeps accepting sends to other recipients when one inbox is full', async () => {
+    const { sender, recipient } = await queued();
+    await register('other');
+    await fillInbox(sender, recipient);
+    await register('fresh');
+    await expect(send(session('fresh'), recipient, 'overflow')).rejects.toThrow('queue is full');
+    const other = await send(session('fresh'), session('other'), 'to-other');
+    expect(other.state).toBe('waiting');
+  });
+
+  it('stops one sender from filling a recipient inbox others still reach', async () => {
+    const { sender, recipient } = await queued();
+    for (let i = 1; i < 50; i++) await send(sender, recipient, `m${i}`);
+    await expect(send(sender, recipient, 'over')).rejects.toThrow('limit reached');
+    await register('peer');
+    await expect(send(session('peer'), recipient, 'fair')).resolves.toMatchObject({
+      state: 'waiting',
+    });
+  });
+
+  it('caps the waiting messages of one sender across recipients', async () => {
+    const { sender } = await queued();
+    const recipients = Array.from({ length: 10 }, (_, i) => `r${i}`);
+    for (const name of recipients) await register(name);
+    // 1 already queued by the fixture, then 499 spread at under 50 per recipient.
+    for (let i = 1; i < 500; i++) await send(sender, session(recipients[i % 10]), `m${i}`);
+    await expect(send(sender, session('r0'), 'over')).rejects.toThrow('limit reached');
   });
 
   it('resets stability on output changes and waits behind coordinator prompts', async () => {

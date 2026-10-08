@@ -8,6 +8,8 @@ import { IPC } from '../../electron/ipc/channels';
 import type { CommitInfo } from '../ipc/types';
 import { invoke } from '../lib/ipc';
 import {
+  store,
+  uncollapseTask,
   openCanvasReasoning,
   openCanvasMindMap,
   activateCanvasTab,
@@ -30,6 +32,8 @@ const fileInventory = vi.hoisted(() => ({
   disposals: 0,
 }));
 
+const parentNavigation = vi.hoisted(() => ({ setCollapsed: (_value: boolean) => {} }));
+
 const channels = vi.hoisted(
   () =>
     [] as {
@@ -41,6 +45,7 @@ const channels = vi.hoisted(
 vi.mock('../store/store', () => {
   const [store, setStore] = createStore({
     activeTaskId: 'other-task',
+    tasks: { parent: { id: 'parent', name: 'Parent task', collapsed: false } },
     focusMode: false,
     themePreset: 'obsidian',
     showPlans: true,
@@ -51,6 +56,8 @@ vi.mock('../store/store', () => {
     askCodeProvider: 'minimax',
     agentEnvFiles: {},
   });
+  parentNavigation.setCollapsed = (value: boolean) =>
+    setStore('tasks', 'parent', 'collapsed', value);
   return {
     store,
     getProject: () => undefined,
@@ -76,6 +83,7 @@ vi.mock('../store/store', () => {
     triggerFocus: vi.fn(),
     setActiveTask: (id: string) => setStore('activeTaskId', id),
     activateTaskFromPointer: (id: string) => setStore('activeTaskId', id),
+    uncollapseTask: vi.fn(),
     toggleFocusMode: (on?: boolean) => setStore('focusMode', on ?? !store.focusMode),
   };
 });
@@ -689,4 +697,33 @@ it.each([
   expect(diff().dataset.file).toBe('src/earlier.ts');
   expect(diff().dataset.commit).toBe('all');
   expect(container.querySelector('.test-evidence-review')).toBeNull();
+});
+
+it.each([false, true])('labels parent navigation explicitly when collapsed=%s', (collapsed) => {
+  parentNavigation.setCollapsed(collapsed);
+  vi.mocked(uncollapseTask).mockClear();
+  const task: Task = {
+    id: 'task',
+    name: 'Child',
+    projectId: 'project',
+    agentIds: [],
+    shellAgentIds: [],
+    notes: '',
+    gitIsolation: 'worktree',
+    branchName: 'child',
+    worktreePath: '/tmp/child',
+    lastPrompt: '',
+    coordinatedBy: 'parent',
+  };
+  const container = document.createElement('div');
+  document.body.append(container);
+  dispose = render(() => <TaskPanel task={task} isActive />, container);
+  const label = collapsed ? 'Resume and open parent: Parent task' : 'Parent task: Parent task';
+  const link = [...container.querySelectorAll('button')].find(
+    (button) => button.textContent === label,
+  );
+  expectDefined(link).click();
+  expect(store.activeTaskId).toBe('parent');
+  if (collapsed) expect(uncollapseTask).toHaveBeenCalledWith('parent');
+  else expect(uncollapseTask).not.toHaveBeenCalled();
 });

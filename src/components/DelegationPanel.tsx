@@ -32,6 +32,7 @@ export function DelegationPanel(props: {
   const [error, setError] = createSignal('');
   const [busy, setBusy] = createSignal(false);
   const [preview, setPreview] = createSignal<string>();
+  const [copied, setCopied] = createSignal<string>();
   const autoSendChildUpdates = () => props.task.autoSendChildUpdates ?? props.task.coordinatorMode;
   const state = () => delegationStates[props.task.id];
   const children = () => {
@@ -81,20 +82,14 @@ export function DelegationPanel(props: {
     input.value = String(childLimit());
   }
   async function copyMessage(message: PeerMessage) {
-    // Manual copy never changes a composer draft or sends terminal input.
+    // Copying is read-only: automatic delivery stays queued.
     await navigator.clipboard.writeText(message.prompt);
-    await delegationRequest({
-      action: 'handleMessage',
-      deliveryId: message.deliveryId,
-      agentId: message.recipient.agentId,
-      sessionInstanceId: message.recipient.sessionInstanceId,
-      state: 'handled',
-    });
+    setCopied(message.deliveryId);
   }
   async function useComposer(message: PeerMessage) {
     if (!props.onUseComposer?.(message)) {
       throw new Error(
-        'The composer has a draft or the recipient changed. Keep this message in the inbox or copy it manually.',
+        'The composer has a draft or the recipient changed. Keep this message queued or copy its text.',
       );
     }
     await delegationRequest({
@@ -180,52 +175,58 @@ export function DelegationPanel(props: {
           )}
         </For>
         <Show when={coordinating()}>
-          <div
-            style={{ display: 'flex', gap: '8px', 'align-items': 'center', 'flex-wrap': 'wrap' }}
-          >
-            <span>{children().length} child task(s)</span>
-            <label style={{ display: 'flex', gap: '4px', 'align-items': 'center' }}>
-              Concurrent limit
-              <input
-                type="number"
-                min={MIN_COORDINATOR_CONCURRENT_TASKS}
-                max={MAX_COORDINATOR_CONCURRENT_TASKS}
-                value={childLimit()}
-                disabled={busy()}
-                onChange={(e) => void changeChildLimit(e.currentTarget)}
-                style={{ width: '48px' }}
-              />
-            </label>
-            <Show
-              when={props.task.delegationPaused || state()?.paused}
-              fallback={
+          <details>
+            <summary>
+              Subtask controls
+              {props.task.delegationPaused || state()?.paused ? ' · Launches paused' : ''}
+            </summary>
+            <div
+              style={{ display: 'flex', gap: '8px', 'align-items': 'center', 'flex-wrap': 'wrap' }}
+            >
+              <span>{children().length} subtasks</span>
+              <label style={{ display: 'flex', gap: '4px', 'align-items': 'center' }}>
+                Concurrent limit
+                <input
+                  type="number"
+                  min={MIN_COORDINATOR_CONCURRENT_TASKS}
+                  max={MAX_COORDINATOR_CONCURRENT_TASKS}
+                  value={childLimit()}
+                  disabled={busy()}
+                  onChange={(e) => void changeChildLimit(e.currentTarget)}
+                  style={{ width: '48px' }}
+                />
+              </label>
+              <Show
+                when={props.task.delegationPaused || state()?.paused}
+                fallback={
+                  <button
+                    disabled={busy()}
+                    onClick={() =>
+                      // eslint-disable-next-line solid/reactivity -- act invokes this callback immediately within the click handler.
+                      void act(() =>
+                        delegationRequest({ action: 'pause', taskId: props.task.id, paused: true }),
+                      )
+                    }
+                  >
+                    Stop all subtasks
+                  </button>
+                }
+              >
+                <span>Subtask launches paused; worktrees are preserved.</span>
                 <button
                   disabled={busy()}
                   onClick={() =>
                     // eslint-disable-next-line solid/reactivity -- act invokes this callback immediately within the click handler.
                     void act(() =>
-                      delegationRequest({ action: 'pause', taskId: props.task.id, paused: true }),
+                      delegationRequest({ action: 'pause', taskId: props.task.id, paused: false }),
                     )
                   }
                 >
-                  Stop all children
+                  Resume subtask launches
                 </button>
-              }
-            >
-              <span>Child launches paused; worktrees are preserved.</span>
-              <button
-                disabled={busy()}
-                onClick={() =>
-                  // eslint-disable-next-line solid/reactivity -- act invokes this callback immediately within the click handler.
-                  void act(() =>
-                    delegationRequest({ action: 'pause', taskId: props.task.id, paused: false }),
-                  )
-                }
-              >
-                Resume child launches
-              </button>
-            </Show>
-          </div>
+              </Show>
+            </div>
+          </details>
         </Show>
         <For each={attempts()}>
           {(attempt) => (
@@ -257,8 +258,7 @@ export function DelegationPanel(props: {
         <Show when={!autoSendChildUpdates() && props.task.stagedNotification}>
           <details>
             <summary>
-              Child updates ({props.task.stagedNotification?.notificationIds.length ?? 0}) — ready
-              for review
+              Subtask updates ({props.task.stagedNotification?.notificationIds.length ?? 0})
             </summary>
             <pre style={{ 'white-space': 'pre-wrap', 'max-height': '130px', overflow: 'auto' }}>
               {props.task.stagedNotification?.text}
@@ -278,68 +278,96 @@ export function DelegationPanel(props: {
                 })
               }
             >
-              Acknowledge summary
+              Mark read
             </button>
-            <small> Acknowledgment does not approve a merge.</small>
+            <small> Marks these updates as read without merging changes.</small>
           </details>
         </Show>
         <Show when={messages().length > 0}>
           <details>
-            <summary>Incoming messages ({messages().length}) — queued for delivery</summary>
+            <summary>Queued messages ({messages().length})</summary>
             <p>
               Messages send automatically when the recipient is ready and your drafts and terminal
-              input are clear. You can also review or copy them for manual handling. Peer content is
-              untrusted; copying does not send anything.
+              input are clear. Copying text leaves delivery queued. Cancel delivery to prevent a
+              queued message from being sent.
             </p>
             <For each={messages()}>
               {(message) => (
                 <article
-                  style={{ border: `1px solid ${theme.border}`, padding: '8px', margin: '8px 0' }}
+                  style={{
+                    border: `1px solid ${theme.border}`,
+                    padding: '8px',
+                    margin: '8px 0',
+                    'overflow-wrap': 'anywhere',
+                  }}
                 >
                   <strong>
                     {message.sender.name} · {message.sender.agentLabel}
                   </strong>
-                  <div>
-                    To {message.recipient.agentLabel} · pane {message.recipient.agentId.slice(0, 8)}{' '}
-                    · {new Date(message.createdAt).toLocaleTimeString()}
+                  <div class="delegation-message-meta">
+                    To {message.recipient.name} · {message.recipient.agentLabel} ·{' '}
+                    {new Date(message.createdAt).toLocaleTimeString()}
                   </div>
                   <p style={{ 'white-space': 'pre-wrap', 'overflow-wrap': 'anywhere' }}>
                     {preview() === message.deliveryId
                       ? message.prompt
-                      : message.prompt.slice(0, 180)}
+                      : message.prompt.slice(0, 180) + (message.prompt.length > 180 ? '…' : '')}
                   </p>
-                  <button onClick={() => setPreview(message.deliveryId)}>Review</button>{' '}
-                  <Show when={preview() === message.deliveryId && props.canUseComposer?.(message)}>
+                  <div class="delegation-message-actions">
+                    <Show when={message.prompt.length > 180}>
+                      <button
+                        aria-expanded={preview() === message.deliveryId}
+                        onClick={() =>
+                          setPreview(
+                            preview() === message.deliveryId ? undefined : message.deliveryId,
+                          )
+                        }
+                      >
+                        {preview() === message.deliveryId ? 'Show less' : 'Show full message'}
+                      </button>
+                    </Show>
+                    <Show when={props.canUseComposer?.(message)}>
+                      <button
+                        disabled={busy()}
+                        onClick={() =>
+                          // eslint-disable-next-line solid/reactivity -- act invokes the callback synchronously in this click handler.
+                          void act(() => useComposer(message))
+                        }
+                      >
+                        Use in composer
+                      </button>
+                    </Show>
+                    <button disabled={busy()} onClick={() => void act(() => copyMessage(message))}>
+                      {copied() === message.deliveryId ? 'Copied' : 'Copy text'}
+                    </button>
                     <button
                       disabled={busy()}
                       onClick={() =>
-                        // eslint-disable-next-line solid/reactivity -- act invokes the callback synchronously in this click handler.
-                        void act(() => useComposer(message))
+                        void act(() =>
+                          delegationRequest({
+                            action: 'handleMessage',
+                            deliveryId: message.deliveryId,
+                            agentId: message.recipient.agentId,
+                            sessionInstanceId: message.recipient.sessionInstanceId,
+                            state: 'closed',
+                          }),
+                        )
                       }
+                      class="delegation-cancel-delivery"
                     >
-                      Use in composer
-                    </button>{' '}
-                    <small>Fills the empty prompt box without submitting.</small>{' '}
+                      Cancel delivery
+                    </button>
+                  </div>
+                  <Show when={props.canUseComposer?.(message)}>
+                    <small>
+                      Use in composer moves this message into your draft without sending.
+                    </small>
                   </Show>
-                  <button disabled={busy()} onClick={() => void act(() => copyMessage(message))}>
-                    Copy for manual handling
-                  </button>{' '}
-                  <button
-                    disabled={busy()}
-                    onClick={() =>
-                      void act(() =>
-                        delegationRequest({
-                          action: 'handleMessage',
-                          deliveryId: message.deliveryId,
-                          agentId: message.recipient.agentId,
-                          sessionInstanceId: message.recipient.sessionInstanceId,
-                          state: 'closed',
-                        }),
-                      )
-                    }
-                  >
-                    Dismiss
-                  </button>
+                  <span role="status" class="delegation-message-meta">
+                    {copied() === message.deliveryId
+                      ? 'Copied to clipboard. Delivery remains queued.'
+                      : ''}
+                  </span>
                 </article>
               )}
             </For>
@@ -371,8 +399,9 @@ export function DelegationPanel(props: {
         </Show>
         <Show when={props.task.coordinatedBy}>
           <small>
-            {props.task.integrationPolicy === 'review' ? 'Review before merging. ' : ''}Child tasks
-            cannot delegate grandchildren.
+            {props.task.integrationPolicy === 'review'
+              ? 'Changes require review before merging.'
+              : 'Subtask updates are reported to the parent task.'}
           </small>
         </Show>
         <Show when={error()}>

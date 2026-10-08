@@ -486,7 +486,6 @@ function isFile(path: string): boolean {
 function readJsonBody(
   req: IncomingMessage,
   maxBytes = 64 * 1024,
-  rejectMalformed = false,
 ): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -510,12 +509,19 @@ function readJsonBody(
       // Decode once from the full buffer so a multi-byte UTF-8 char split
       // across chunk boundaries isn't corrupted (matters for non-ASCII prompts).
       const data = Buffer.concat(chunks).toString('utf8');
+      let parsed: unknown;
       try {
-        resolve(data ? (JSON.parse(data) as Record<string, unknown>) : {});
+        parsed = data ? JSON.parse(data) : {};
       } catch {
-        if (rejectMalformed) reject(new Error('Invalid JSON request body'));
-        else resolve({});
+        reject(new Error('Invalid JSON request body'));
+        return;
       }
+      // Every route reads named fields; `null` would throw on access and surface as a 500.
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+        reject(new Error('Invalid JSON request body'));
+        return;
+      }
+      resolve(parsed as Record<string, unknown>);
     });
     req.on('error', reject);
   });
@@ -539,13 +545,14 @@ export function createJsonReply(
 export async function readCoordinatorBody(
   req: IncomingMessage,
   jsonReply: JsonReply,
-  rejectMalformed = false,
 ): Promise<Record<string, unknown>> {
   try {
-    return await readJsonBody(req, 1_000_000, rejectMalformed);
+    return await readJsonBody(req, 1_000_000);
   } catch (err) {
     if (err instanceof Error && err.message === 'Body too large') {
       jsonReply(413, { error: 'Request body too large' });
+    } else if (err instanceof Error && err.message === 'Invalid JSON request body') {
+      jsonReply(400, { error: 'Invalid JSON request body' });
     }
     throw err;
   }
@@ -580,6 +587,18 @@ interface CoordinatorRouteContext {
   hasMatchingDoneToken: (taskId: string) => boolean;
 }
 
+/** Largest delay setTimeout accepts; larger values fire immediately. */
+export const MAX_WAIT_TIMEOUT_MS = 2 ** 31 - 1;
+
+export function parseWaitTimeout(
+  raw: unknown,
+): { ok: true; value: number | undefined } | { ok: false; error: string } {
+  if (raw === undefined) return { ok: true, value: undefined };
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw <= 0)
+    return { ok: false, error: 'timeoutMs must be a positive finite number' };
+  return { ok: true, value: Math.min(raw, MAX_WAIT_TIMEOUT_MS) };
+}
+
 function handleWaitSignal(ctx: CoordinatorRouteContext): void {
   ctx
     .readBody()
@@ -589,18 +608,11 @@ function handleWaitSignal(ctx: CoordinatorRouteContext): void {
       // Ignoring the body field matches the create_task pattern and prevents
       // an unscoped body value from flowing unchecked to waitForSignalDone.
       const coordinatorTaskId = ctx.callerCoordinatorId ?? REST_COORDINATOR_SENTINEL;
-      if (
-        body.timeoutMs !== undefined &&
-        (typeof body.timeoutMs !== 'number' || !Number.isFinite(body.timeoutMs))
-      )
-        return ctx.jsonReply(400, { error: 'timeoutMs must be a finite number' });
+      const timeout = parseWaitTimeout(body.timeoutMs);
+      if (!timeout.ok) return ctx.jsonReply(400, { error: timeout.error });
       const requestId = typeof body.requestId === 'string' ? body.requestId : undefined;
       mcpLog('info', `wait_for_signal_done coordinator=${coordinatorTaskId}`);
-      const result = await ctx.orch.waitForSignalDone(
-        coordinatorTaskId,
-        body.timeoutMs as number | undefined,
-        requestId,
-      );
+      const result = await ctx.orch.waitForSignalDone(coordinatorTaskId, timeout.value, requestId);
       mcpLog(
         'info',
         `wait_for_signal_done OK taskId=${result.taskId} remaining=${result.remaining}`,
@@ -712,14 +724,11 @@ function handleWaitForIdle(ctx: CoordinatorRouteContext, taskId: string): void {
   ctx
     .readBody()
     .then(async (body) => {
-      if (
-        body.timeoutMs !== undefined &&
-        (typeof body.timeoutMs !== 'number' || !Number.isFinite(body.timeoutMs))
-      )
-        return ctx.jsonReply(400, { error: 'timeoutMs must be a finite number' });
+      const timeout = parseWaitTimeout(body.timeoutMs);
+      if (!timeout.ok) return ctx.jsonReply(400, { error: timeout.error });
       if (!ctx.requireTask(taskId)) return;
       mcpLog('info', `wait_for_idle id=${taskId}`);
-      const idleResult = await ctx.orch.waitForIdle(taskId, body.timeoutMs as number | undefined);
+      const idleResult = await ctx.orch.waitForIdle(taskId, timeout.value);
       const status = ctx.orch.getTaskStatus(taskId);
       mcpLog(
         'info',
@@ -1121,15 +1130,18 @@ export function startRemoteServer(opts: {
     return null;
   }
 
-  function extractRawToken(req: IncomingMessage): string | null {
+  /** Query-string tokens leak into logs and history, so only the legacy WebSocket URL
+   *  handshake may use them; every /api/* route requires the Authorization header. */
+  function extractRawToken(req: IncomingMessage, allowQuery = false): string | null {
     const auth = req.headers.authorization;
     if (auth?.startsWith('Bearer ')) return auth.slice(7);
+    if (!allowQuery) return null;
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
     return url.searchParams.get('token');
   }
 
   function classifyToken(req: IncomingMessage): TokenClass | null {
-    return classifyCandidate(extractRawToken(req));
+    return classifyCandidate(extractRawToken(req, true));
   }
 
   /** Each coordinator agent gets a token derived from the app secret and its own task ID. The
@@ -1328,7 +1340,7 @@ export function startRemoteServer(opts: {
         }
         if (req.method !== 'PUT' && req.method !== 'DELETE')
           return jsonEnd(405, { error: 'Method not allowed' });
-        void readJsonBody(req, 4096, true)
+        void readJsonBody(req, 4096)
           .then((body) => {
             // Authentication happened before reading the body; disconnect may have happened since.
             if (stopping || !isPairedToken(Buffer.from(owner, 'hex')))
@@ -1572,7 +1584,7 @@ export function startRemoteServer(opts: {
       if (orch) {
         const jsonReply = createJsonReply(res, SECURITY_HEADERS);
         const readBody = async () => {
-          const body = await readCoordinatorBody(req, jsonReply, url.pathname.endsWith('/done'));
+          const body = await readCoordinatorBody(req, jsonReply);
           if (disabledAgentRoute()) {
             jsonReply(403, { error: 'Agent orchestration is disabled in Settings > MCP.' });
             throw new Error('Agent orchestration disabled while reading the request');

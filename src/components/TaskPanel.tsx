@@ -17,6 +17,7 @@ import {
   store,
   retryCloseTask,
   activateTaskFromPointer,
+  uncollapseTask,
   setActiveAgent,
   clearInitialPrompt,
   clearPrefillPrompt,
@@ -35,6 +36,7 @@ import type { EditableTextHandle } from './EditableText';
 import { PromptInput, type PromptInputHandle } from './PromptInput';
 import { CloseTaskDialog } from './CloseTaskDialog';
 import { FinishDialog, type FinishAction } from './FinishDialog';
+import { PullRequestDialog } from './PullRequestDialog';
 import { DiffViewerDialog } from './DiffViewerDialog';
 import { PlanViewerDialog } from './PlanViewerDialog';
 import { EditProjectDialog } from './EditProjectDialog';
@@ -124,6 +126,7 @@ export function TaskPanel(props: TaskPanelProps) {
   // null while the finish dialog is closed; otherwise the option it shows.
   const [finishAction, setFinishAction] = createSignal<FinishAction | null>(null);
   const [showDelegationReview, setShowDelegationReview] = createSignal(false);
+  const [openPrUrl, setOpenPrUrl] = createSignal<string | null>(null);
   const [pushSuccess, setPushSuccess] = createSignal(false);
   const [pushing, setPushing] = createSignal(false);
   const isLandedTask = () => isLandedTaskState(props.task.landingState);
@@ -953,11 +956,32 @@ export function TaskPanel(props: TaskPanelProps) {
               gap: '12px',
             }}
           >
-            <span>{autoSendChildUpdates() ? 'Automatic child updates' : 'Child task'}</span>
+            <Show
+              when={props.task.coordinatedBy ? store.tasks[props.task.coordinatedBy] : undefined}
+              fallback={
+                <span>{props.task.coordinatedBy ? 'Subtask' : 'Automatic subtask updates'}</span>
+              }
+            >
+              {(parent) => (
+                <button
+                  class="delegation-button delegation-parent-link"
+                  title={`${parent().collapsed ? 'Resume and open parent' : 'Parent task'}: ${parent().name}`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    if (parent().collapsed) uncollapseTask(parent().id);
+                    activateTaskFromPointer(parent().id);
+                  }}
+                >
+                  {parent().collapsed ? 'Resume and open parent' : 'Parent task'}: {parent().name}
+                </button>
+              )}
+            </Show>
             <Show
               when={!!props.task.stagedNotification && !props.task.stagedNotification.userEdited}
             >
-              <span style={{ color: theme.accent, 'font-size': '11px' }}>{stagedCountdown()}</span>
+              <span style={{ color: theme.accent, 'font-size': '11px', 'flex-shrink': '0' }}>
+                {stagedCountdown()}
+              </span>
             </Show>
           </div>
           <Show when={!!props.task.stagedNotification && !props.task.stagedNotification.userEdited}>
@@ -1051,7 +1075,11 @@ export function TaskPanel(props: TaskPanelProps) {
           <TaskCurrentStateLine task={props.task} nowMs={nowMs()} variant="card" />
         </Show>
         <div style={{ flex: '0 0 28px', overflow: 'hidden' }}>
-          <TaskBranchInfoBar task={props.task} onEditProject={(id) => setEditingProjectId(id)} />
+          <TaskBranchInfoBar
+            task={props.task}
+            onEditProject={(id) => setEditingProjectId(id)}
+            onOpenPullRequest={setOpenPrUrl}
+          />
         </div>
       </div>
       <div style={{ flex: '1', 'min-height': '0' }}>
@@ -1123,6 +1151,16 @@ export function TaskPanel(props: TaskPanelProps) {
           }}
           onClose={() => setFinishAction(null)}
         />
+      </Show>
+      <Show when={openPrUrl()}>
+        {(url) => (
+          <PullRequestDialog
+            open
+            task={props.task}
+            prUrl={url()}
+            onClose={() => setOpenPrUrl(null)}
+          />
+        )}
       </Show>
       <Show when={props.task.gitIsolation !== 'none'}>
         <DiffViewerDialog

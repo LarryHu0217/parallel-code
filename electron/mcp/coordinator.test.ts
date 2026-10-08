@@ -42,7 +42,6 @@ import {
   mockCreateBackendTask,
   mockVerifyStart,
   mockVerifyCancel,
-  mockFsMkdir,
   mockOnAgentHookEvent,
   mockNotify,
   getExitHandler,
@@ -253,7 +252,8 @@ describe('Coordinator registerCoordinator — idempotency', () => {
       );
       expect(bodyWrites).toHaveLength(1);
       expect(bodyWrites[0]?.[1]).toEqual(expect.stringContaining('do one'));
-      expect(enterWrites).toHaveLength(1);
+      // The failed Enter plus one retry on the next ready prompt; never the body again.
+      expect(enterWrites).toHaveLength(2);
     } finally {
       mockWriteToAgent.mockReset();
       mockWriteToAgent.mockImplementation((agentId: string, data: string) => ({
@@ -2649,60 +2649,14 @@ describe('Coordinator settings.local.json sub-task injection', () => {
     });
   });
 
-  it('writes settings.local.json with systemPrompt when file does not exist', async () => {
+  it('does not write settings.local.json for Claude (rules ship in the initial prompt)', async () => {
     mockFsAccess.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
     await coordinator.createTask({ name: 'test', prompt: 'do', coordinatorTaskId: 'coord-1' });
 
     const settingsWrite = mockAtomicWriteFile.mock.calls.find((c) =>
       (c[0] as string).endsWith('settings.local.json'),
     );
-    expect(settingsWrite).toBeDefined();
-    const written = JSON.parse(settingsWrite?.[1] as string);
-    expect(written.systemPrompt).toContain('signal_done');
-    expect(written.systemPrompt).toContain('sub-task-mode');
-  });
-
-  it('appends preamble to existing systemPrompt in settings.local.json', async () => {
-    mockFsAccess.mockResolvedValue(undefined);
-    mockFsReadFile.mockResolvedValue(JSON.stringify({ systemPrompt: 'existing prompt' }));
-    await coordinator.createTask({ name: 'test', prompt: 'do', coordinatorTaskId: 'coord-1' });
-
-    const settingsWrite = mockAtomicWriteFile.mock.calls.find((c) =>
-      (c[0] as string).endsWith('settings.local.json'),
-    );
-    expect(settingsWrite).toBeDefined();
-    const written = JSON.parse(settingsWrite?.[1] as string);
-    expect(written.systemPrompt).toContain('existing prompt');
-    expect(written.systemPrompt).toContain('signal_done');
-  });
-
-  it('preserves other keys in existing settings.local.json', async () => {
-    mockFsAccess.mockResolvedValue(undefined);
-    mockFsReadFile.mockResolvedValue(JSON.stringify({ permissions: { allow: ['Bash'] } }));
-    await coordinator.createTask({ name: 'test', prompt: 'do', coordinatorTaskId: 'coord-1' });
-
-    const settingsWrite = mockAtomicWriteFile.mock.calls.find((c) =>
-      (c[0] as string).endsWith('settings.local.json'),
-    );
-    expect(settingsWrite).toBeDefined();
-    const written = JSON.parse(settingsWrite?.[1] as string);
-    expect(written.permissions).toEqual({ allow: ['Bash'] });
-    expect(written.systemPrompt).toContain('signal_done');
-  });
-
-  it('does not restore settings.local.json on idle (no restore needed)', async () => {
-    mockFsAccess.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
-    await coordinator.createTask({ name: 'test', prompt: 'do', coordinatorTaskId: 'coord-1' });
-    coordinator.markPromptDelivered('task-1');
-
-    const outputCb = getOutputCb();
-    outputCb(encode('Working ❯ '));
-
-    const settingsWriteCallsAfterIdle = mockAtomicWriteFile.mock.calls.filter((c) =>
-      (c[0] as string).endsWith('settings.local.json'),
-    );
-    // Only the initial write; no re-write on idle
-    expect(settingsWriteCallsAfterIdle).toHaveLength(1);
+    expect(settingsWrite).toBeUndefined();
   });
 
   it('does not write to CLAUDE.md', async () => {
@@ -2755,6 +2709,7 @@ describe('Coordinator waitForIdle', () => {
 
   it('resolves when agent outputs prompt', async () => {
     await coordinator.createTask({ name: 'test', prompt: 'do', coordinatorTaskId: 'coord-1' });
+    coordinator.markPromptDelivered('task-1');
     const outputCb = getOutputCb();
     const waitPromise = coordinator.waitForIdle('task-1');
     outputCb(encode('working...'));
@@ -2996,6 +2951,10 @@ describe('Coordinator sendPrompt', () => {
     await coordinator.sendPrompt('task-1', 'hello');
     mockNotifyRenderer.mockClear();
 
+    // Queued prompts only go out once the agent shows a ready prompt.
+    // The first prompt only consumes the prompt-echo suppression window.
+    getOutputCb()(encode('Done ❯ '));
+    getOutputCb()(encode('Done ❯ '));
     coordinator.setTaskControl('task-1', 'coordinator');
     await new Promise((resolve) => setTimeout(resolve, 70));
 
@@ -3233,9 +3192,12 @@ describe('Coordinator sendPrompt', () => {
       const secondResult = await coordinator.sendPrompt('task-1', 'second');
       expect(secondResult).toEqual({ queued: true });
 
-      // Advance through the first write delay + flush's write delay.
+      // Advance through the first write delay; the queued prompt then waits for
+      // the agent to render its prompt again before it is flushed.
       await vi.advanceTimersByTimeAsync(200);
       await expect(firstPromise).resolves.toEqual({ queued: false });
+      getOutputCb()(encode('Done ❯ '));
+      await vi.advanceTimersByTimeAsync(200);
 
       // Both prompts written in order, not interleaved.
       const textCalls = mockWriteToAgent.mock.calls
@@ -3261,6 +3223,7 @@ describe('Coordinator sendPrompt', () => {
         await expect(coordinator.sendPrompt('task-1', prompt)).resolves.toEqual({ queued: true });
       }
 
+      outputCb(encode(READY_AGENT_FRAME_FIXTURES[0].frame));
       coordinator.setTaskControl('task-1', 'coordinator');
       await vi.advanceTimersByTimeAsync(100);
       expect(coordinator.getTaskStatus('task-1')?.pendingPrompts).toEqual([
@@ -3302,6 +3265,9 @@ describe('Coordinator sendPrompt', () => {
         return { id: agentId };
       });
 
+      // The first prompt only consumes the prompt-echo suppression window.
+      getOutputCb()(encode('Done ❯ '));
+      getOutputCb()(encode('Done ❯ '));
       coordinator.setTaskControl('task-1', 'coordinator');
       await vi.advanceTimersByTimeAsync(100);
 
@@ -3685,6 +3651,7 @@ describe('Coordinator waiter resolver cleanup on timeout', () => {
 
   it('removes idle resolver after timeout so stale callback is not called on later idle', async () => {
     await coordinator.createTask({ name: 'test', prompt: 'do', coordinatorTaskId: 'coord-1' });
+    coordinator.markPromptDelivered('task-1');
     const outputCb = getOutputCb();
 
     const p = coordinator.waitForIdle('task-1', 500);
@@ -3697,6 +3664,7 @@ describe('Coordinator waiter resolver cleanup on timeout', () => {
     p2.then(() => {
       resolveCalled = true;
     }).catch(() => {});
+    outputCb(encode('Done ❯ ')); // consumed by the prompt-echo suppression window
     outputCb(encode('Done ❯ '));
     await Promise.resolve(); // flush microtasks
     expect(resolveCalled).toBe(true);
@@ -3748,6 +3716,37 @@ describe('Coordinator MCP_TaskCreated spawn settings', () => {
       'mcp_task_created',
       expect.objectContaining({ agentCommand: '/usr/local/bin/claude' }),
     );
+  });
+
+  it('strips bypass flags from inherited args when the coordinator does not propagate', async () => {
+    coordinator.setCoordinatorSpawnDefaults('coord-1', 'claude', [
+      '--model',
+      'x',
+      '--dangerously-skip-permissions',
+      '--permission-mode',
+      'bypassPermissions',
+    ]);
+    await coordinator.createTask({ name: 'test', prompt: 'do', coordinatorTaskId: 'coord-1' });
+    const spawnArgs = mockSpawnAgent.mock.calls[0][1].args as string[];
+    expect(spawnArgs).toContain('--model');
+    expect(spawnArgs).not.toContain('--dangerously-skip-permissions');
+    expect(spawnArgs).not.toContain('bypassPermissions');
+  });
+
+  it('does not repeat a bypass flag the inherited args already carry', async () => {
+    coordinator.setCoordinatorSpawnDefaults('coord-1', 'codex', [
+      '--dangerously-bypass-approvals-and-sandbox',
+    ]);
+    await coordinator.createTask({
+      name: 'test',
+      prompt: 'do',
+      coordinatorTaskId: 'coord-1',
+      skipPermissions: true,
+    });
+    const spawnArgs = mockSpawnAgent.mock.calls[0][1].args as string[];
+    expect(
+      spawnArgs.filter((arg) => arg === '--dangerously-bypass-approvals-and-sandbox'),
+    ).toHaveLength(1);
   });
 
   it('includes agentArgs in MCP_TaskCreated payload (without --dangerously-skip-permissions)', async () => {
@@ -5040,6 +5039,9 @@ describe('Coordinator setTaskControl — queued send until activity lease clears
       coordinator.setTaskControl('task-1', 'human');
       await coordinator.sendPrompt('task-1', 'hello');
       const output = mockSubscribeToAgent.mock.calls[0]?.[1] as (encoded: string) => void;
+      // The first prompt only consumes the prompt-echo suppression window.
+      output(encode('ready ❯ '));
+      output(encode('ready ❯ '));
       let resolved = false;
 
       const waitPromise = coordinator.waitForIdle('task-1', 10_000).then((result) => {
@@ -5069,6 +5071,9 @@ describe('Coordinator setTaskControl — queued send until activity lease clears
 
     await coordinator.sendPrompt('task-1', 'hello');
 
+    // The first prompt only consumes the prompt-echo suppression window.
+    getOutputCb()(encode('Done ❯ '));
+    getOutputCb()(encode('Done ❯ '));
     mockNotifyRenderer.mockClear();
     coordinator.setTaskControl('task-1', 'coordinator');
     await new Promise((resolve) => setTimeout(resolve, 70));
@@ -5772,7 +5777,7 @@ describe('Coordinator very fast prompt — scrollback detection', () => {
       'subtask-tok',
       '/path/server.js',
     );
-    await coordinator.createTask({ name: 'test', prompt: 'do', coordinatorTaskId: 'coord-1' });
+    await coordinator.createTask({ name: 'test', coordinatorTaskId: 'coord-1' });
 
     const task = coordinator.getTask('task-1');
     // Task must be idle (not still "running") because scrollback contained ❯
@@ -7270,22 +7275,21 @@ describe('Coordinator createTask — concurrency enforcement', () => {
   });
 
   it('does not count a task twice while its creation is still finishing', async () => {
-    // Limit 2: a task already in this.tasks but still writing its preamble
-    // (the first await after registration is the settings-dir mkdir) must
+    // Limit 2: a task already in this.tasks but still spawning its agent
+    // (the first await after registration is the agent spawn) must
     // leave one free slot, not zero — the reservation is released as soon as
     // the task is registered.
     let openGate: () => void = () => {};
     const gate = new Promise<void>((resolve) => {
       openGate = resolve;
     });
-    mockFsMkdir.mockImplementationOnce(() => gate);
+    mockSpawnAgent.mockImplementationOnce(() => gate);
 
     const first = coordinator.createTask({ name: 'a', coordinatorTaskId: 'coord-1' });
-    for (let i = 0; i < 50 && mockFsMkdir.mock.calls.length === 0; i += 1) {
+    for (let i = 0; i < 50 && mockSpawnAgent.mock.calls.length === 0; i += 1) {
       await new Promise((r) => setTimeout(r, 1));
     }
-    expect(mockFsMkdir).toHaveBeenCalledTimes(1);
-    expect(mockSpawnAgent).not.toHaveBeenCalled();
+    expect(mockSpawnAgent).toHaveBeenCalledTimes(1);
 
     await expect(
       coordinator.createTask({ name: 'b', coordinatorTaskId: 'coord-1' }),

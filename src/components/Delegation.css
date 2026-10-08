@@ -56,3 +56,49 @@
   cursor: pointer;
   color: var(--fg-muted);
 }
+
+.subtask-label {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 2px;
+  text-align: left;
+}
+
+.subtask-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--fg);
+  font-weight: 500;
+}
+
+.subtask-status {
+  white-space: normal;
+}
+
+.delegation-message-meta {
+  display: block;
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
+
+.delegation-message-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.delegation-message-actions .delegation-cancel-delivery {
+  margin-left: auto;
+  color: var(--fg-muted);
+}
+
+.delegation-parent-link {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}

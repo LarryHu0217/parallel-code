@@ -13,11 +13,10 @@ import { parseCanvasView } from '../shared/canvas-view.js';
 import { parseAgentTourPayload } from '../shared/agent-tour.js';
 import { parseEvidenceSubmission } from '../shared/evidence.js';
 import {
-  APP_TASK_INSTRUCTIONS,
-  CANVAS_INSTRUCTIONS,
-  hasCanvasTools,
+  LEGACY_WAIT_DEFAULT_MS,
+  LEGACY_WAIT_MAX_MS,
   selectTools,
-  sessionInstructions,
+  serverInstructions,
 } from './mcp-tool-list.js';
 import { validateBranchName } from './validation.js';
 import { formatDiffForTool } from './diff-format.js';
@@ -25,6 +24,19 @@ import type { LandSelfInput } from './types.js';
 import type { SessionCapabilities, SessionProfile } from '../shared/delegation-types.js';
 import { parseSignalDoneInput } from '../shared/completion-report.js';
 import { toolOutputSchemas } from './tool-output-schemas.js';
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function structuredResult(name: string, result: unknown): Record<string, unknown> {
+  if (name === 'list_tasks') {
+    if (!Array.isArray(result)) throw new Error('list_tasks returned an unexpected response.');
+    return { tasks: result };
+  }
+  if (!isRecord(result)) throw new Error(`${name} returned an unexpected response.`);
+  return result;
+}
 
 function formatToolResult(name: string, result: unknown, legacyDone = false) {
   if (name === 'signal_done') {
@@ -38,6 +50,8 @@ function formatToolResult(name: string, result: unknown, legacyDone = false) {
     )
       throw new Error('Completion signal was rejected.');
   }
+  // Validate before building content: JSON.stringify(undefined) is not a valid text value.
+  const structuredContent = name in toolOutputSchemas ? structuredResult(name, result) : undefined;
   return {
     content: [
       {
@@ -47,13 +61,27 @@ function formatToolResult(name: string, result: unknown, legacyDone = false) {
           : JSON.stringify(result, null, 2),
       },
     ],
-    ...(name in toolOutputSchemas
-      ? {
-          structuredContent:
-            name === 'list_tasks' ? { tasks: result } : (result as Record<string, unknown>),
-        }
-      : {}),
+    ...(structuredContent ? { structuredContent } : {}),
   };
+}
+
+function toolError(text: string) {
+  return { content: [{ type: 'text' as const, text }], isError: true };
+}
+
+function requireTaskId(p: Record<string, unknown>): string {
+  if (typeof p.taskId !== 'string' || !p.taskId.trim())
+    throw new Error('taskId must be a non-empty string');
+  return p.taskId;
+}
+
+/** Defaults and caps a legacy wait; see LEGACY_WAIT_DEFAULT_MS for why the ceiling exists. */
+function legacyWaitTimeout(p: Record<string, unknown>): number {
+  const timeout = p.timeoutMs;
+  if (timeout === undefined) return LEGACY_WAIT_DEFAULT_MS;
+  if (typeof timeout !== 'number' || !Number.isFinite(timeout) || timeout <= 0)
+    throw new Error('timeoutMs must be a positive finite number.');
+  return Math.min(timeout, LEGACY_WAIT_MAX_MS);
 }
 
 export interface MCPToolHandlerContext {
@@ -89,27 +117,20 @@ export async function handleMCPToolCall(
       content: [{ type: 'text', text: `Error: '${name}' is not available to this session.` }],
       isError: true,
     };
-  if (!sessionCapabilities && canvasOnly && !canvasTool)
-    return {
-      content: [{ type: 'text', text: `Error: '${name}' is not available to canvas sessions.` }],
-      isError: true,
-    };
+  // Legacy launches enforce exactly what selectTools advertises.
   if (
     !sessionCapabilities &&
-    taskId &&
-    !coordinatorId &&
-    !canvasTool &&
-    !['signal_done', 'land_self'].includes(name)
+    !selectTools(taskId, coordinatorId, canvasOnly).some((tool) => tool.name === name)
   )
-    return {
-      content: [
-        {
-          type: 'text',
-          text: `Error: '${name}' is not available to sub-tasks. Only land_self, signal_done and canvas tools are permitted.`,
-        },
-      ],
-      isError: true,
-    };
+    return toolError(
+      canvasOnly
+        ? `Error: '${name}' is not available to canvas sessions.`
+        : canvasTool && !taskId && !coordinatorId
+          ? `Error: '${name}' requires a task-scoped MCP session.`
+          : taskId && !coordinatorId
+            ? `Error: '${name}' is not available to sub-tasks. Only land_self, signal_done and canvas tools are permitted.`
+            : `Error: '${name}' is not available to this session.`,
+    );
 
   try {
     if (sessionCapabilities && !canvasTool) {
@@ -131,6 +152,10 @@ export async function handleMCPToolCall(
       const result = await client.callSessionTool(name, scopedParams);
       return formatToolResult(name, result);
     }
+    // MCP tools/call may omit `arguments`; canvas parsers validate their own payloads.
+    if (!canvasTool && params !== undefined && !isRecord(params))
+      throw new Error('Tool arguments must be an object.');
+    const p: Record<string, unknown> = isRecord(params) ? params : {};
     switch (name) {
       case 'reasoning_read':
       case 'reasoning_update': {
@@ -176,7 +201,6 @@ export async function handleMCPToolCall(
       }
 
       case 'create_task': {
-        const p = params as Record<string, unknown>;
         if (typeof p.prompt !== 'string' || !p.prompt.trim()) {
           return {
             content: [{ type: 'text', text: 'Error: prompt must be a non-empty string' }],
@@ -201,14 +225,11 @@ export async function handleMCPToolCall(
       }
 
       case 'get_task_status': {
-        const result = await client.getTaskStatus(
-          (params as Record<string, unknown>).taskId as string,
-        );
+        const result = await client.getTaskStatus(requireTaskId(p));
         return formatToolResult(name, result);
       }
 
       case 'send_prompt': {
-        const p = params as Record<string, unknown>;
         if (typeof p.taskId !== 'string' || !p.taskId.trim()) {
           return {
             content: [{ type: 'text', text: 'Error: taskId must be a non-empty string' }],
@@ -235,32 +256,28 @@ export async function handleMCPToolCall(
       }
 
       case 'wait_for_idle': {
-        const result = await client.waitForIdle(
-          (params as Record<string, unknown>).taskId as string,
-          (params as Record<string, unknown>).timeoutMs as number | undefined,
-        );
+        const result = await client.waitForIdle(requireTaskId(p), legacyWaitTimeout(p));
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       }
 
       case 'get_task_diff': {
-        const result = await client.getTaskDiff(
-          (params as Record<string, unknown>).taskId as string,
-        );
+        const result = await client.getTaskDiff(requireTaskId(p));
         return {
           content: [{ type: 'text', text: formatDiffForTool(result) }],
         };
       }
 
       case 'get_task_output': {
-        const result = await client.getTaskOutput(
-          (params as Record<string, unknown>).taskId as string,
-        );
-        return { content: [{ type: 'text', text: result.output }] };
+        const result = await client.getTaskOutput(requireTaskId(p));
+        return {
+          content: [
+            { type: 'text', text: typeof result?.output === 'string' ? result.output : '' },
+          ],
+        };
       }
 
       case 'merge_task': {
-        const p = params as Record<string, unknown>;
-        const result = await client.mergeTask(p.taskId as string, {
+        const result = await client.mergeTask(requireTaskId(p), {
           squash: p.squash as boolean | undefined,
           message: p.message as string | undefined,
           cleanup: p.cleanup as boolean | undefined,
@@ -270,7 +287,7 @@ export async function handleMCPToolCall(
       }
 
       case 'close_task': {
-        await client.closeTask((params as Record<string, unknown>).taskId as string);
+        await client.closeTask(requireTaskId(p));
         return { content: [{ type: 'text', text: 'Task closed successfully.' }] };
       }
 
@@ -286,28 +303,8 @@ export async function handleMCPToolCall(
             isError: true,
           };
         }
-        const result = await client.waitForSignalDone(
-          coordinatorId,
-          (params as Record<string, unknown>).timeoutMs as number | undefined,
-        );
+        const result = await client.waitForSignalDone(coordinatorId, legacyWaitTimeout(p));
         return formatToolResult(name, result);
-      }
-
-      case 'review_and_merge_task': {
-        const p = params as Record<string, unknown>;
-        const result = await client.reviewAndMergeTask(p.taskId as string, {
-          squash: p.squash as boolean | undefined,
-          message: p.message as string | undefined,
-        });
-        const mergeInfo = `Merged into ${result.merge.mainBranch}: +${result.merge.linesAdded} -${result.merge.linesRemoved} lines`;
-        return {
-          content: [
-            {
-              type: 'text',
-              text: formatDiffForTool(result.diff, mergeInfo),
-            },
-          ],
-        };
       }
 
       case 'signal_done': {
@@ -338,7 +335,7 @@ export async function handleMCPToolCall(
             isError: true,
           };
         }
-        const result = await client.landSelf(taskId, params as unknown as LandSelfInput);
+        const result = await client.landSelf(taskId, p as unknown as LandSelfInput);
         return formatToolResult(name, result);
       }
 
@@ -445,8 +442,9 @@ async function main(): Promise<void> {
   }
 
   // Reject coordinator/task IDs that contain HTTP header-unsafe characters.
-  // These values are forwarded as X-Coordinator-Id / X-Task-Id headers; a newline
-  // would allow header injection into every outgoing request.
+  // The coordinator ID is forwarded as the X-Coordinator-Id header (a newline would allow
+  // header injection into every outgoing request); the task ID is only URL-encoded into
+  // paths, but is rejected too so both launch values stay consistent.
   if (coordinatorId && /[\r\n]/.test(coordinatorId)) {
     console.error('Invalid --coordinator-id: must not contain newline characters.');
     process.exit(1);
@@ -461,12 +459,7 @@ async function main(): Promise<void> {
     { name: 'parallel-code', version: '1.0.0' },
     {
       capabilities: { tools: {} },
-      instructions:
-        [
-          APP_TASK_INSTRUCTIONS,
-          ...(hasCanvasTools(taskId, coordinatorId, canvasOnly) ? [CANVAS_INSTRUCTIONS] : []),
-          ...(sessionCapabilities ? [sessionInstructions(sessionCapabilities)] : []),
-        ].join('\n\n') || undefined,
+      instructions: serverInstructions({ taskId, coordinatorId, canvasOnly, sessionCapabilities }),
     },
   );
 

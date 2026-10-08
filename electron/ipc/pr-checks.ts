@@ -3,11 +3,13 @@ import { promisify } from 'util';
 import { Notification, type BrowserWindow } from 'electron';
 import { stat } from 'fs/promises';
 import { IPC } from './channels.js';
+import { parseMergeable } from '../github/gh.js';
 import type {
   PrCheckBucket,
   PrCheckRun,
   PrChecksOverall,
   PrChecksUpdatePayload,
+  PrMergeable,
   PrReviewDecision,
 } from './shared-types.js';
 
@@ -34,6 +36,7 @@ interface TaskEntry {
   overall: PrChecksOverall;
   isDraft: boolean;
   reviewDecision: PrReviewDecision | null;
+  mergeable: PrMergeable;
   passing: number;
   pending: number;
   failing: number;
@@ -111,6 +114,7 @@ export function startPrChecksWatcher(args: {
         overall: 'pending',
         isDraft: false,
         reviewDecision: null,
+        mergeable: 'UNKNOWN',
         passing: 0,
         pending: 0,
         failing: 0,
@@ -244,9 +248,14 @@ async function refreshOne(taskId: string): Promise<void> {
     entry.lastRefreshedAt = Date.now();
     // Review metadata is PR-wide, so it can advance while old-head CI data
     // remains suppressed during the post-push grace period.
-    if (entry.isDraft !== status.isDraft || entry.reviewDecision !== status.reviewDecision) {
+    if (
+      entry.isDraft !== status.isDraft ||
+      entry.reviewDecision !== status.reviewDecision ||
+      entry.mergeable !== status.mergeable
+    ) {
       entry.isDraft = status.isDraft;
       entry.reviewDecision = status.reviewDecision;
+      entry.mergeable = status.mergeable;
       sendUpdate(entry);
     }
     return;
@@ -256,6 +265,7 @@ async function refreshOne(taskId: string): Promise<void> {
     entry.overall === overall &&
     entry.isDraft === status.isDraft &&
     entry.reviewDecision === status.reviewDecision &&
+    entry.mergeable === status.mergeable &&
     entry.passing === counts.passing &&
     entry.pending === counts.pending &&
     entry.failing === counts.failing &&
@@ -273,6 +283,7 @@ async function refreshOne(taskId: string): Promise<void> {
   entry.overall = overall;
   entry.isDraft = status.isDraft;
   entry.reviewDecision = status.reviewDecision;
+  entry.mergeable = status.mergeable;
   entry.passing = counts.passing;
   entry.pending = counts.pending;
   entry.failing = counts.failing;
@@ -314,6 +325,7 @@ function sendUpdate(entry: TaskEntry, opts?: { cleared?: boolean; merged?: boole
     overall: entry.overall,
     isDraft: entry.isDraft,
     reviewDecision: entry.reviewDecision,
+    mergeable: entry.mergeable,
     passing: entry.passing,
     pending: entry.pending,
     failing: entry.failing,
@@ -462,11 +474,18 @@ export async function fetchPrStatus(prUrl: string): Promise<{
   headRefOid: string;
   isDraft: boolean;
   reviewDecision: PrReviewDecision | null;
+  mergeable: PrMergeable;
   checks: PrCheckRun[];
 }> {
   const { stdout } = await exec(
     'gh',
-    ['pr', 'view', prUrl, '--json', 'state,headRefOid,isDraft,reviewDecision,statusCheckRollup'],
+    [
+      'pr',
+      'view',
+      prUrl,
+      '--json',
+      'state,headRefOid,isDraft,reviewDecision,mergeable,statusCheckRollup',
+    ],
     { timeout: GH_TIMEOUT_MS, maxBuffer: GH_MAX_BUFFER },
   );
   const parsed: unknown = JSON.parse(stdout);
@@ -476,6 +495,7 @@ export async function fetchPrStatus(prUrl: string): Promise<{
       headRefOid: '',
       isDraft: false,
       reviewDecision: null,
+      mergeable: 'UNKNOWN',
       checks: [],
     };
   }
@@ -501,6 +521,7 @@ export async function fetchPrStatus(prUrl: string): Promise<{
     headRefOid: asString(r['headRefOid']) ?? '',
     isDraft: r['isDraft'] === true,
     reviewDecision: parseReviewDecision(r['reviewDecision']),
+    mergeable: parseMergeable(r['mergeable']),
     checks,
   };
 }

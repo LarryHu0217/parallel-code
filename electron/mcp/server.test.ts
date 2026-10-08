@@ -560,7 +560,11 @@ describe('structured MCP completion contracts', () => {
             },
           }),
         };
-        const output = await handleMCPToolCall(context, name, {});
+        const output = await handleMCPToolCall(
+          context,
+          name,
+          name === 'signal_done' ? { result: { summary: 'done' } } : { taskId: 'child' },
+        );
         expect(output).toMatchObject({
           isError: true,
           content: [{ text: 'Error: Backend unavailable.' }],
@@ -924,4 +928,81 @@ it('sends scoped tool requests with the bearer credential and no coordinator ove
   } finally {
     fetchMock.mockRestore();
   }
+});
+
+describe('legacy dispatch hardening', () => {
+  const coordinator = { taskId: '', coordinatorId: 'coord-1' };
+
+  it('treats omitted arguments as an empty object and rejects non-object arguments', async () => {
+    const client = makeClient();
+    client.listTasks = vi.fn().mockResolvedValue([]);
+    expect(
+      await handleMCPToolCall({ client, ...coordinator }, 'get_task_status', undefined),
+    ).toMatchObject({
+      isError: true,
+      content: [{ text: 'Error: taskId must be a non-empty string' }],
+    });
+    expect(
+      await handleMCPToolCall({ client, ...coordinator }, 'list_tasks', undefined),
+    ).not.toHaveProperty('isError');
+    expect(await handleMCPToolCall({ client, ...coordinator }, 'list_tasks', [])).toMatchObject({
+      isError: true,
+    });
+  });
+
+  it.each(['get_task_status', 'wait_for_idle', 'get_task_diff', 'get_task_output', 'close_task'])(
+    'rejects %s without a taskId before calling the backend',
+    async (name) => {
+      const client = makeClient();
+      const result = await handleMCPToolCall({ client, ...coordinator }, name, { taskId: 7 });
+      expect(result).toMatchObject({ isError: true });
+    },
+  );
+
+  it('defaults and caps legacy wait timeouts below the undici headers timeout', async () => {
+    const client = makeClient();
+    client.waitForIdle = vi.fn().mockResolvedValue({ status: 'idle', reason: 'x' });
+    client.waitForSignalDone = vi.fn().mockResolvedValue({ remaining: 0 });
+    await handleMCPToolCall({ client, ...coordinator }, 'wait_for_idle', { taskId: 't' });
+    expect(client.waitForIdle).toHaveBeenLastCalledWith('t', 240_000);
+    await handleMCPToolCall({ client, ...coordinator }, 'wait_for_idle', {
+      taskId: 't',
+      timeoutMs: 900_000,
+    });
+    expect(client.waitForIdle).toHaveBeenLastCalledWith('t', 240_000);
+    await handleMCPToolCall({ client, ...coordinator }, 'wait_for_signal_done', {});
+    expect(client.waitForSignalDone).toHaveBeenLastCalledWith('coord-1', 240_000);
+    for (const timeoutMs of [0, -5, NaN, Infinity, '10'])
+      expect(
+        await handleMCPToolCall({ client, ...coordinator }, 'wait_for_signal_done', { timeoutMs }),
+      ).toMatchObject({ isError: true });
+  });
+
+  it('enforces the advertised tool set when both ids are configured', async () => {
+    const client = makeClient();
+    client.signalDone = vi.fn();
+    const result = await handleMCPToolCall(
+      { client, taskId: 'task-1', coordinatorId: 'coord-1' },
+      'signal_done',
+      { result: { summary: 'done' } },
+    );
+    expect(result).toMatchObject({ isError: true });
+    expect(client.signalDone).not.toHaveBeenCalled();
+  });
+
+  it('keeps content valid for malformed backend results', async () => {
+    const client = makeClient();
+    client.listTasks = vi.fn().mockResolvedValue({ not: 'an array' });
+    client.getTaskStatus = vi.fn().mockResolvedValue(undefined);
+    client.getTaskOutput = vi.fn().mockResolvedValue({});
+    expect(await handleMCPToolCall({ client, ...coordinator }, 'list_tasks', {})).toMatchObject({
+      isError: true,
+    });
+    expect(
+      await handleMCPToolCall({ client, ...coordinator }, 'get_task_status', { taskId: 't' }),
+    ).toMatchObject({ isError: true });
+    expect(
+      await handleMCPToolCall({ client, ...coordinator }, 'get_task_output', { taskId: 't' }),
+    ).toEqual({ content: [{ type: 'text', text: '' }] });
+  });
 });

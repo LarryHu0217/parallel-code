@@ -10,9 +10,10 @@ export function updateTaskBranch(taskId: string, branchName: string): void {
   const branchChanged = task.branchName !== branchName;
   batch(() => {
     setStore('tasks', taskId, 'branchName', branchName);
-    // prUrl is only ever populated by branch-PR auto-detection, so dropping it
-    // on rename is safe — the next detection pass will repopulate from the new
-    // branch. If a user-editable PR URL is ever added, gate this on a flag.
+    // prUrl comes from branch-PR auto-detection or a PR checkout, so dropping
+    // it on rename is safe — the next detection pass will repopulate from the
+    // new branch, and a PR checkout also keeps its PR as githubUrl. If a
+    // user-editable PR URL is ever added, gate this on a flag.
     if (branchChanged && task.prUrl) {
       setStore('tasks', taskId, 'prUrl', undefined);
     }

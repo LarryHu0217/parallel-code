@@ -133,6 +133,25 @@ describe('TaskBranchInfoBar PR review metadata', () => {
   });
 });
 
+describe('TaskBranchInfoBar GitHub actions', () => {
+  it('flags merge conflicts on the PR chip', () => {
+    mockGetPrChecks.mockReturnValue({
+      overall: 'none',
+      passing: 0,
+      pending: 0,
+      failing: 0,
+      checks: [],
+      checkedAt: '2026-08-04T10:00:00.000Z',
+      mergeable: 'CONFLICTING',
+    });
+
+    const html = renderToString(() => TaskBranchInfoBar({ task, onEditProject: vi.fn() }));
+
+    expect(html).toContain('class="task-pr-conflicts"');
+    expect(html).toContain('aria-label="PR #12, Conflicts"');
+  });
+});
+
 describe('TaskBranchInfoBar source link', () => {
   it('renders a compact issue number without removing the full accessible label', () => {
     const issueTask: Task = {

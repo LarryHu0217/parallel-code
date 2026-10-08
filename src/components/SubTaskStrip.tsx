@@ -1,3 +1,4 @@
+import './Delegation.css';
 import { For, Show, createMemo, createSignal, createUniqueId, onMount } from 'solid-js';
 import {
   store,
@@ -10,11 +11,12 @@ import { getCoordinatorChildren } from '../store/sidebar-order';
 import { getChildAttentionSummary } from '../store/sidebar-attention';
 import { invoke } from '../lib/ipc';
 import { IPC } from '../../electron/ipc/channels';
-import { StatusDot } from './StatusDot';
+import { StatusDot, getDotTooltip } from './StatusDot';
+import { getTaskAttentionState } from '../store/taskStatus';
 import { theme } from '../lib/theme';
 import { sf } from '../lib/fontScale';
 import { Dialog } from './Dialog';
-import { CheckIcon, CloseIcon } from './icons';
+import { CloseIcon } from './icons';
 
 interface SubTaskStripProps {
   coordinatorTaskId: string;
@@ -146,24 +148,30 @@ export function SubTaskStrip(props: SubTaskStripProps) {
 
   const taskTone = (task: (typeof store.tasks)[string]) => {
     if (task.landingState === 'landed_pending_review') {
-      return { color: theme.warning, label: 'merged, awaiting review' };
+      return { color: theme.warning, label: 'Merged · review pending' };
     }
     if (task.landingState === 'reviewed') {
-      return { color: theme.success, label: 'landed' };
+      return { color: theme.success, label: 'Merged' };
     }
     if (
       task.landingState === 'landed_cleanup_failed' ||
       task.landingState === 'landing_escalated'
     ) {
-      return { color: theme.warning, label: task.landingState };
+      return {
+        color: theme.warning,
+        label:
+          task.landingState === 'landed_cleanup_failed'
+            ? 'Merged · cleanup failed'
+            : 'Merge needs attention',
+      };
     }
     if (task.landingState === 'landing_failed') {
-      return { color: theme.error, label: 'landing failed' };
+      return { color: theme.error, label: 'Merge failed' };
     }
     if (task.signalDoneReceived)
       return {
         color: theme.warning,
-        label: task.integrationPolicy === 'review' ? 'awaiting review' : 'signalled done',
+        label: task.integrationPolicy === 'review' ? 'Awaiting review' : 'Work complete',
       };
     return null;
   };
@@ -194,7 +202,7 @@ export function SubTaskStrip(props: SubTaskStripProps) {
               'flex-shrink': '0',
             }}
           >
-            Sub-tasks:
+            Subtasks:
           </span>
           <Show when={summary()}>
             {(text) => (
@@ -214,23 +222,23 @@ export function SubTaskStrip(props: SubTaskStripProps) {
                     }
                     activateTaskFromPointer(task.id);
                   }}
-                  title={taskTone(task) ? `${task.name} — ${taskTone(task)?.label}` : task.name}
+                  title={`${task.collapsed ? 'Resume and open: ' : ''}${task.name} — ${taskTone(task)?.label ?? getDotTooltip(getTaskDotStatus(task.id), getTaskAttentionState(task.id))}`}
                   style={{
                     display: 'inline-flex',
                     'align-items': 'center',
                     gap: '4px',
-                    padding: '2px 8px',
-                    'border-radius': '999px',
+                    padding: '5px 8px',
+                    'border-radius': 'var(--radius-sm)',
                     background: taskTone(task)
                       ? `color-mix(in srgb, ${taskTone(task)?.color} 12%, transparent)`
                       : `color-mix(in srgb, ${theme.fgSubtle} 8%, transparent)`,
-                    border: `1px solid ${taskTone(task) ? `${taskTone(task)?.color}44` : theme.border}`,
+                    border: `1px solid ${taskTone(task) ? `color-mix(in srgb, ${taskTone(task)?.color} 30%, transparent)` : theme.border}`,
                     color: theme.fgMuted,
                     'font-size': sf(11),
-                    'font-family': "'JetBrains Mono', monospace",
+                    'font-family': 'var(--font-ui)',
                     cursor: 'pointer',
                     'white-space': 'nowrap',
-                    'max-width': '160px',
+                    'max-width': '240px',
                     overflow: 'hidden',
                     'text-overflow': 'ellipsis',
                     'flex-shrink': '0',
@@ -239,17 +247,35 @@ export function SubTaskStrip(props: SubTaskStripProps) {
                   <Show
                     when={taskTone(task)}
                     fallback={
-                      <StatusDot status={getTaskDotStatus(task.id)} taskId={task.id} size="sm" />
+                      <StatusDot
+                        status={getTaskDotStatus(task.id)}
+                        attention={getTaskAttentionState(task.id)}
+                        taskId={task.id}
+                        size="sm"
+                      />
                     }
                   >
                     {(tone) => (
                       <span style={{ color: tone().color, display: 'inline-flex' }}>
-                        <CheckIcon size={10} />
+                        <span aria-hidden="true">●</span>
                       </span>
                     )}
                   </Show>
-                  <span style={{ overflow: 'hidden', 'text-overflow': 'ellipsis' }}>
-                    {task.name}
+                  <span class="subtask-label">
+                    <span class="subtask-name">
+                      {task.collapsed ? 'Resume: ' : ''}
+                      {task.name}
+                    </span>
+                    <span
+                      class="subtask-status"
+                      style={{ color: taskTone(task)?.color ?? theme.fgMuted }}
+                    >
+                      {taskTone(task)?.label ??
+                        getDotTooltip(
+                          getTaskDotStatus(task.id),
+                          getTaskAttentionState(task.id),
+                        ).split(' — ')[0]}
+                    </span>
                   </span>
                 </button>
                 <Show when={task.agentIds.some((id) => store.agents[id]?.status === 'running')}>

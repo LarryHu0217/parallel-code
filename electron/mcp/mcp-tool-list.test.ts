@@ -16,6 +16,9 @@ import {
   TOUR_TOOLS,
   EVIDENCE_TOOLS,
   hasCanvasTools,
+  APP_TASK_INSTRUCTIONS,
+  serverInstructions,
+  sessionInstructions,
   type ToolDef,
 } from './mcp-tool-list.js';
 
@@ -284,6 +287,47 @@ describe('session capability tool sets', () => {
     expect(child.find((tool) => tool.name === 'signal_done')?.description).not.toContain(
       'Use land_self',
     );
+  });
+});
+
+describe('serverInstructions', () => {
+  // Claude Code truncates MCP server instructions at 2048 characters (observed in 2.1.x).
+  const CLIENT_LIMIT = 2048;
+
+  it('keeps role and app guidance within the client limit for every session profile', () => {
+    for (const profile of ['ordinary', 'child-review', 'child-automatic'] as const) {
+      for (const canCreate of [false, true]) {
+        for (const peers of [false, true]) {
+          const sessionCapabilities = { profile, canCreate, peers };
+          const text = serverInstructions({
+            taskId: 'task',
+            coordinatorId: '',
+            canvasOnly: false,
+            sessionCapabilities,
+          });
+          const essential = `${sessionInstructions(sessionCapabilities)}\n\n${APP_TASK_INSTRUCTIONS}`;
+          expect(text.startsWith(essential)).toBe(true);
+          expect(essential.length).toBeLessThanOrEqual(CLIENT_LIMIT);
+        }
+      }
+    }
+  });
+
+  it('leads with app guidance for sessions without capabilities', () => {
+    for (const [taskId, coordinatorId, canvasOnly] of [
+      ['', 'coordinator', false],
+      ['', '', true],
+      ['', '', false],
+    ] as const) {
+      const text = serverInstructions({ taskId, coordinatorId, canvasOnly });
+      expect(text.startsWith(APP_TASK_INSTRUCTIONS)).toBe(true);
+    }
+  });
+
+  it('still includes app and canvas guidance', () => {
+    const text = serverInstructions({ taskId: 'task', coordinatorId: '', canvasOnly: false });
+    expect(text).toContain('create_task');
+    expect(text).toContain(CANVAS_INSTRUCTIONS);
   });
 });
 

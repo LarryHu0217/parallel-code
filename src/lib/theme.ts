@@ -255,6 +255,21 @@ export function bannerStyle(color: string): Record<string, string> {
   };
 }
 
+/** Inline style for dialog footer buttons; pair with the btn-primary/btn-secondary class. */
+export function dialogButtonStyle(primary: boolean, disabled = false): Record<string, string> {
+  return {
+    padding: '9px 18px',
+    background: primary ? theme.accent : theme.bgInput,
+    border: primary ? 'none' : `1px solid ${theme.border}`,
+    'border-radius': 'var(--radius-md)',
+    color: primary ? theme.accentText : theme.fgMuted,
+    cursor: disabled ? 'default' : 'pointer',
+    opacity: disabled ? '0.5' : '1',
+    'font-size': '14px',
+    'font-weight': primary ? '500' : '400',
+  };
+}
+
 /** Shared style for uppercase section label headings in dialogs. */
 export const sectionLabelStyle: Record<string, string> = {
   'font-size': '12px',

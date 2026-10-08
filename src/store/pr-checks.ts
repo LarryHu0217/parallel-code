@@ -175,6 +175,10 @@ export function startPrChecksSubscription(): () => void {
         msg.reviewDecision === 'REVIEW_REQUIRED'
           ? msg.reviewDecision
           : null,
+      mergeable:
+        msg.mergeable === 'MERGEABLE' || msg.mergeable === 'CONFLICTING'
+          ? msg.mergeable
+          : 'UNKNOWN',
       passing: typeof msg.passing === 'number' ? msg.passing : 0,
       pending: typeof msg.pending === 'number' ? msg.pending : 0,
       failing: typeof msg.failing === 'number' ? msg.failing : 0,
