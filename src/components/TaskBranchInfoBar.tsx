@@ -41,6 +41,19 @@ type ReviewStatusKind = 'approved' | 'changes-requested' | 'review-needed' | 'dr
 /** GitHub's own "merged" purple, so the state reads the same as on github.com. */
 const GITHUB_MERGED_COLOR = '#8957e5';
 
+/** Solid pill like GitHub's merged label: a finished PR is the one state worth a full badge. */
+const mergedBadgeStyle: JSX.CSSProperties = {
+  'font-size': '11px',
+  'font-weight': '600',
+  padding: '1px 6px',
+  gap: '4px',
+  'border-radius': 'var(--radius-xs)',
+  background: GITHUB_MERGED_COLOR,
+  // Fixed white, not a theme token: the fill is theme-independent too.
+  color: '#fff',
+  'white-space': 'nowrap',
+};
+
 interface ReviewStatus {
   kind: ReviewStatusKind;
   label: string;
@@ -314,7 +327,12 @@ export function TaskBranchInfoBar(props: TaskBranchInfoBarProps) {
               </span>
               <Show when={reviewStatus()}>
                 {(review) => (
-                  <span class="task-pr-review-status" style={{ color: review().color }}>
+                  <span
+                    class="task-pr-review-status"
+                    style={
+                      review().kind === 'merged' ? mergedBadgeStyle : { color: review().color }
+                    }
+                  >
                     <span class="task-pr-review-label">{review().label}</span>
                     <span class={`task-pr-review-icon task-pr-review-icon--${review().kind}`}>
                       <ReviewStatusIcon kind={review().kind} />

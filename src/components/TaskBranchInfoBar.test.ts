@@ -99,7 +99,7 @@ describe('TaskBranchInfoBar PR review metadata', () => {
     expect(html).not.toContain('task-pr-review-icon--approved');
   });
 
-  it('shows a merged PR in GitHub purple instead of its review state', () => {
+  it('shows a merged PR as a GitHub-purple badge instead of its review state', () => {
     mockGetPrChecks.mockReturnValue({
       overall: 'none',
       merged: true,
@@ -113,7 +113,7 @@ describe('TaskBranchInfoBar PR review metadata', () => {
     const html = renderToString(() => TaskBranchInfoBar({ task, onEditProject: vi.fn() }));
 
     expect(html).toContain('<span class="task-pr-review-label">Merged</span>');
-    expect(html).toContain('class="task-pr-review-status" style="color:#8957e5');
+    expect(html).toMatch(/class="task-pr-review-status" style="[^"]*background:#8957e5;color:#fff/);
     expect(html).toContain('task-pr-review-icon--merged">');
     expect(html).toContain('aria-label="PR #12, Merged"');
   });
@@ -234,6 +234,10 @@ describe('TaskBranchInfoBar responsive styles', () => {
     expect(css).toMatch(
       /@container\s+task-branch-info\s+\(max-width:\s*420px\)[\s\S]*?\.task-pr-review-icon\s*{[^}]*display:\s*inline-flex/,
     );
+  });
+
+  it('keeps the merged icon visible beside its label at every width', () => {
+    expect(css).toMatch(/\.task-pr-review-icon--merged\s*{[^}]*display:\s*inline-flex/);
   });
 
   it('lets secondary identities ellipsize while keeping PR state non-shrinkable', () => {

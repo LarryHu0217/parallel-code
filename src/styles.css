@@ -431,6 +431,12 @@ body.font-smoothing {
   flex: 0 0 auto;
 }
 
+/* The merged badge keeps its icon at every width, leading like GitHub's. */
+.task-pr-review-icon--merged {
+  display: inline-flex;
+  order: -1;
+}
+
 .task-branch-project-label,
 .task-branch-source-label,
 .task-branch-name-label,
