@@ -13,7 +13,6 @@ const APP_LAYER_IDS = [
   'app.task.close-shell',
   'app.task.close',
   'app.task.merge',
-  'app.task.push',
   'app.task.new-shell',
   'app.task.send-prompt',
   'app.task.second-opinion',

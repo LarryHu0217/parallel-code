@@ -481,9 +481,8 @@ export function TaskPanel(props: TaskPanelProps) {
       case 'close':
         setShowCloseConfirm(true);
         break;
-      case 'merge':
-      case 'push':
-        openFinish(action.type);
+      case 'finish':
+        openFinish('merge');
         break;
     }
   });

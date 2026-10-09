@@ -196,25 +196,15 @@ export const DEFAULT_BINDINGS: KeyBinding[] = [
     global: true,
   },
   {
+    // Keeps the old merge id so users' saved rebindings still apply.
     id: 'app.task.merge',
     layer: 'app',
     category: 'Tasks',
-    description: 'Finish task: merge',
+    description: 'Finish task',
     platform: 'both',
     key: 'M',
     modifiers: { cmdOrCtrl: true, shift: true },
-    action: 'mergeTask',
-    global: true,
-  },
-  {
-    id: 'app.task.push',
-    layer: 'app',
-    category: 'Tasks',
-    description: 'Finish task: push',
-    platform: 'both',
-    key: 'P',
-    modifiers: { cmdOrCtrl: true, shift: true },
-    action: 'pushTask',
+    action: 'finishTask',
     global: true,
   },
   {

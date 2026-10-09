@@ -184,8 +184,7 @@ Notifications show the task name and a request for input; terminal output and co
 | `Ctrl+N`               | New task                           |
 | `Ctrl+Shift+A`         | New task (alternative)             |
 | `Ctrl+Enter`           | Send prompt                        |
-| `Ctrl+Shift+M`         | Merge task to main                 |
-| `Ctrl+Shift+P`         | Push to remote                     |
+| `Ctrl+Shift+M`         | Finish task (merge or push)        |
 | `Ctrl+W`               | Close focused panel or file        |
 | `Ctrl+Shift+W`         | Close active task                  |
 | **Navigation**         |                                    |

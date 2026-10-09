@@ -536,7 +536,7 @@ export interface UsageState {
 export type PanelId = string;
 
 export interface PendingAction {
-  type: 'close' | 'merge' | 'push';
+  type: 'close' | 'finish';
   taskId: string;
 }
 
