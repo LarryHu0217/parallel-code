@@ -194,6 +194,9 @@ export function startPeerMessageDelivery(onDelivered: (message: PeerMessage) => 
         recipients.add(agentId);
         const task = store.tasks[taskId];
         const agent = store.agents[agentId];
+        // The task composer targets the first pane. An explicit handoff to a
+        // reviewer in another pane must not wait for that unrelated draft.
+        const checkComposerDraft = message.origin !== 'user' || task?.agentIds[0] === agentId;
         if (
           peerDeliveriesInFlight.has(agentId) ||
           !task ||
@@ -210,8 +213,7 @@ export function startPeerMessageDelivery(onDelivered: (message: PeerMessage) => 
           (task.controlledBy === 'human' && message.origin !== 'user') ||
           task.initialPrompt ||
           task.automationWriteInFlight ||
-          task.promptDraftActive ||
-          task.promptDraft?.trim() ||
+          (checkComposerDraft && (task.promptDraftActive || task.promptDraft?.trim())) ||
           task.terminalInputPending ||
           (task.userActivityHoldUntil ?? 0) > Date.now() ||
           task.prefillPrompt ||

@@ -456,11 +456,35 @@ it('delivers an explicitly requested user handoff under human control, without t
 });
 
 it.each([{ promptDraft: 'draft' }, { terminalInputPending: true }, { promptDraftActive: true }])(
-  'keeps user handoffs queued when human input is present: %j',
+  'keeps user handoffs to the main agent queued when human input is present: %j',
   async (blocked) => {
-    inbox([{ ...message(), origin: 'user' }]);
+    inbox([{ ...message('one', 'first'), origin: 'user' }]);
     setStore('tasks', task.id, { controlledBy: 'human', ...blocked });
     await vi.advanceTimersByTimeAsync(1000);
     expect(invoke).not.toHaveBeenCalled();
   },
 );
+
+it.each([{ promptDraft: 'draft' }, { promptDraftActive: true }])(
+  'delivers a second opinion without waiting for the main agent composer: %j',
+  async (draft) => {
+    inbox([{ ...message(), origin: 'user' }]);
+    setStore('tasks', task.id, { controlledBy: 'human', ...draft });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(invoke).toHaveBeenCalledWith(IPC.DelegationRequest, {
+      action: 'deliverMessage',
+      deliveryId: 'one',
+      agentId: 'second',
+      sessionInstanceId: 'second-instance',
+    });
+    expect(delivered).toHaveBeenCalledOnce();
+    expect(store.tasks[task.id]).toMatchObject(draft);
+  },
+);
+
+it('keeps second opinions queued while terminal input is pending', async () => {
+  inbox([{ ...message(), origin: 'user' }]);
+  setStore('tasks', task.id, 'terminalInputPending', true);
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(invoke).not.toHaveBeenCalled();
+});
