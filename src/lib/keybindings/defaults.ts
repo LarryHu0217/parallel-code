@@ -236,7 +236,7 @@ export const DEFAULT_BINDINGS: KeyBinding[] = [
   {
     id: 'app.task.second-opinion',
     layer: 'app',
-    category: 'Task',
+    category: 'Tasks',
     description: 'Ask for a second opinion',
     platform: 'both',
     key: 'O',

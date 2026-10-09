@@ -834,7 +834,8 @@
   font-weight: 500;
 }
 .chat-activity-outcome {
-  color: var(--warning);
+  /* Declined and stopped calls need no action, unlike failures. */
+  color: var(--fg-muted);
 }
 .chat-current-operation {
   flex-basis: 100%;
