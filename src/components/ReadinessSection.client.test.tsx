@@ -1,4 +1,5 @@
 import { render } from 'solid-js/web';
+import { createStore } from 'solid-js/store';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Task } from '../store/types';
 import { buildEvidence, getTaskChecks, runTaskVerification } from '../store/store';
@@ -75,6 +76,26 @@ describe('ReadinessSection', () => {
     { verificationRun: {} as Task['verificationRun'] },
   ])('starts open once evidence or a check run exists: %j', (overrides) => {
     mount(overrides);
+    expect(body()?.hidden).toBe(false);
+  });
+
+  // Auto-evidence or an agent's check can finish while the dialog is open; a
+  // failure it reports must not stay folded away.
+  it.each<Partial<Task>>([
+    { evidence: {} as Task['evidence'] },
+    { verificationRun: { status: 'failed' } as Task['verificationRun'] },
+  ])('opens when evidence or a check run arrives while folded: %j', (update) => {
+    const [task, setTask] = createStore({ id: 'task', projectId: 'project' } as Task);
+    dispose = render(
+      () => (
+        <ReadinessSection task={task}>
+          <div data-testid="body" />
+        </ReadinessSection>
+      ),
+      document.body,
+    );
+    expect(body()?.hidden).toBe(true);
+    setTask(update);
     expect(body()?.hidden).toBe(false);
   });
 

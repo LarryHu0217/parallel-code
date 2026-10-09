@@ -1,4 +1,4 @@
-import { Show, createSignal, createUniqueId, untrack, type JSX } from 'solid-js';
+import { Show, createEffect, createSignal, createUniqueId, on, type JSX } from 'solid-js';
 import { VERIFY_CHECK_ID } from '../../electron/shared/evidence';
 import { theme } from '../lib/theme';
 import {
@@ -32,8 +32,14 @@ const toggleStyle = {
  * a status change.
  */
 export function ReadinessSection(props: ReadinessSectionProps) {
-  const [open, setOpen] = createSignal(
-    untrack(() => Boolean(props.task.evidence || props.task.verificationRun)),
+  const hasResults = () => Boolean(props.task.evidence || props.task.verificationRun);
+  const [open, setOpen] = createSignal(false);
+  // Opens at mount, or when auto-evidence or an agent's check lands while the
+  // dialog is up, so a failure it reports is not left folded away.
+  createEffect(
+    on(hasResults, (has, had) => {
+      if (has && !had) setOpen(true);
+    }),
   );
   const verifyCommand = () =>
     getTaskChecks(props.task.id).find((check) => check.id === VERIFY_CHECK_ID)?.command;
