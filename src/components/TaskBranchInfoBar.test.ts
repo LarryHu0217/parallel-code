@@ -16,6 +16,7 @@ vi.mock('../store/store', () => ({
   getBranchDivergence: vi.fn(() => null),
 }));
 
+vi.mock('../store/github', () => ({ stageFailedChecksPrompt: vi.fn() }));
 vi.mock('../lib/platform', () => ({ isMac: false }));
 vi.mock('../lib/shell', () => ({
   revealItemInDir: vi.fn(() => Promise.resolve()),
@@ -149,6 +150,37 @@ describe('TaskBranchInfoBar GitHub actions', () => {
 
     expect(html).toContain('class="task-pr-conflicts"');
     expect(html).toContain('aria-label="PR #12, Conflicts"');
+  });
+
+  const checks = (overall: string, extra: Record<string, unknown> = {}) => ({
+    overall,
+    passing: 1,
+    pending: 0,
+    failing: overall === 'failure' ? 1 : 0,
+    checks: [],
+    checkedAt: '2026-08-04T10:00:00.000Z',
+    ...extra,
+  });
+
+  it('offers a red Fix CI button when the PR checks failed', () => {
+    mockGetPrChecks.mockReturnValue(checks('failure'));
+
+    const html = renderToString(() => TaskBranchInfoBar({ task, onEditProject: vi.fn() }));
+
+    expect(html).toMatch(/class="task-pr-fix-ci"[^>]*style="background:var\(--error\)/);
+    expect(html).toContain('>Fix CI</button>');
+  });
+
+  it.each([
+    ['pending', {}],
+    ['success', {}],
+    ['failure', { merged: true }],
+  ])('does not offer Fix CI when checks are %s %o', (overall, extra) => {
+    mockGetPrChecks.mockReturnValue(checks(overall, extra));
+
+    const html = renderToString(() => TaskBranchInfoBar({ task, onEditProject: vi.fn() }));
+
+    expect(html).not.toContain('task-pr-fix-ci');
   });
 });
 
