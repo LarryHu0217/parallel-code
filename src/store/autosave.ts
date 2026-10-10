@@ -84,6 +84,7 @@ function structuralSnapshot(): string {
             savedInitialPrompt: t.savedInitialPrompt,
             collapsed: t.collapsed,
             snoozedUntil: t.snoozedUntil,
+            snoozedUntilCi: t.snoozedUntilCi,
             agentSessionIds: t.agentSessionIds,
             savedAgentSessionIds: t.savedAgentSessionIds,
             coordinatedBy: t.coordinatedBy,

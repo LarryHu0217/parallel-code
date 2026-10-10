@@ -19,7 +19,15 @@ import { EditableText, type EditableTextHandle } from './EditableText';
 import { IconButton } from './IconButton';
 import { MoreMenu } from './chat/MoreMenu';
 import { StatusDot, getDotTooltip } from './StatusDot';
-import { ActivityIcon, ClockIcon, CloseIcon, PlayIcon, StopIcon, UndoIcon } from './icons';
+import {
+  ActivityIcon,
+  CheckIcon,
+  ClockIcon,
+  CloseIcon,
+  PlayIcon,
+  StopIcon,
+  UndoIcon,
+} from './icons';
 import { theme } from '../lib/theme';
 import { badgeStyle } from '../lib/badgeStyle';
 import { taskCheckSignal } from '../lib/task-check-signal';
@@ -30,10 +38,13 @@ import type { Task } from '../store/types';
 import { isLandedTaskState } from '../store/landing';
 import {
   bringTaskToFront,
+  canSnoozeTaskUntilCi,
   getTaskSnoozedUntil,
   isTaskBackgrounded,
+  isTaskSnoozedUntilCi,
   sendTaskToBack,
   snoozeTask,
+  snoozeTaskUntilCi,
 } from '../store/background-tasks';
 
 interface TaskTitleBarProps {
@@ -192,9 +203,11 @@ export function TaskTitleBar(props: TaskTitleBarProps) {
         </Show>
         <Show when={isTaskBackgrounded(props.task.id)}>
           <span style={badgeStyle(theme.fgMuted)}>
-            {snoozedUntil() === undefined
-              ? 'Background'
-              : `Snoozed until ${new Date(snoozedUntil() ?? 0).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })}`}
+            {isTaskSnoozedUntilCi(props.task.id)
+              ? 'Snoozed until CI finishes'
+              : snoozedUntil() === undefined
+                ? 'Background'
+                : `Snoozed until ${new Date(snoozedUntil() ?? 0).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })}`}
           </span>
         </Show>
         <Show when={props.task.needsReview}>
@@ -278,6 +291,16 @@ export function TaskTitleBar(props: TaskTitleBarProps) {
                     ? bringTaskToFront(props.task.id)
                     : sendTaskToBack(props.task.id),
               },
+              ...(canSnoozeTaskUntilCi(props.task.id)
+                ? [
+                    {
+                      label: 'Snooze until CI finishes',
+                      icon: <CheckIcon size={14} />,
+                      title: 'Returns when the pull request checks pass or fail.',
+                      run: () => snoozeTaskUntilCi(props.task.id),
+                    },
+                  ]
+                : []),
               {
                 label: 'Snooze · keep running',
                 icon: <PlayIcon size={14} />,

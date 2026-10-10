@@ -2409,6 +2409,20 @@ describe('timed snooze persistence', () => {
     expect(store.tasks['task-1'].agentIds).toEqual([]);
   });
 
+  it.each([
+    [true, true],
+    ['yes', undefined],
+  ])('round-trips a CI snooze flag (%s)', async (value, expected) => {
+    const state = JSON.parse(savedSnooze(undefined));
+    state.tasks['task-1'].snoozedUntilCi = value;
+    mockInvoke.mockResolvedValueOnce(JSON.stringify(state));
+    await loadState();
+    expect(store.tasks['task-1'].snoozedUntilCi).toBe(expected);
+    await saveState();
+    const savedCall = mockInvoke.mock.calls.findLast(([channel]) => channel === IPC.SaveAppState);
+    expect(JSON.parse(savedCall?.[1].json).tasks['task-1'].snoozedUntilCi).toBe(expected);
+  });
+
   it.each([null, 'tomorrow', -1, 0, 1e20])('ignores invalid saved deadlines: %s', async (value) => {
     mockInvoke.mockResolvedValueOnce(savedSnooze(value));
     await loadState();

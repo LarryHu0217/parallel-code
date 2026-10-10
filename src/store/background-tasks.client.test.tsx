@@ -14,9 +14,12 @@ import { computeAttentionEntries } from './sidebar-attention';
 import {
   bringTaskToFront,
   getTaskSnoozedUntil,
+  canSnoozeTaskUntilCi,
   isTaskBackgrounded,
+  isTaskSnoozedUntilCi,
   sendTaskToBack,
   snoozeTask,
+  snoozeTaskUntilCi,
   startBackgroundTaskWatcher,
 } from './background-tasks';
 import type { Task } from './types';
@@ -81,6 +84,8 @@ beforeEach(() => {
 afterEach(() => {
   stop();
   for (const id of ['one', 'two', 'three']) {
+    setStore('tasks', id, 'snoozedUntilCi', undefined);
+    setStore('tasks', id, 'prUrl', undefined);
     bringTaskToFront(id);
     clearAgentActivity(`${id}-agent`);
     removePrChecks(id);
@@ -613,4 +618,190 @@ it('cancels a running snooze when the user explicitly minimizes the task', async
   expect(store.tasks.one.collapsed).toBe(true);
   expect(store.tasks.one.agentIds).toEqual([]);
   expect(store.taskOrder).not.toContain('one');
+});
+
+it('offers a CI snooze only while the PR checks are pending', () => {
+  expect(canSnoozeTaskUntilCi('one')).toBe(false);
+  snoozeTaskUntilCi('one');
+  expect(isTaskBackgrounded('one')).toBe(false);
+
+  setPrChecks('one', { ...prChecks, overall: 'success', pending: 0, passing: 1 });
+  expect(canSnoozeTaskUntilCi('one')).toBe(false);
+
+  setPrChecks('one', { ...prChecks });
+  expect(canSnoozeTaskUntilCi('one')).toBe(true);
+});
+
+it.each([
+  ['passes', { overall: 'success', pending: 0, passing: 1 }],
+  ['fails', { overall: 'failure', pending: 0, failing: 1 }],
+  ['merges', { overall: 'none', pending: 0, merged: true }],
+] as const)('keeps a CI snooze through agent activity and returns when CI %s', (_, outcome) => {
+  setPrChecks('one', { ...prChecks });
+  snoozeTaskUntilCi('one');
+  expect(isTaskSnoozedUntilCi('one')).toBe(true);
+  expect(store.taskOrder.at(-1)).toBe('one');
+
+  hook('waiting', 'PermissionRequest');
+  hook('done', 'Stop');
+  setPrChecks('one', { ...prChecks, pending: 2 });
+  expect(isTaskBackgrounded('one')).toBe(true);
+
+  setPrChecks('one', { ...prChecks, ...outcome });
+  expect(isTaskBackgrounded('one')).toBe(false);
+  expect(isTaskSnoozedUntilCi('one')).toBe(false);
+  expect(store.taskOrder[0]).toBe('one');
+  expect(store.activeTaskId).toBe('two');
+});
+
+it('returns a CI snooze when the PR stops being watched', () => {
+  setPrChecks('one', { ...prChecks });
+  snoozeTaskUntilCi('one');
+  removePrChecks('one');
+  expect(isTaskBackgrounded('one')).toBe(false);
+});
+
+it('switches a backgrounded coordinator group to its own PR from a child', () => {
+  setStore('tasks', 'three', 'coordinatedBy', 'one');
+  setPrChecks('one', { ...prChecks });
+  sendTaskToBack('one');
+  snoozeTaskUntilCi('three');
+  expect(isTaskSnoozedUntilCi('one')).toBe(true);
+  expect(isTaskSnoozedUntilCi('three')).toBe(true);
+  setPrChecks('one', { ...prChecks, overall: 'failure', pending: 0, failing: 1 });
+  expect(isTaskBackgrounded('three')).toBe(false);
+});
+
+it('offers the CI snooze in the Later menu and shows it in the header', () => {
+  setPrChecks('one', { ...prChecks });
+  const container = document.createElement('div');
+  document.body.append(container);
+  const dispose = render(
+    () => (
+      <TaskTitleBar
+        task={store.tasks.one}
+        isActive={store.activeTaskId === 'one'}
+        onClose={() => undefined}
+        onFinish={() => undefined}
+        pushing={false}
+        pushSuccess={false}
+        onTitleEditRef={() => undefined}
+      />
+    ),
+    container,
+  );
+  try {
+    container.querySelector<HTMLButtonElement>('button[aria-label="Later"]')?.click();
+    const item = [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(
+      (menuItem) => menuItem.textContent === 'Snooze until CI finishes',
+    );
+    expect(item).toBeDefined();
+    item?.click();
+    expect(isTaskSnoozedUntilCi('one')).toBe(true);
+    expect(container.textContent).toContain('Snoozed until CI finishes');
+  } finally {
+    dispose();
+    container.remove();
+  }
+});
+
+it('keeps a CI snooze while a fresh push has no checks registered yet', () => {
+  setPrChecks('one', { ...prChecks });
+  snoozeTaskUntilCi('one');
+  setPrChecks('one', { ...prChecks, overall: 'none', pending: 0 });
+  expect(isTaskSnoozedUntilCi('one')).toBe(true);
+  setPrChecks('one', { ...prChecks, overall: 'success', pending: 0, passing: 1 });
+  expect(isTaskBackgrounded('one')).toBe(false);
+});
+
+it('replaces a CI snooze with a timed one and back', () => {
+  setPrChecks('one', { ...prChecks });
+  snoozeTaskUntilCi('one');
+  expect(store.tasks.one.snoozedUntilCi).toBe(true);
+  sendTaskToBack('one', 1);
+  expect(isTaskSnoozedUntilCi('one')).toBe(false);
+  expect(store.tasks.one.snoozedUntilCi).toBeUndefined();
+  expect(getTaskSnoozedUntil('one')).toBeDefined();
+  snoozeTaskUntilCi('one');
+  expect(getTaskSnoozedUntil('one')).toBeUndefined();
+  expect(store.tasks.one.snoozedUntil).toBeUndefined();
+  bringTaskToFront('one');
+  expect(store.tasks.one.snoozedUntilCi).toBeUndefined();
+});
+
+it('restores a saved CI snooze and waits for the first checks after restart', () => {
+  stop();
+  setStore('tasks', 'one', 'snoozedUntilCi', true);
+  setStore('tasks', 'one', 'prUrl', 'https://github.com/o/r/pull/1');
+  setStore('taskOrder', ['two', 'three', 'one']);
+  setActiveTask('two');
+  stop = startBackgroundTaskWatcher();
+  expect(isTaskSnoozedUntilCi('one')).toBe(true);
+  hook('done', 'Stop');
+  setPrChecks('one', { ...prChecks });
+  expect(isTaskBackgrounded('one')).toBe(true);
+  setPrChecks('one', { ...prChecks, overall: 'failure', pending: 0, failing: 1 });
+  expect(isTaskBackgrounded('one')).toBe(false);
+  expect(store.taskOrder[0]).toBe('one');
+  expect(store.activeTaskId).toBe('two');
+  expect(store.tasks.one.snoozedUntilCi).toBeUndefined();
+});
+
+it('returns a restored CI snooze whose CI finished while the app was closed', () => {
+  stop();
+  setStore('tasks', 'one', 'snoozedUntilCi', true);
+  setStore('tasks', 'one', 'prUrl', 'https://github.com/o/r/pull/1');
+  setStore('taskOrder', ['two', 'three', 'one']);
+  setActiveTask('two');
+  stop = startBackgroundTaskWatcher();
+  setPrChecks('one', { ...prChecks, overall: 'success', pending: 0, passing: 1 });
+  expect(isTaskBackgrounded('one')).toBe(false);
+});
+
+it('returns a restored CI snooze when its PR goes away after being seen', () => {
+  stop();
+  setStore('tasks', 'one', 'snoozedUntilCi', true);
+  setStore('tasks', 'one', 'prUrl', 'https://github.com/o/r/pull/1');
+  setStore('taskOrder', ['two', 'three', 'one']);
+  setActiveTask('two');
+  stop = startBackgroundTaskWatcher();
+  setPrChecks('one', { ...prChecks });
+  removePrChecks('one');
+  expect(isTaskBackgrounded('one')).toBe(false);
+});
+
+it('keeps a restored CI snooze when checks are removed before any were seen', () => {
+  stop();
+  setStore('tasks', 'one', 'snoozedUntilCi', true);
+  setStore('tasks', 'one', 'prUrl', 'https://github.com/o/r/pull/1');
+  setStore('taskOrder', ['two', 'three', 'one']);
+  setActiveTask('two');
+  stop = startBackgroundTaskWatcher();
+  setPrChecks('one', { ...prChecks });
+  stop();
+  removePrChecks('one');
+  stop = startBackgroundTaskWatcher();
+  expect(isTaskSnoozedUntilCi('one')).toBe(true);
+  setPrChecks('one', { ...prChecks, overall: 'none', pending: 0, merged: true });
+  expect(isTaskBackgrounded('one')).toBe(false);
+});
+
+it('drops a saved CI snooze on startup when the task has no PR', () => {
+  stop();
+  setStore('tasks', 'one', 'snoozedUntilCi', true);
+  setStore('taskOrder', ['two', 'three', 'one']);
+  setActiveTask('two');
+  stop = startBackgroundTaskWatcher();
+  expect(isTaskBackgrounded('one')).toBe(false);
+  expect(store.tasks.one.snoozedUntilCi).toBeUndefined();
+});
+
+it('replaces a CI snooze when stopping agents for a timed snooze', async () => {
+  setPrChecks('one', { ...prChecks });
+  snoozeTaskUntilCi('one');
+  await snoozeTask('one', 1, false);
+  expect(store.tasks.one.collapsed).toBe(true);
+  expect(store.tasks.one.snoozedUntilCi).toBeUndefined();
+  expect(isTaskSnoozedUntilCi('one')).toBe(false);
+  expect(getTaskSnoozedUntil('one')).toBeDefined();
 });

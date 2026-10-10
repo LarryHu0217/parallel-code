@@ -256,6 +256,8 @@ export interface Task {
   superProductivity?: SuperProductivityLink;
   /** Absolute return time for a timed snooze, retained across app restarts. */
   snoozedUntil?: number;
+  /** Backgrounded until the PR checks stop pending, retained across app restarts. */
+  snoozedUntilCi?: boolean;
   collapsed?: boolean;
   savedAgentDef?: AgentDef;
   savedAgentDefs?: AgentDef[];
@@ -391,6 +393,8 @@ export interface PersistedTask {
   secondOpinionDismissed?: boolean;
   /** Absolute return time for a timed snooze, retained across app restarts. */
   snoozedUntil?: number;
+  /** Backgrounded until the PR checks stop pending, retained across app restarts. */
+  snoozedUntilCi?: boolean;
   collapsed?: boolean;
   savedAgentSessionIds?: (string | null)[];
   savedSelectedAgentIndex?: number;

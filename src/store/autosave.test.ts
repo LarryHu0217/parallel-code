@@ -155,6 +155,7 @@ describe('autosave snapshot includes new-task-default fields', () => {
     'propagateSkipPermissions',
     'maxConcurrentTasks',
     'snoozedUntil',
+    'snoozedUntilCi',
   ] as const)('%s changes the snapshot', (field) => {
     const taskId = 'autosave-draft-task';
     const task: Task = {
@@ -180,7 +181,8 @@ describe('autosave snapshot includes new-task-default fields', () => {
       } else if (
         field === 'autoMergeChildren' ||
         field === 'autoSendChildUpdates' ||
-        field === 'propagateSkipPermissions'
+        field === 'propagateSkipPermissions' ||
+        field === 'snoozedUntilCi'
       ) {
         setStore('tasks', taskId, field, true);
       } else {

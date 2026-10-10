@@ -1061,6 +1061,7 @@ export async function collapseTask(taskId: string): Promise<void> {
       if (!s.tasks[taskId]) return;
       s.tasks[taskId].collapsed = true;
       s.tasks[taskId].snoozedUntil = undefined;
+      s.tasks[taskId].snoozedUntilCi = undefined;
       s.tasks[taskId].savedAgentDef = agentDefs[0];
       s.tasks[taskId].savedAgentDefs = agentDefs.length > 0 ? agentDefs : undefined;
       s.tasks[taskId].savedAgentSessionIds = savedAgentIds.map(
