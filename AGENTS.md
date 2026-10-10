@@ -22,7 +22,7 @@ Electron desktop app for running coding agents in isolated Git worktrees. Deskto
 - CI tests that Semgrep rules work on fixtures; it does not scan the repository with Semgrep. `npm run lint:security` and `npm run lint:secrets` run separate scans and require Semgrep and Gitleaks respectively.
 - happy-dom cannot verify native Electron views. For browser-preview changes, follow the native smoke checks in `docs/browser-preview.md`.
 
-When committing, use conventional commit messages, such as `fix(terminal): restore focus`. Git hooks enforce the format and run `lint-staged`, `npm run check`, and a lockfile check on commit; pushing runs `check` and `npm test`. Changes to dependency or package metadata and installation lifecycle scripts in `package.json` must include the corresponding `package-lock.json` update. Development-script-only changes do not require a no-op lockfile update. The lockfile must remain tracked and must not be ignored.
+When committing, use conventional commit messages, such as `fix(terminal): restore focus`. Git hooks enforce the format and run `lint-staged`, `npm run check`, and a lockfile check on commit; pushing runs `check` and `npm test`. Changes to `package.json` must include the corresponding `package-lock.json` update.
 
 ## Architecture and conventions
 
@@ -32,6 +32,11 @@ When committing, use conventional commit messages, such as `fix(terminal): resto
 - Follow the existing store domain modules. `src/store/core.ts` owns the main store; `src/store/store.ts` re-exports domain operations.
 - Electron TypeScript uses NodeNext resolution: follow existing relative imports with `.js` suffixes.
 - Desktop renderer/main communication uses Electron IPC. The phone UI uses the existing HTTP/WebSocket API. Renderer imports of backend code are restricted to the shared modules allowed in `.dependency-cruiser.cjs`.
+
+### UI design
+
+- Reserve visual intensity for urgency. Filled or tinted backgrounds, accent or status colours, and strong borders signal something that needs attention now, such as failures, blocking questions, or conflicts. Routine actions, including primary ones such as Finish, stay neutral and use muted text with a subtle border. They can gain emphasis on hover. Showing state is an exception: a pressed toggle or a brief success confirmation may use accent or success colour.
+- Dense areas such as task headers already contain status text and badges. Don't add another attention-seeking element; use a label, placement, or spacing to make an action discoverable.
 
 ### IPC changes
 

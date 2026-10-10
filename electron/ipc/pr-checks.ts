@@ -225,13 +225,22 @@ async function refreshOne(taskId: string): Promise<void> {
     entry.failing = 0;
     entry.checks = [];
     entry.lastRefreshedAt = Date.now();
-    sendUpdate(entry, { cleared: true, merged: status.state === 'MERGED' });
+    sendUpdate(entry, {
+      cleared: true,
+      merged: status.state === 'MERGED',
+      mergedAt: status.mergedAt,
+    });
     tasks.delete(taskId);
     if (tasks.size === 0) clearTickInterval();
     return;
   }
 
-  const checks = status.checks;
+  // GitHub does not run pull_request workflows on conflicted branches. Include
+  // a local mergeability check so unrelated passing checks cannot imply success.
+  const checks: PrCheckRun[] =
+    status.mergeable === 'CONFLICTING'
+      ? [...status.checks, { name: 'Merge conflicts with base branch', bucket: 'fail' }]
+      : status.checks;
   const view = { state: status.state, headRefOid: status.headRefOid };
 
   const { overall, passing, pending, failing } = summarize(checks);
@@ -318,10 +327,15 @@ async function refreshOne(taskId: string): Promise<void> {
   }
 }
 
-function sendUpdate(entry: TaskEntry, opts?: { cleared?: boolean; merged?: boolean }): void {
+function sendUpdate(
+  entry: TaskEntry,
+  opts?: { cleared?: boolean; merged?: boolean; mergedAt?: string },
+): void {
   if (!win || win.isDestroyed() || disabled) return;
   const payload: PrChecksUpdatePayload = {
     taskId: entry.taskId,
+    prUrl: entry.prUrl,
+    mergedAt: opts?.mergedAt,
     overall: entry.overall,
     isDraft: entry.isDraft,
     reviewDecision: entry.reviewDecision,
@@ -461,6 +475,7 @@ async function isDirectory(path: string): Promise<boolean> {
  *  (a different command). */
 export async function fetchPrStatus(prUrl: string): Promise<{
   state: string;
+  mergedAt?: string;
   headRefOid: string;
   isDraft: boolean;
   reviewDecision: PrReviewDecision | null;
@@ -474,7 +489,7 @@ export async function fetchPrStatus(prUrl: string): Promise<{
       'view',
       prUrl,
       '--json',
-      'state,headRefOid,isDraft,reviewDecision,mergeable,statusCheckRollup',
+      'state,mergedAt,headRefOid,isDraft,reviewDecision,mergeable,statusCheckRollup',
     ],
     { timeout: GH_TIMEOUT_MS, maxBuffer: GH_MAX_BUFFER },
   );
@@ -508,6 +523,7 @@ export async function fetchPrStatus(prUrl: string): Promise<{
   }
   return {
     state: asString(r['state']) ?? 'UNKNOWN',
+    mergedAt: asString(r['mergedAt']),
     headRefOid: asString(r['headRefOid']) ?? '',
     isDraft: r['isDraft'] === true,
     reviewDecision: parseReviewDecision(r['reviewDecision']),

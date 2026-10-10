@@ -55,7 +55,9 @@ import { computeWrappedPathLinks, createTerminalHttpLinkHandler } from '../lib/t
 import { recordSharedWebglContextLoss, WEBGL_REATTACH_DELAY_MS } from '../lib/webglContextLoss';
 import { isTerminalPaneOnScreen, WEBGL_DETACH_DELAY_MS } from '../lib/terminalPaneVisibility';
 import type { PtyOutput } from '../ipc/types';
-import { SyncIcon } from './icons';
+import { SyncIcon, SendIcon } from './icons';
+import { TerminalSelectionMenu } from './TerminalSelectionMenu';
+import './AgentHandoffComposer.css';
 
 let windowUnloading = false;
 if (typeof window !== 'undefined') {
@@ -128,6 +130,9 @@ const BOOKMARK_EDGE_PAD = 3;
 const CONTROL_CHARS = /[\x00-\x1f\x7f-\x9f]/g;
 
 interface TerminalViewProps {
+  onSendSelection?: (text: string, recipientAgentId?: string) => void;
+  onSecondOpinion?: () => void;
+  handoffRecipients?: { id: string; label: string }[];
   taskId: string;
   agentId: string;
   /** False while this pane is hidden inside its task (an unselected tab).
@@ -222,6 +227,18 @@ export function TerminalView(props: TerminalViewProps) {
   // Bumped whenever the buffer grows or scrolls, so icon positions (derived from
   // live xterm state, not signals) recompute reactively.
   const [overviewTick, setOverviewTick] = createSignal(0);
+  const [selectionMenu, setSelectionMenu] = createSignal<{ x: number; y: number; text: string }>();
+  function openSelectionMenu(event: MouseEvent) {
+    if (!props.onSendSelection && !props.onSecondOpinion) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setSelectionMenu({
+      x: event.clientX,
+      y: event.clientY,
+      text: cleanCopiedTerminalText(term?.getSelection() ?? ''),
+    });
+  }
+  const [hasHandoffSelection, setHasHandoffSelection] = createSignal(false);
   const [selectionActive, setSelectionActive] = createSignal(false);
   let nextBookmarkId = 1;
 
@@ -607,11 +624,12 @@ export function TerminalView(props: TerminalViewProps) {
     term.onRender(syncOverview);
     term.onScroll(syncOverview);
     term.onSelectionChange(() => {
+      setHasHandoffSelection(term?.hasSelection() === true);
       // Only offer to bookmark selections in the normal buffer — a marker on the
       // alternate buffer (full-screen TUI) is cleared the moment the TUI exits.
       const has = term?.hasSelection() === true && term.buffer.active.type === 'normal';
       setSelectionActive(has);
-      if (has) setOverviewTick((t) => t + 1); // refresh the button's position
+      if (term?.hasSelection()) setOverviewTick((t) => t + 1); // refresh the button's position
     });
 
     props.onBufferReady?.(() => {
@@ -1318,7 +1336,10 @@ export function TerminalView(props: TerminalViewProps) {
   });
 
   return (
-    <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+    <div
+      onContextMenu={openSelectionMenu}
+      style={{ position: 'relative', width: '100%', height: '100%' }}
+    >
       <Show when={reserveGutter()}>
         <TerminalBookmarkGutter
           width={BOOKMARK_GUTTER_WIDTH}
@@ -1348,6 +1369,33 @@ export function TerminalView(props: TerminalViewProps) {
           contain: 'strict',
         }}
       />
+      <Show when={props.onSendSelection && hasHandoffSelection()}>
+        <button
+          type="button"
+          class="terminal-selection-trigger"
+          aria-label="Actions for selected text"
+          title="Copy or send selected text"
+          style={{ top: `${selectionButtonTop()}px` }}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={openSelectionMenu}
+        >
+          <SendIcon size={13} />
+        </button>
+      </Show>
+      <Show when={selectionMenu()} keyed>
+        {(selection) => (
+          <TerminalSelectionMenu
+            {...selection}
+            recipients={props.handoffRecipients ?? []}
+            onSend={(text, id) => props.onSendSelection?.(text, id)}
+            onOpinion={props.onSecondOpinion}
+            onClose={(restoreFocus = true) => {
+              setSelectionMenu(undefined);
+              if (restoreFocus) term?.focus();
+            }}
+          />
+        )}
+      </Show>
       <Show when={searchOpen()}>
         <TerminalSearchOverlay
           query={searchQuery()}

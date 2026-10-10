@@ -352,7 +352,7 @@ it('groups activity and preserves open details when another operation arrives', 
   expect(group.open).toBe(true);
   expect(container.querySelector('.chat-tool')).toBe(row);
   expect(row.open).toBe(true);
-  expect(group.textContent).toContain('3 operations');
+  expect(group.querySelector('.chat-activity-label')?.textContent).toBe('3 commands');
 });
 
 it('opens failed activity and connects file actions to the existing review surface', async () => {
@@ -673,7 +673,7 @@ it('keeps each conversation’s unsent attachments to itself', async () => {
   expect(container.querySelector('.chat-context-chips')?.textContent).toContain('src/app.ts');
 });
 
-it('shows an edit as an open, numbered diff and a command above its output', async () => {
+it('keeps edits compact with numbered diffs available on demand', async () => {
   const onReview = vi.fn();
   await update({
     onReview,
@@ -708,12 +708,15 @@ it('shows an edit as an open, numbered diff and a command above its output', asy
       ],
     },
   });
-  // The first edit opens its group, and the edit row itself, without a click.
-  expect(container.querySelector<HTMLDetailsElement>('.chat-activity-group > details')?.open).toBe(
-    true,
-  );
+  const group = container.querySelector<HTMLDetailsElement>('.chat-activity-group > details');
+  expect(group?.open).toBe(false);
+  expect(button('Review changes ↗').closest('details')).toBeNull();
+  await act(() => group?.querySelector('summary')?.click());
+  expect(group?.open).toBe(true);
   const rows = container.querySelectorAll<HTMLDetailsElement>('.chat-tool');
   expect(rows[0].open).toBe(false);
+  expect(rows[1].open).toBe(false);
+  await act(() => rows[1].querySelector('summary')?.click());
   expect(rows[1].open).toBe(true);
   expect(rows[0].querySelector('.chat-command')?.textContent).toBe('$ npm test\n1 passed');
   const lines = Array.from(rows[1].querySelectorAll('.chat-diff-line'), (line) => ({
@@ -769,8 +772,10 @@ it('keeps an edit group closed once the reader closes it, even after a declined 
   const working = { ...props.state, status: 'working' as const };
   await update({ state: { ...working, items: [...working.items, edit('e1', 'running')] } });
   const group = container.querySelector<HTMLDetailsElement>('.chat-activity-group > details');
+  expect(group?.open).toBe(false);
+  await act(() => group?.querySelector('summary')?.click());
   expect(group?.open).toBe(true);
-  if (group) group.open = false;
+  await act(() => group?.querySelector('summary')?.click());
   await update({ state: { ...working, items: [...working.items, edit('e1', 'declined')] } });
   await update({
     state: { ...working, items: [...working.items, edit('e1', 'declined'), edit('e2', 'running')] },
@@ -863,4 +868,93 @@ it('copies a message from its icon button and confirms it', async () => {
   expect(writeText).toHaveBeenCalledWith('Earlier prompt');
   expect(button('Copied').querySelector('svg')).not.toBeNull();
   expect(container.textContent).not.toContain('Use as new prompt');
+});
+
+it('keeps declined and interrupted outcomes visible in a collapsed activity summary', async () => {
+  await update({
+    state: {
+      ...props.state,
+      items: [
+        {
+          id: 'declined',
+          kind: 'tool',
+          text: '',
+          activity: {
+            type: 'tool',
+            label: 'Read private.ts',
+            files: ['private.ts'],
+            status: 'declined',
+          },
+        },
+        {
+          id: 'stopped',
+          kind: 'tool',
+          text: '',
+          activity: { type: 'command', label: 'npm test', status: 'interrupted' },
+        },
+      ],
+    },
+  });
+  const group = container.querySelector<HTMLDetailsElement>('.chat-activity-group > details');
+  expect(group?.open).toBe(false);
+  const summary = group?.querySelector('.chat-activity-summary');
+  expect(summary?.textContent).toContain('1 declined');
+  expect(summary?.textContent).toContain('1 stopped');
+  expect(summary?.textContent).not.toContain('inspected');
+});
+
+it('keeps a dismissed failure group closed until another operation fails', async () => {
+  const failed = {
+    id: 'failed',
+    kind: 'tool' as const,
+    text: 'Command failed',
+    activity: { type: 'command' as const, label: 'npm test', status: 'failed' as const },
+  };
+  const command = {
+    id: 'next',
+    kind: 'tool' as const,
+    text: '',
+    activity: { type: 'command' as const, label: 'npm run check', status: 'running' as const },
+  };
+  await update({ state: { ...props.state, items: [failed] } });
+  const group = container.querySelector<HTMLDetailsElement>('.chat-activity-group > details');
+  expect(group?.open).toBe(true);
+  await act(() => group?.querySelector('summary')?.click());
+  await update({ state: { ...props.state, items: [failed, command] } });
+  expect(group?.open).toBe(false);
+  expect(group?.querySelector('.chat-current-operation')?.textContent).toContain(
+    'Running · npm run check',
+  );
+  await update({
+    state: {
+      ...props.state,
+      items: [failed, { ...command, activity: { ...command.activity, status: 'failed' } }],
+    },
+  });
+  expect(group?.open).toBe(true);
+});
+
+it('includes uncategorized tool work alongside file and command summaries', async () => {
+  await update({
+    state: {
+      ...props.state,
+      items: [
+        {
+          id: 'read',
+          kind: 'tool',
+          text: '',
+          activity: { type: 'tool', label: 'Read app.ts', files: ['app.ts'], status: 'completed' },
+        },
+        {
+          id: 'lookup',
+          kind: 'tool',
+          text: '',
+          activity: { type: 'tool', label: 'Search documentation', status: 'completed' },
+        },
+      ],
+    },
+  });
+  expect(container.querySelector('.chat-activity-label')?.textContent).toBe(
+    '1 file inspected · 1 other operation',
+  );
 });

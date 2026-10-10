@@ -24,6 +24,19 @@ const optionStyle = {
   'font-size': '13px',
   color: theme.fg,
 };
+const messageFieldStyle = {
+  width: '100%',
+  background: theme.bgInput,
+  border: `1px solid ${theme.border}`,
+  'border-radius': 'var(--radius-md)',
+  padding: '8px 10px',
+  color: theme.fg,
+  'font-size': '13px',
+  'font-family': "'JetBrains Mono', monospace",
+  outline: 'none',
+  'box-sizing': 'border-box',
+} as const;
+
 const commitLabel = (count: number) => `${count} commit${count === 1 ? '' : 's'}`;
 
 /** What stops or changes a merge; shown first so it is read before anything else. */
@@ -193,7 +206,7 @@ export function MergeOptions(props: Pick<MergeSectionProps, 'task' | 'state'>) {
           <input
             type="checkbox"
             checked={props.state.squash()}
-            onChange={(e) => props.state.enableSquash(e.currentTarget.checked)}
+            onChange={(e) => props.state.setSquash(e.currentTarget.checked)}
             style={{ cursor: 'pointer' }}
           />
           Squash commits
@@ -205,25 +218,21 @@ export function MergeOptions(props: Pick<MergeSectionProps, 'task' | 'state'>) {
         </p>
       </Show>
       <Show when={props.state.squash()}>
+        <input
+          type="text"
+          aria-label="Commit title"
+          value={props.state.squashTitle()}
+          onInput={(e) => props.state.setSquashTitle(e.currentTarget.value)}
+          placeholder="Commit title"
+          style={{ ...messageFieldStyle, 'margin-top': '8px' }}
+        />
         <textarea
-          value={props.state.squashMessage()}
-          onInput={(e) => props.state.setSquashMessage(e.currentTarget.value)}
-          placeholder="Commit message..."
-          rows={3}
-          style={{
-            'margin-top': '8px',
-            width: '100%',
-            background: theme.bgInput,
-            border: `1px solid ${theme.border}`,
-            'border-radius': 'var(--radius-md)',
-            padding: '8px 10px',
-            color: theme.fg,
-            'font-size': '13px',
-            'font-family': "'JetBrains Mono', monospace",
-            resize: 'vertical',
-            outline: 'none',
-            'box-sizing': 'border-box',
-          }}
+          aria-label="Commit description"
+          value={props.state.squashBody()}
+          onInput={(e) => props.state.setSquashBody(e.currentTarget.value)}
+          placeholder="Add an optional extended description…"
+          rows={5}
+          style={{ ...messageFieldStyle, 'margin-top': '6px', resize: 'vertical' }}
         />
       </Show>
       <Show when={props.state.mergeError()}>

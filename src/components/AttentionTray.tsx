@@ -1,3 +1,4 @@
+import { matchesTaskProjectFilter } from '../store/task-project-filter';
 import { createMemo, createSignal, For, Show } from 'solid-js';
 import { store } from '../store/core';
 import { setSidebarNeedsInputFirst } from '../store/ui';
@@ -7,7 +8,6 @@ import {
   type AttentionEntry,
 } from '../store/sidebar-attention';
 import { getTaskAttentionState, getTaskDotStatus } from '../store/taskStatus';
-import { isLandedTaskState } from '../store/landing';
 import { formatRelativeAge } from '../lib/relativeAge';
 import { sf } from '../lib/fontScale';
 import { theme } from '../lib/theme';
@@ -16,16 +16,13 @@ import { IconButton } from './IconButton';
 import { ProjectSwatch } from './ProjectSwatch';
 import { StatusDot } from './StatusDot';
 
-/** A child review opens independently of task panels, including collapsed tasks. */
+/**
+ * A self-landed result opens independently of task panels, including collapsed
+ * tasks. Unmerged children open their task, where Finish reviews and merges them.
+ */
 function opensReview(entry: AttentionEntry): boolean {
-  const task = store.tasks[entry.taskId];
   return (
-    entry.kind === 'review' &&
-    !!task &&
-    (task.landingState === 'landed_pending_review' ||
-      (!!task.coordinatedBy &&
-        task.integrationPolicy === 'review' &&
-        !isLandedTaskState(task.landingState)))
+    entry.kind === 'review' && store.tasks[entry.taskId]?.landingState === 'landed_pending_review'
   );
 }
 
@@ -118,7 +115,9 @@ function AttentionRow(props: { entry: AttentionEntry; nowMs: number; onOpen: () 
 }
 
 export function AttentionTray(props: { nowMs: number }) {
-  const entries = createMemo(() => computeAttentionEntries());
+  const entries = createMemo(() =>
+    computeAttentionEntries().filter((entry) => matchesTaskProjectFilter(entry.taskId)),
+  );
   const [reviewTaskId, setReviewTaskId] = createSignal<string>();
   const reviewTask = () => {
     const id = reviewTaskId();

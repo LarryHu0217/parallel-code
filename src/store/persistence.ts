@@ -251,6 +251,15 @@ function validBranch(value: unknown, exclude?: string): string | undefined {
   return typeof value === 'string' && value.length > 0 && value !== exclude ? value : undefined;
 }
 
+function restoredSnoozedUntil(value: unknown): number | undefined {
+  return typeof value === 'number' &&
+    Number.isFinite(value) &&
+    value > 0 &&
+    value <= 8_640_000_000_000_000
+    ? value
+    : undefined;
+}
+
 /**
  * Serialize a Task to its persisted shape. The caller supplies agentDefs
  * because active and collapsed tasks source them differently (live store
@@ -294,6 +303,7 @@ function toPersistedTask(task: Task, agentDefs: AgentDef[], collapsed?: boolean)
     prUrl: task.prUrl,
     superProductivity: task.superProductivity,
     savedInitialPrompt: task.savedInitialPrompt,
+    secondOpinionDismissed: task.secondOpinionDismissed || undefined,
     savedSelectedAgentIndex: task.savedSelectedAgentIndex,
     savedAgentSessionIds: task.savedAgentSessionIds,
     savedPromptedAgentIndexes: task.savedPromptedAgentIndexes,
@@ -308,6 +318,8 @@ function toPersistedTask(task: Task, agentDefs: AgentDef[], collapsed?: boolean)
     stepsEnabled: task.stepsEnabled,
     branchAdoptedFrom: task.branchAdoptedFrom,
     branchOfferDismissed: task.branchOfferDismissed,
+    snoozedUntil: task.snoozedUntil,
+    snoozedUntilCi: task.snoozedUntilCi,
     ...(collapsed ? { collapsed: true } : {}),
     delegationParent: task.delegationParent,
     delegationPaused: task.delegationPaused,
@@ -367,6 +379,7 @@ export async function saveState(): Promise<void> {
     globalScale: store.globalScale,
     completedTaskDate: store.completedTaskDate,
     completedTaskCount: store.completedTaskCount,
+    countedMergedPrs: store.countedMergedPrs,
     mergedLinesAdded: store.mergedLinesAdded,
     mergedLinesRemoved: store.mergedLinesRemoved,
     terminalFont: store.terminalFont,
@@ -566,6 +579,7 @@ interface LegacyPersistedState {
   globalScale?: unknown;
   completedTaskDate?: unknown;
   completedTaskCount?: unknown;
+  countedMergedPrs?: unknown;
   mergedLinesAdded?: unknown;
   mergedLinesRemoved?: unknown;
   terminalFont?: unknown;
@@ -787,6 +801,10 @@ export async function loadState(): Promise<void> {
         typeof completedTaskCountRaw === 'number' && Number.isFinite(completedTaskCountRaw)
           ? Math.max(0, Math.floor(completedTaskCountRaw))
           : 0;
+      s.countedMergedPrs =
+        completedTaskDate === today && Array.isArray(raw.countedMergedPrs)
+          ? raw.countedMergedPrs.filter((value): value is string => typeof value === 'string')
+          : [];
       if (completedTaskDate === today) {
         s.completedTaskDate = completedTaskDate;
         s.completedTaskCount = completedTaskCount;
@@ -1013,6 +1031,8 @@ export async function loadState(): Promise<void> {
           claudeChatSessionId:
             typeof pt.claudeChatSessionId === 'string' ? pt.claudeChatSessionId : undefined,
           shellAgentIds,
+          snoozedUntil: restoredSnoozedUntil(pt.snoozedUntil),
+          snoozedUntilCi: pt.snoozedUntilCi === true ? true : undefined,
           notes: pt.notes,
           promptDraft: typeof pt.promptDraft === 'string' ? pt.promptDraft : undefined,
           browserUrl: typeof pt.browserUrl === 'string' ? pt.browserUrl : undefined,
@@ -1035,6 +1055,7 @@ export async function loadState(): Promise<void> {
           prUrl: pt.prUrl,
           superProductivity: restoreSuperProductivityLink(pt.superProductivity),
           savedInitialPrompt: pt.savedInitialPrompt,
+          secondOpinionDismissed: pt.secondOpinionDismissed === true || undefined,
           savedSelectedAgentIndex: validAgentIndex(pt.savedSelectedAgentIndex),
           savedPromptedAgentIndexes: validPromptedAgentIndexes(pt.savedPromptedAgentIndexes),
           planFileName: pt.planFileName,
@@ -1180,6 +1201,7 @@ export async function loadState(): Promise<void> {
           prUrl: pt.prUrl,
           superProductivity: restoreSuperProductivityLink(pt.superProductivity),
           savedInitialPrompt: pt.savedInitialPrompt,
+          secondOpinionDismissed: pt.secondOpinionDismissed === true || undefined,
           savedSelectedAgentIndex: validAgentIndex(pt.savedSelectedAgentIndex),
           savedPromptedAgentIndexes: validPromptedAgentIndexes(pt.savedPromptedAgentIndexes),
           planFileName: pt.planFileName,
@@ -1192,6 +1214,7 @@ export async function loadState(): Promise<void> {
           branchAdoptedFrom: validBranch(pt.branchAdoptedFrom, pt.branchName),
           branchOfferDismissed: validBranch(pt.branchOfferDismissed),
           collapsed: true,
+          snoozedUntil: restoredSnoozedUntil(pt.snoozedUntil),
           savedAgentSessionIds: Array.isArray(pt.savedAgentSessionIds)
             ? agentDefs.map((_, index) => {
                 const id = pt.savedAgentSessionIds?.[index];

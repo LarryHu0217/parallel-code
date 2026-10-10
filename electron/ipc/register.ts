@@ -71,8 +71,14 @@ import { readCoverageSummary } from './coverage.js';
 import { loadEslintQualityFindings } from './eslint-quality-findings.js';
 import { buildVerifyEnv, validateVerifyCommand, verificationRunner } from './verify.js';
 import { scanEvidence } from './evidence-scan.js';
-import { startRemoteServer, getMCPLogs, type RemoteProject } from '../remote/server.js';
+import {
+  startRemoteServer,
+  getMCPLogs,
+  type MobileTaskRequest,
+  type RemoteProject,
+} from '../remote/server.js';
 import type {
+  RemoteAgentChoice,
   RemoteAttentionState,
   RemoteCloseResult,
   RemoteMergeReadiness,
@@ -114,6 +120,7 @@ import {
   checkMergeStatus,
   mergeTask,
   getBranchLog,
+  getBranchCommitMessages,
   pushTask,
   rebaseTask,
   mergeBaseIntoTask,
@@ -1090,7 +1097,7 @@ export function registerAllHandlers(win: BrowserWindow): void {
     await delegation.assertDirectMergeAllowed(projectRoot, branchName, args.cleanup ?? false);
     const baseBranch = optionalBaseBranch(args);
     const worktreePath = optionalWorktreePath(args);
-    return mergeTask(
+    const result = await mergeTask(
       projectRoot,
       branchName,
       args.squash,
@@ -1099,6 +1106,11 @@ export function registerAllHandlers(win: BrowserWindow): void {
       baseBranch,
       worktreePath,
     );
+    // The merge already happened; failing to tell the parent must not report it as failed.
+    await delegation
+      .recordDirectMerge(projectRoot, branchName)
+      .catch((err: unknown) => logWarn('mcp', `Could not record merge: ${errMessage(err)}`));
+    return result;
   });
   ipcMain.handle(IPC.GetBranchLog, (_e, args) => {
     const worktreePath = worktreePathArg(args);
@@ -1106,6 +1118,8 @@ export function registerAllHandlers(win: BrowserWindow): void {
   });
   ipcMain.handle(IPC.GetBranchCommits, (_e, args) => {
     const worktreePath = worktreePathArg(args);
+    if (args.withBody === true)
+      return getBranchCommitMessages(worktreePath, optionalBaseBranch(args));
     const recentFallback =
       typeof args.recentFallback === 'number' && args.recentFallback > 0
         ? args.recentFallback
@@ -1785,7 +1799,8 @@ export function registerAllHandlers(win: BrowserWindow): void {
       callRenderer<unknown>(IPC.MCP_SubmitEvidenceRequest, { taskId, payload }),
     getEvidence: (taskId: string) => callRenderer<unknown>(IPC.MCP_GetEvidenceRequest, { taskId }),
     getProjects: () => callRenderer<RemoteProject[]>(IPC.Remote_GetProjectsRequest, {}),
-    createTaskFromMobile: (req: { projectId: string; name: string; prompt: string }) =>
+    getAgentChoices: () => callRenderer<RemoteAgentChoice[]>(IPC.Remote_GetAgentsRequest, {}),
+    createTaskFromMobile: (req: MobileTaskRequest) =>
       callRenderer<{ taskId: string }>(IPC.Remote_CreateTaskRequest, req),
     getTaskNotes: (taskId: string) =>
       callRenderer<{ notes: string }>(IPC.Remote_GetNotesRequest, { taskId }).then((r) => r.notes),
@@ -2081,6 +2096,12 @@ export function registerAllHandlers(win: BrowserWindow): void {
         validateUUID(args.coordinatorTaskId, 'coordinatorTaskId');
         const coordinator = mcp.coordinator();
         if (!coordinator) throw new Error('Task coordination is not initialized');
+        // Startup authority restore fails for a task whose worktree was removed
+        // (e.g. an interrupted merge); name that instead of the generic authority error.
+        if (!fs.existsSync(args.worktreePath))
+          throw new Error(
+            `Task worktree is missing (${args.worktreePath}). Close the task to remove it.`,
+          );
         const authority = delegation.getTask(args.id);
         if (
           !authority ||

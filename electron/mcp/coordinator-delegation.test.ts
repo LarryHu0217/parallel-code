@@ -92,7 +92,7 @@ describe('ordinary delegation lifecycle', () => {
       '/project',
       expect.any(Array),
       'task',
-      'parent',
+      'main',
     );
     expect(mockSpawnAgent).toHaveBeenCalledWith(
       mockNotify,
@@ -129,7 +129,7 @@ describe('ordinary delegation lifecycle', () => {
 
   it('keeps the integration branch separate from the selected creation commit', async () => {
     gitResults();
-    const task = await create({ snapshotCommit: targetSha });
+    const task = await create({ baseBranch: 'parent', snapshotCommit: targetSha });
     expect(task.baseBranch).toBe('parent');
     expect(mockCreateBackendTask).toHaveBeenCalledWith(
       'Child',
@@ -345,6 +345,18 @@ describe('ordinary delegation lifecycle', () => {
 });
 
 describe('review-required integration', () => {
+  it("records the user's Finish merge as the child's review", async () => {
+    const child = await create();
+    await coordinator.signalDone(child.id);
+    mockNotifyRenderer.mockClear();
+    coordinator.recordUserMerge(child.id);
+    expect(coordinator.getTaskStatus(child.id)?.landingState).toBe('reviewed');
+    expect(mockNotifyRenderer).toHaveBeenCalledWith(
+      'mcp_task_state_sync',
+      expect.objectContaining({ taskId: child.id, landingState: 'reviewed' }),
+    );
+  });
+
   it('rejects all agent-accessible integration methods', async () => {
     const child = await create();
     await coordinator.signalDone(child.id);
@@ -354,52 +366,6 @@ describe('review-required integration', () => {
     await expect(coordinator.mergeTask(child.id)).rejects.toThrow('user approval');
     await expect(coordinator.reviewAndMergeTask(child.id)).rejects.toThrow('user approval');
     expect(mockGitMergeTask).not.toHaveBeenCalled();
-  });
-
-  it('never autocommits a dirty child when the user approves', async () => {
-    const child = await create();
-    await coordinator.signalDone(child.id);
-    gitResults(' M code.ts');
-    await expect(
-      coordinator.approveAndMergeTask(child.id, {
-        expectedCommit: sha,
-        expectedTargetBranch: 'parent',
-        expectedTargetCommit: targetSha,
-      }),
-    ).rejects.toThrow('uncommitted');
-    expect(
-      mockExecFile.mock.calls.some((call) => call[1][0] === 'add' || call[1][0] === 'commit'),
-    ).toBe(false);
-    expect(mockGitMergeTask).not.toHaveBeenCalled();
-  });
-
-  it('passes exact review commits into the locked merge and rejects simultaneous detach', async () => {
-    const child = await create();
-    await coordinator.signalDone(child.id);
-    gitResults();
-    const approval = {
-      expectedCommit: sha,
-      expectedTargetBranch: 'parent',
-      expectedTargetCommit: targetSha,
-    };
-    const pending = coordinator.approveAndMergeTask(child.id, approval);
-    expect(() => coordinator.detachChildren('parent')).toThrow('integrated');
-    await pending;
-    expect(mockGitMergeTask).toHaveBeenCalledWith(
-      '/project',
-      'task/test',
-      false,
-      null,
-      false,
-      'parent',
-      '/tmp/test',
-      '/parent',
-      approval,
-    );
-    expect(
-      mockExecFile.mock.calls.some((call) => call[1][0] === 'add' || call[1][0] === 'commit'),
-    ).toBe(false);
-    expect(coordinator.getTaskStatus(child.id)?.landingState).toBe('reviewed');
   });
 });
 
@@ -511,7 +477,7 @@ describe('global agent orchestration switch', () => {
     expect(coordinator.isAutomationWriteInFlight(child.id)).toBe(false);
   });
 
-  it('preserves review notifications and explicit desktop approval while disabled', async () => {
+  it('preserves review notifications and records a desktop merge while disabled', async () => {
     const child = await create();
     await coordinator.signalDone(child.id);
     mockNotifyRenderer.mockClear();
@@ -520,13 +486,8 @@ describe('global agent orchestration switch', () => {
       'mcp_coordinator_notification_cleared',
       expect.anything(),
     );
-    gitResults();
-    await coordinator.approveAndMergeTask(child.id, {
-      expectedCommit: sha,
-      expectedTargetBranch: 'parent',
-      expectedTargetCommit: targetSha,
-    });
-    expect(mockGitMergeTask).toHaveBeenCalledOnce();
+    coordinator.recordUserMerge(child.id);
+    expect(coordinator.getTaskStatus(child.id)?.landingState).toBe('reviewed');
   });
 
   it('permits manual child restart while disabled and treats repeated disable as a no-op', async () => {

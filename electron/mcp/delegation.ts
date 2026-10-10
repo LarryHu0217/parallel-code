@@ -8,6 +8,7 @@ import type { CoordinatedTask } from './types.js';
 import { parseSignalDoneInput } from '../shared/completion-report.js';
 import { getAgentPromptReadiness, stripAnsi } from './prompt-detect.js';
 import { canConfigureCanvasMcp } from './canvas-config.js';
+import { isKimiCommand } from './agent-args.js';
 import { validateBranchName } from './validation.js';
 import {
   MAX_COORDINATOR_CONCURRENT_TASKS,
@@ -289,10 +290,7 @@ export class DelegationService {
       throw new DelegationError('Invalid project policy');
     this.policies.set(policy.projectId, { ...policy });
     for (const message of this.messages.values()) {
-      if (
-        message.state === 'waiting' &&
-        !this.canContact(message.sender.taskId, message.recipient.taskId)
-      ) {
+      if (message.state === 'waiting' && !this.canDeliverMessage(message)) {
         message.state = 'closed';
         message.reason = 'Peer access disabled';
         this.messageChanged(message);
@@ -378,17 +376,21 @@ export class DelegationService {
       }
       const snapshot = await this.snapshot(task.taskId);
       assertLaunch();
-      if (
-        snapshot.branchName !== assignment.expectedBranch ||
-        snapshot.headSha !== assignment.expectedHeadSha
-      )
-        throw new DelegationError(
-          'Parent branch or commit changed. Refresh the assignment snapshot.',
-        );
-      if (snapshot.changedFileCount && assignment.useLastCommit !== true)
-        throw new DelegationError(
-          `Parent has ${snapshot.changedFileCount} changed files. Review/commit first or explicitly use the last commit (${snapshot.headSha}).`,
-        );
+      // Children start from and land on main by default, so the parent's Git
+      // state only matters when it explicitly asks to base the child on itself.
+      if (assignment.baseOnParent) {
+        if (
+          snapshot.branchName !== assignment.expectedBranch ||
+          snapshot.headSha !== assignment.expectedHeadSha
+        )
+          throw new DelegationError(
+            'Parent branch or commit changed. Refresh the assignment snapshot.',
+          );
+        if (snapshot.changedFileCount && assignment.useLastCommit !== true)
+          throw new DelegationError(
+            `Parent has ${snapshot.changedFileCount} changed files. Review/commit first or explicitly use the last commit (${snapshot.headSha}).`,
+          );
+      }
       const command = assignment.agentCommand ?? task.agentCommand;
       // createTask strips bypass flags itself unless permissions propagate.
       const args = assignment.agentArgs ?? task.agentArgs;
@@ -403,8 +405,9 @@ export class DelegationService {
         name: assignment.name,
         prompt: assignment.prompt,
         coordinatorTaskId: task.taskId,
-        baseBranch: snapshot.branchName,
-        snapshotCommit: snapshot.headSha,
+        ...(assignment.baseOnParent
+          ? { baseBranch: snapshot.branchName, snapshotCommit: snapshot.headSha }
+          : {}),
         agentCommand: command,
         agentArgs: args,
         integrationPolicy: task.autoMergeChildren === true ? 'automatic' : 'review',
@@ -513,6 +516,7 @@ export class DelegationService {
           expectedHeadSha:
             typeof params.expectedHeadSha === 'string' ? params.expectedHeadSha : snap.headSha,
           useLastCommit: params.useLastCommit === true,
+          baseOnParent: params.baseOnParent === true,
         },
         caller,
       );
@@ -539,7 +543,13 @@ export class DelegationService {
     }
     const childId = id(params.taskId, 'taskId');
     const child = coordinator?.getTaskStatus(childId);
-    if (!coordinator || !child || child.coordinatorTaskId !== task.taskId)
+    // Closed, merged and self-landed children leave the coordinator entirely.
+    if (!child)
+      throw new DelegationError(
+        'Task is no longer active (closed, merged or landed). Create a new task for further work.',
+        404,
+      );
+    if (!coordinator || child.coordinatorTaskId !== task.taskId)
       throw new DelegationError('This is not your child task', 403);
     switch (name) {
       case 'get_task_status':
@@ -599,7 +609,10 @@ export class DelegationService {
       !this.canContact(caller.taskId, target.taskId) ||
       getAgentMeta(agentId)?.isShell
     )
-      throw new DelegationError('Recipient unavailable or outside your scope', 403);
+      throw new DelegationError(
+        'Recipient unavailable or outside your scope. For your own child tasks, use send_prompt with their taskId.',
+        403,
+      );
     return target;
   }
 
@@ -669,6 +682,15 @@ export class DelegationService {
         observedAt: new Date().toISOString(),
       };
     }
+    return this.queueMessage(caller, target, params);
+  }
+
+  private queueMessage(
+    caller: SessionCaller,
+    target: SessionCaller,
+    params: Record<string, unknown>,
+    origin?: 'user',
+  ): ReturnType<DelegationService['receipt']> {
     const prompt = text(params.prompt, 'prompt', MAX_PROMPT_BYTES).replace(/\r\n?/g, '\n');
     if (Buffer.byteLength(prompt) > MAX_PROMPT_BYTES) throw new DelegationError('Prompt too large');
     // Peer content is text, never terminal control input (including paste delimiters).
@@ -676,7 +698,7 @@ export class DelegationService {
       throw new DelegationError('Prompt contains terminal or invisible control characters');
     if (PEER_MARKER.test(prompt))
       throw new DelegationError('Prompt must not contain peer message markers');
-    const requestId = id(params.requestId, 'requestId');
+    const requestId = `${origin ?? 'agent'}:${id(params.requestId, 'requestId')}`;
     const payloadHash = createHash('sha256')
       .update(JSON.stringify([target.agentId, target.sessionInstanceId, prompt]))
       .digest('base64');
@@ -711,10 +733,11 @@ export class DelegationService {
       const evicted = settled.find((entry) => !entry.deliveryFailed) ?? settled[0];
       if (!evicted) throw new DelegationError('Incoming message queue is full', 429);
       this.messages.delete(evicted.deliveryId);
-      if (evicted.deliveryFailed) this.emit(evicted.recipient.taskId);
+      if (evicted.deliveryFailed || evicted.origin === 'user') this.emit(evicted.recipient.taskId);
     }
     const message: PeerMessage = {
       deliveryId: randomUUID(),
+      ...(origin ? { origin } : {}),
       sender: this.peer(caller),
       recipient: this.peer(target),
       prompt,
@@ -753,7 +776,7 @@ export class DelegationService {
     for (const message of this.messages.values()) {
       if (
         message.state === 'waiting' &&
-        (!this.canContact(message.sender.taskId, message.recipient.taskId) ||
+        (!this.canDeliverMessage(message) ||
           !sessions.some(
             (s) =>
               s.agentId === message.recipient.agentId &&
@@ -770,10 +793,16 @@ export class DelegationService {
     this.options.changed({ taskId, state: this.state(taskId) });
   }
   state(taskId: string): DelegationState {
+    const messages = [...this.messages.values()].filter((m) => m.recipient.taskId === taskId);
+    const recentHandoffs = new Set(
+      messages
+        .filter((m) => m.origin === 'user' && m.state !== 'waiting' && !m.deliveryFailed)
+        .slice(-5),
+    );
     return {
       attempts: [...this.attempts.values()].filter((a) => a.parentTaskId === taskId),
-      messages: [...this.messages.values()].filter(
-        (m) => m.recipient.taskId === taskId && (m.state === 'waiting' || m.deliveryFailed),
+      messages: messages.filter(
+        (m) => m.state === 'waiting' || m.deliveryFailed || recentHandoffs.has(m),
       ),
       paused: this.tasks.get(taskId)?.delegationPaused === true,
     };
@@ -823,7 +852,8 @@ export class DelegationService {
     this.delivering.add(agentId);
     try {
       assertCurrent();
-      const prompt = peerEnvelope(message.sender, message.prompt);
+      const prompt =
+        message.origin === 'user' ? message.prompt : peerEnvelope(message.sender, message.prompt);
       if (
         !(await writeAgentPrompt(agentId, prompt, assertCurrent, () => {
           // Submission is final even if the session ends while other input drains.
@@ -848,9 +878,52 @@ export class DelegationService {
     }
   }
 
+  private canDeliverMessage(message: PeerMessage): boolean {
+    return message.origin === 'user'
+      ? this.canHandoff(message.sender.taskId, message.recipient.taskId)
+      : this.canContact(message.sender.taskId, message.recipient.taskId);
+  }
+
+  private canHandoff(sourceTaskId: string, recipientTaskId: string): boolean {
+    const task = this.tasks.get(sourceTaskId);
+    return Boolean(
+      this.orchestrationEnabled &&
+      task &&
+      !task.closed &&
+      !task.closing &&
+      sourceTaskId === recipientTaskId,
+    );
+  }
+
+  private handoffSessions(taskId: string): SessionCaller[] {
+    if (!this.canHandoff(taskId, taskId))
+      throw new DelegationError('Task unavailable or agent orchestration is disabled');
+    return this.options.sessions().filter((session) => {
+      const meta = getAgentMeta(session.agentId);
+      return session.taskId === taskId && meta?.taskId === taskId && !meta.isShell;
+    });
+  }
+
   async request(raw: unknown): Promise<unknown> {
     const request = record(raw) as unknown as DelegationRequest;
     switch (request.action) {
+      case 'handoffSessions':
+        return this.handoffSessions(id(request.taskId));
+      case 'handoff': {
+        this.expireMessages();
+        const sessions = this.handoffSessions(id(request.taskId));
+        const source = sessions.find(
+          (s) =>
+            s.agentId === request.sourceAgentId &&
+            s.sessionInstanceId === request.sourceSessionInstanceId,
+        );
+        const target = sessions.find(
+          (s) => s.agentId === request.agentId && s.sessionInstanceId === request.sessionInstanceId,
+        );
+        if (!source || !target || source.agentId === target.agentId)
+          throw new DelegationError('Source or recipient session changed');
+        return this.queueMessage(source, target, { ...request }, 'user');
+      }
       case 'orchestrationSetting':
         this.setOrchestrationEnabled(request.enabled);
         return { enabled: this.orchestrationEnabled };
@@ -913,13 +986,6 @@ export class DelegationService {
         this.options.currentCoordinator()?.setMaxConcurrentSubTasks(task.taskId, limit);
         return { limit };
       }
-      case 'review':
-        return (await this.options.coordinator()).getReviewSnapshot(id(request.taskId));
-      case 'merge':
-        return (await this.options.coordinator()).approveAndMergeTask(
-          id(request.taskId),
-          request.review,
-        );
       case 'dismissAttempt':
         this.attempts.delete(`${id(request.parentTaskId)}:${id(request.requestId)}`);
         this.emit(request.parentTaskId);
@@ -1055,12 +1121,28 @@ export class DelegationService {
     for (const task of this.tasks.values()) {
       if (task.closed || task.projectRoot !== canonicalRoot || task.branchName !== branchName)
         continue;
-      if (task.integrationPolicy === 'review')
-        throw new DelegationError('Review this delegated result before merging it.');
+      // Review-policy children merge here too: the user's Finish click is the approval.
       if (cleanup && (task.delegationParent || task.coordinatorMode))
         throw new DelegationError(
           'Merge first, then close this task to detach its children safely.',
         );
+      if (task.parentTaskId && isKimiCommand(task.agentCommand))
+        await (await this.options.coordinator()).assertTaskDirectMergeAllowed(task.taskId);
+    }
+  }
+
+  /** Tells the parent that the user merged its child, so the child no longer awaits review. */
+  async recordDirectMerge(projectRoot: string, branchName: string): Promise<void> {
+    const canonicalRoot = await realpath(projectRoot);
+    for (const task of this.tasks.values()) {
+      if (
+        task.closed ||
+        !task.parentTaskId ||
+        task.projectRoot !== canonicalRoot ||
+        task.branchName !== branchName
+      )
+        continue;
+      this.options.currentCoordinator()?.recordUserMerge(task.taskId);
     }
   }
 

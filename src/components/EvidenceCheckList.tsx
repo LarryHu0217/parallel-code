@@ -80,8 +80,9 @@ export function evidenceCheckNeedsAttention(
   check: ProjectCheck,
   task: Task,
   pkg?: EvidencePackage,
+  headSha?: string | null,
 ): boolean {
-  return latestRun(check, task, pkg)?.run.status !== 'passed';
+  return summarizeVerificationRun(latestRun(check, task, pkg)?.run, headSha).kind !== 'passed';
 }
 
 function CheckRow(props: EvidenceCheckListProps & { check: ProjectCheck }) {
@@ -138,7 +139,6 @@ function CheckRow(props: EvidenceCheckListProps & { check: ProjectCheck }) {
         {KIND_STYLE[summary().kind].symbol}
       </span>
       <div style={{ 'min-width': '0' }}>
-        {/* One line per check: the command yields its width first, then shows on hover. */}
         <div
           style={{
             display: 'flex',
@@ -157,34 +157,40 @@ function CheckRow(props: EvidenceCheckListProps & { check: ProjectCheck }) {
               (required to land)
             </span>
           </Show>
+          <Show when={!isVerify()}>
+            <span style={{ color: theme.fgMuted }}>Advisory</span>
+          </Show>
           <span style={{ color: KIND_STYLE[summary().kind].color, 'overflow-wrap': 'anywhere' }}>
             {summary().label}
           </span>
-          <code
-            title={props.check.command}
-            style={{
-              flex: '1 1 0',
-              'min-width': '0',
-              color: theme.fgMuted,
-              overflow: 'hidden',
-              'text-overflow': 'ellipsis',
-              'white-space': 'nowrap',
-            }}
+        </div>
+        <details
+          style={{ 'margin-top': '4px' }}
+          onToggle={(event) => {
+            if (event.currentTarget.open && live) live.scrollTop = live.scrollHeight;
+          }}
+        >
+          <summary
+            aria-label={`Command and output for ${props.check.name}`}
+            style={{ cursor: 'pointer', color: theme.fgMuted }}
           >
+            Command and output
+          </summary>
+          <code style={{ display: 'block', 'overflow-wrap': 'anywhere', 'margin-top': '6px' }}>
             {props.check.command}
           </code>
-        </div>
-        <Show when={liveOutput()}>
-          <pre ref={live} style={preStyle}>
-            {liveOutput()}
-          </pre>
-        </Show>
-        <Show when={failedOutput()}>
-          <details open>
-            <summary style={{ cursor: 'pointer', color: theme.fgMuted }}>Failure output</summary>
+          <Show when={latest()?.run.message}>
+            <p style={{ margin: '6px 0' }}>{latest()?.run.message}</p>
+          </Show>
+          <Show when={liveOutput()}>
+            <pre ref={live} style={preStyle}>
+              {liveOutput()}
+            </pre>
+          </Show>
+          <Show when={failedOutput()}>
             <pre style={preStyle}>{failedOutput()}</pre>
-          </details>
-        </Show>
+          </Show>
+        </details>
       </div>
       <Show
         when={!running()}
@@ -221,7 +227,7 @@ export function EvidenceCheckList(props: EvidenceCheckListProps) {
   const checks = () =>
     getTaskChecks(props.task.id).filter((check) => {
       if (!props.filter) return true;
-      const attention = evidenceCheckNeedsAttention(check, props.task, props.pkg);
+      const attention = evidenceCheckNeedsAttention(check, props.task, props.pkg, props.headSha);
       return props.filter === 'attention' ? attention : !attention;
     });
   return (

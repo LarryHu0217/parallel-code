@@ -31,6 +31,17 @@ const listStyle = {
   'overflow-wrap': 'anywhere',
 } as const;
 const muted = { color: theme.fgMuted };
+const fileLinkStyle = {
+  background: 'none',
+  border: 'none',
+  padding: '0',
+  color: theme.fgMuted,
+  cursor: 'pointer',
+  'font-size': '12px',
+  'text-decoration': 'underline',
+  'overflow-wrap': 'anywhere',
+  'text-align': 'left',
+} as const;
 
 function location(file: string, line?: number): string {
   return line ? `${file}:${line}` : file;
@@ -50,89 +61,93 @@ function FlagItem(props: {
   };
   return (
     <li>
-      <Show
-        when={props.onReviewFile}
-        fallback={<code>{location(props.flag.file, props.flag.line)}</code>}
-      >
-        <button
-          type="button"
-          style={smallButton}
-          onClick={() =>
-            props.onReviewFile?.(
-              props.flag.file,
-              props.flag.line,
-              props.flag.rule === 'test-removed' ? 'old' : 'new',
-            )
-          }
-          title="Open file diff"
-        >
-          {location(props.flag.file, props.flag.line)}
-        </button>
-      </Show>{' '}
-      {props.flag.detail} <span style={muted}>({props.flag.rule})</span>
-      <Show
-        when={props.accepted === undefined}
-        fallback={
-          <div style={muted}>
-            Accepted: {props.accepted}{' '}
-            <button
-              class="btn-with-icon"
-              type="button"
-              style={smallButton}
-              onClick={() => reopenEvidenceFlag(props.taskId, props.flag.id)}
-            >
-              <UndoIcon size={12} />
-              Undo acceptance
-            </button>
-          </div>
-        }
-      >
+      <div>{props.flag.detail}</div>
+      <div style={{ ...muted, 'margin-top': '4px' }}>
         <Show
-          when={editing()}
+          when={props.onReviewFile}
+          fallback={<code>{location(props.flag.file, props.flag.line)}</code>}
+        >
+          <button
+            type="button"
+            style={fileLinkStyle}
+            onClick={() =>
+              props.onReviewFile?.(
+                props.flag.file,
+                props.flag.line,
+                props.flag.rule === 'test-removed' ? 'old' : 'new',
+              )
+            }
+            title="Open file diff"
+          >
+            {location(props.flag.file, props.flag.line)}
+          </button>
+        </Show>
+      </div>
+      <div style={{ 'margin-top': '6px' }}>
+        <Show
+          when={props.accepted === undefined}
           fallback={
-            <Show when={props.flag.category !== 'info'}>
-              {' '}
+            <div style={muted}>
+              Accepted: {props.accepted}{' '}
               <button
                 class="btn-with-icon"
                 type="button"
                 style={smallButton}
-                onClick={() => setEditing(true)}
+                onClick={() => reopenEvidenceFlag(props.taskId, props.flag.id)}
               >
-                <CheckIcon size={12} />
-                Accept…
+                <UndoIcon size={12} />
+                Undo acceptance
               </button>
-            </Show>
+            </div>
           }
         >
-          <form
-            style={{ display: 'flex', gap: '4px', 'margin-top': '4px' }}
-            onSubmit={(event) => {
-              event.preventDefault();
-              save();
-            }}
+          <Show
+            when={editing()}
+            fallback={
+              <Show when={props.flag.category !== 'info'}>
+                {' '}
+                <button
+                  class="btn-with-icon"
+                  type="button"
+                  style={smallButton}
+                  onClick={() => setEditing(true)}
+                >
+                  <CheckIcon size={12} />
+                  Accept…
+                </button>
+              </Show>
+            }
           >
-            <input
-              aria-label="Why this change is fine"
-              placeholder="Why this change is fine"
-              value={reason()}
-              onInput={(event) => setReason(event.currentTarget.value)}
-              style={{ flex: '1', 'font-size': '13px' }}
-            />
-            <button
-              class="btn-with-icon"
-              type="submit"
-              style={smallButton}
-              disabled={!reason().trim()}
+            <form
+              style={{ display: 'flex', gap: '4px', 'margin-top': '4px' }}
+              onSubmit={(event) => {
+                event.preventDefault();
+                save();
+              }}
             >
-              <CheckIcon size={12} />
-              Accept
-            </button>
-            <button type="button" style={smallButton} onClick={() => setEditing(false)}>
-              Cancel
-            </button>
-          </form>
+              <input
+                aria-label="Why this change is fine"
+                placeholder="Why this change is fine"
+                value={reason()}
+                onInput={(event) => setReason(event.currentTarget.value)}
+                style={{ flex: '1', 'font-size': '13px' }}
+              />
+              <button
+                class="btn-with-icon"
+                type="submit"
+                style={smallButton}
+                disabled={!reason().trim()}
+              >
+                <CheckIcon size={12} />
+                Accept
+              </button>
+              <button type="button" style={smallButton} onClick={() => setEditing(false)}>
+                Cancel
+              </button>
+            </form>
+          </Show>
         </Show>
-      </Show>
+      </div>
     </li>
   );
 }
@@ -141,6 +156,7 @@ interface EvidenceDetailsProps {
   task: Task;
   pkg: EvidencePackage;
   reasons: EvidenceReason[];
+  confidenceLabel?: string;
   agentId?: string;
   checks?: JSX.Element;
   passedChecks?: JSX.Element;
@@ -160,28 +176,31 @@ export function EvidenceDetails(props: EvidenceDetailsProps) {
   const dismissed = () =>
     (review()?.findings ?? []).filter((f) => props.pkg.dismissedFindings.includes(f.id));
   const hasAttention = () =>
-    props.hasCheckAttention ||
     openFlags().length ||
     openFindings().length ||
     props.pkg.claim?.notVerified?.length ||
     props.pkg.scan.sourceWithoutTests.length;
   const fileLink = (file: string, line?: number) => (
     <Show when={props.onReviewFile} fallback={<code>{location(file, line)}</code>}>
-      <button
-        type="button"
-        style={{ ...smallButton, 'overflow-wrap': 'anywhere', 'text-align': 'left' }}
-        onClick={() => props.onReviewFile?.(file, line)}
-      >
+      <button type="button" style={fileLinkStyle} onClick={() => props.onReviewFile?.(file, line)}>
         {location(file, line)}
       </button>
     </Show>
   );
   return (
     <>
-      <Show when={hasAttention()}>
-        <section aria-label="Needs attention" style={{ ...sectionStyle, 'margin-top': '16px' }}>
-          <strong>Needs attention</strong>
+      <Show when={props.hasCheckAttention}>
+        <section
+          aria-label="Checks needing attention"
+          style={{ ...sectionStyle, 'margin-top': '16px' }}
+        >
+          <strong>Checks needing attention</strong>
           {props.checks}
+        </section>
+      </Show>
+      <Show when={hasAttention()}>
+        <section aria-label="Advisory findings" style={{ ...sectionStyle, 'margin-top': '16px' }}>
+          <strong>Advisory findings</strong>
           <Show when={openFlags().length > 0}>
             <div style={sectionStyle}>App scan · changes to review</div>
             <ul style={listStyle}>
@@ -198,8 +217,12 @@ export function EvidenceDetails(props: EvidenceDetailsProps) {
               <For each={openFindings()}>
                 {(finding) => (
                   <li>
-                    <strong>{finding.severity}</strong> {fileLink(finding.file, finding.line)}{' '}
-                    {finding.text}
+                    <div>
+                      <strong>{finding.severity}</strong> · {finding.text}
+                    </div>
+                    <div style={{ 'margin-top': '4px' }}>
+                      {fileLink(finding.file, finding.line)}
+                    </div>
                     <div style={{ 'margin-top': '6px' }}>
                       <button
                         class="btn-with-icon"
@@ -259,142 +282,148 @@ export function EvidenceDetails(props: EvidenceDetailsProps) {
           </Show>
         </section>
       </Show>
-      <div
+      <details
         style={{
           ...sectionStyle,
-          'margin-top': '16px',
+          margin: '24px 0 8px',
           'border-top': `1px solid ${theme.border}`,
-          'padding-top': '12px',
+          'padding-top': '8px',
         }}
       >
-        <strong>Supporting evidence</strong>
-      </div>
-      {props.passedChecks}
-      <Show when={props.reasons.length > 1}>
-        <details style={sectionStyle}>
-          <summary>Confidence details ({props.reasons.length})</summary>
+        <summary style={{ cursor: 'pointer', padding: '8px 0' }}>View evidence</summary>
+        <div style={{ ...muted, 'margin-top': '8px' }}>
+          Commit {props.pkg.scan.headSha.slice(0, 8)} · {props.pkg.scan.tests.length} test changes ·{' '}
+          {props.pkg.scan.files.length} files
+        </div>
+        <Show when={props.confidenceLabel}>
+          <div style={{ ...muted, 'margin-top': '6px' }}>{props.confidenceLabel}</div>
+        </Show>
+        {props.passedChecks}
+        <Show when={props.reasons.length > 0}>
           <ul style={listStyle}>
             <For each={props.reasons}>{(reason) => <li>{reason.text}</li>}</For>
           </ul>
-        </details>
-      </Show>
-      <Show when={resolvedFlags().length + dismissed().length > 0}>
-        <details style={sectionStyle}>
-          <summary>Resolved items ({resolvedFlags().length + dismissed().length})</summary>
-          <ul style={listStyle}>
-            <For each={resolvedFlags()}>
-              {(flag) => (
-                <FlagItem
-                  taskId={props.task.id}
-                  flag={flag}
-                  accepted={props.pkg.acceptedFlags[flag.id]}
-                  onReviewFile={props.onReviewFile}
-                />
-              )}
-            </For>
-            <For each={dismissed()}>
-              {(finding) => (
-                <li>
-                  AI review · {fileLink(finding.file, finding.line)} {finding.text}{' '}
-                  <button
-                    class="btn-with-icon"
-                    type="button"
-                    style={smallButton}
-                    onClick={() => restoreEvidenceFinding(props.task.id, finding.id)}
-                  >
-                    <UndoIcon size={12} />
-                    Undo dismissal
-                  </button>
-                </li>
-              )}
-            </For>
-          </ul>
-        </details>
-      </Show>
-      <Show
-        when={flags().some(
-          (flag) => flag.category === 'info' && !(flag.id in props.pkg.acceptedFlags),
-        )}
-      >
-        <details style={sectionStyle}>
-          <summary>App scan · informational notes</summary>
-          <ul style={listStyle}>
-            <For
-              each={flags().filter(
-                (flag) => flag.category === 'info' && !(flag.id in props.pkg.acceptedFlags),
-              )}
-            >
-              {(flag) => (
-                <FlagItem taskId={props.task.id} flag={flag} onReviewFile={props.onReviewFile} />
-              )}
-            </For>
-          </ul>
-        </details>
-      </Show>
-      <Show when={props.pkg.scan.tests.length > 0 || props.pkg.scan.coveringTests.length > 0}>
-        <details style={sectionStyle}>
-          <summary>Tests ({props.pkg.scan.tests.length} changed)</summary>
-          <ul style={listStyle}>
-            <For each={props.pkg.scan.tests}>
-              {(test) => (
-                <li>
-                  <span style={muted}>
-                    {test.change} {test.kind}
-                  </span>{' '}
-                  {test.title} <code style={muted}>{test.file}</code>
-                </li>
-              )}
-            </For>
-          </ul>
-          <Show when={props.pkg.scan.coveringTests.length > 0}>
-            <div style={{ ...muted, 'margin-top': '4px' }}>
-              Unchanged tests that import changed code:
-              <ul style={listStyle}>
-                <For each={props.pkg.scan.coveringTests}>
-                  {(file) => (
-                    <li>
-                      <code>{file}</code>
-                    </li>
-                  )}
-                </For>
-              </ul>
-            </div>
-          </Show>
-        </details>
-      </Show>
-      <Show when={review()}>
-        {(current) => (
+        </Show>
+        <Show when={resolvedFlags().length + dismissed().length > 0}>
           <details style={sectionStyle}>
-            <summary>
-              AI review (
-              {current().status === 'done' ? `${openFindings().length} findings` : current().status}
-              )
-            </summary>
-            <Show when={current().error}>
-              <div style={{ color: theme.error }}>{current().error}</div>
-            </Show>
-            <Show when={current().testSummary}>
-              <p style={{ margin: '4px 0' }}>{current().testSummary}</p>
+            <summary>Resolved items ({resolvedFlags().length + dismissed().length})</summary>
+            <ul style={listStyle}>
+              <For each={resolvedFlags()}>
+                {(flag) => (
+                  <FlagItem
+                    taskId={props.task.id}
+                    flag={flag}
+                    accepted={props.pkg.acceptedFlags[flag.id]}
+                    onReviewFile={props.onReviewFile}
+                  />
+                )}
+              </For>
+              <For each={dismissed()}>
+                {(finding) => (
+                  <li>
+                    AI review · {fileLink(finding.file, finding.line)} {finding.text}{' '}
+                    <button
+                      class="btn-with-icon"
+                      type="button"
+                      style={smallButton}
+                      onClick={() => restoreEvidenceFinding(props.task.id, finding.id)}
+                    >
+                      <UndoIcon size={12} />
+                      Undo dismissal
+                    </button>
+                  </li>
+                )}
+              </For>
+            </ul>
+          </details>
+        </Show>
+        <Show
+          when={flags().some(
+            (flag) => flag.category === 'info' && !(flag.id in props.pkg.acceptedFlags),
+          )}
+        >
+          <details style={sectionStyle}>
+            <summary>App scan · informational notes</summary>
+            <ul style={listStyle}>
+              <For
+                each={flags().filter(
+                  (flag) => flag.category === 'info' && !(flag.id in props.pkg.acceptedFlags),
+                )}
+              >
+                {(flag) => (
+                  <FlagItem taskId={props.task.id} flag={flag} onReviewFile={props.onReviewFile} />
+                )}
+              </For>
+            </ul>
+          </details>
+        </Show>
+        <Show when={props.pkg.scan.tests.length > 0 || props.pkg.scan.coveringTests.length > 0}>
+          <details style={sectionStyle}>
+            <summary>Tests ({props.pkg.scan.tests.length} changed)</summary>
+            <ul style={listStyle}>
+              <For each={props.pkg.scan.tests}>
+                {(test) => (
+                  <li>
+                    <span style={muted}>
+                      {test.change} {test.kind}
+                    </span>{' '}
+                    {test.title} <code style={muted}>{test.file}</code>
+                  </li>
+                )}
+              </For>
+            </ul>
+            <Show when={props.pkg.scan.coveringTests.length > 0}>
+              <div style={{ ...muted, 'margin-top': '4px' }}>
+                Unchanged tests that import changed code:
+                <ul style={listStyle}>
+                  <For each={props.pkg.scan.coveringTests}>
+                    {(file) => (
+                      <li>
+                        <code>{file}</code>
+                      </li>
+                    )}
+                  </For>
+                </ul>
+              </div>
             </Show>
           </details>
-        )}
-      </Show>
-      <Show when={props.pkg.claim}>
-        {(claim) => (
-          <details style={sectionStyle}>
-            <summary>Agent report</summary>
-            <Show when={claim().summary}>
-              <p style={{ margin: '4px 0', 'white-space': 'pre-wrap' }}>{claim().summary}</p>
-            </Show>
-            <Show when={claim().risks?.length}>
-              <div style={muted}>Risks:</div>
-              <ul style={listStyle}>
-                <For each={claim().risks}>{(risk) => <li>{risk}</li>}</For>
-              </ul>
-            </Show>
-          </details>
-        )}
-      </Show>
+        </Show>
+        <Show when={review()}>
+          {(current) => (
+            <details style={sectionStyle}>
+              <summary>
+                AI review (
+                {current().status === 'done'
+                  ? `${openFindings().length} findings`
+                  : current().status}
+                )
+              </summary>
+              <Show when={current().error}>
+                <div style={{ color: theme.error }}>{current().error}</div>
+              </Show>
+              <Show when={current().testSummary}>
+                <p style={{ margin: '4px 0' }}>{current().testSummary}</p>
+              </Show>
+            </details>
+          )}
+        </Show>
+        <Show when={props.pkg.claim}>
+          {(claim) => (
+            <details style={sectionStyle}>
+              <summary>Agent report</summary>
+              <Show when={claim().summary}>
+                <p style={{ margin: '4px 0', 'white-space': 'pre-wrap' }}>{claim().summary}</p>
+              </Show>
+              <Show when={claim().risks?.length}>
+                <div style={muted}>Risks:</div>
+                <ul style={listStyle}>
+                  <For each={claim().risks}>{(risk) => <li>{risk}</li>}</For>
+                </ul>
+              </Show>
+            </details>
+          )}
+        </Show>
+      </details>
     </>
   );
 }

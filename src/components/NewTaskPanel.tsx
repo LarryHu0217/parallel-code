@@ -1,3 +1,4 @@
+import { taskProjectFilter } from '../store/task-project-filter';
 import { createCanvasTask, validateCanvasTaskSource } from '../store/canvas-tasks';
 import type { AppStore, SpNewTaskSource } from '../store/types';
 import { linkNewTaskToSp } from '../store/superProductivityOpen';
@@ -575,7 +576,10 @@ export function NewTaskPanel(props: NewTaskPanelProps) {
             const dropUrl = store.newTaskDropUrl;
             const targets = codeProjects();
             const fallbackProjectId =
-              targets.find((p) => p.id === store.lastProjectId)?.id ?? targets[0]?.id ?? null;
+              taskProjectFilter() ??
+              targets.find((p) => p.id === store.lastProjectId)?.id ??
+              targets[0]?.id ??
+              null;
             const defaults = dropUrl ? getGitHubDropDefaults(dropUrl) : null;
 
             if (dropUrl) setPrompt(`review ${dropUrl}`);

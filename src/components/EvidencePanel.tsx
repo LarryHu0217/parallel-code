@@ -61,7 +61,10 @@ export function EvidencePanel(props: EvidencePanelProps) {
   };
   const headline = () => {
     const current = confidence();
-    return current ? evidenceHeadline(current, pkg()) : 'No evidence yet';
+    const evidence = pkg();
+    if (current && evidence && countsAreHeadline())
+      return `Checks: ${evidenceCheckOutcomes(evidence)}`;
+    return current ? evidenceHeadline(current, evidence) : 'No evidence yet';
   };
   const modelSettings = () =>
     getProject(props.task.projectId)?.evidenceModel ?? DEFAULT_EVIDENCE_MODEL;
@@ -85,6 +88,22 @@ export function EvidencePanel(props: EvidencePanelProps) {
     Boolean(evidencePrompt() || verifyFailed());
   const outdated = () => confidence()?.level === 'not-checked';
   const sent = () => pkg()?.sentToAgent?.includes('fix');
+  // Show check outcomes once; keep freshness and review headlines when they add context.
+  const countsAreHeadline = () => {
+    const current = confidence();
+    const evidence = pkg();
+    if (!current || !evidence || ['checking', 'not-checked'].includes(current.level)) return false;
+    if (current.level === 'high') return true;
+    if (evidence.checks.some((check) => ['failed', 'timed_out', 'error'].includes(check.status)))
+      return true;
+    const hasDecisions = evidence.scan.flags.some(
+      (flag) => flag.category !== 'info' && !(flag.id in evidence.acceptedFlags),
+    );
+    return (
+      !hasDecisions &&
+      (evidence.skipped.length > 0 || evidence.checks.some((check) => check.status === 'cancelled'))
+    );
+  };
   const checkCounts = () => {
     const current = pkg();
     return current
@@ -204,7 +223,9 @@ export function EvidencePanel(props: EvidencePanelProps) {
         }}
       >
         <strong style={{ color: level().color, 'font-size': '15px' }}>{headline()}</strong>
-        <span style={{ color: theme.fgMuted }}>{pkg() ? checkCounts() : ''}</span>
+        <span style={{ color: theme.fgMuted }}>
+          {pkg() && !countsAreHeadline() ? checkCounts() : ''}
+        </span>
       </div>
       <div
         style={{
@@ -236,17 +257,26 @@ export function EvidencePanel(props: EvidencePanelProps) {
           {sendError()}
         </div>
       </Show>
-      <Show when={confidence()}>
-        {(current) => (
-          <div style={mutedLine}>
-            {/* The headline already says "Checks outdated"; only a confidence level adds to it. */}
-            {level().label === headline() ? '' : `${level().label} · `}
-            {current().reasons[0]?.text ?? 'App checks passed; this does not prove correctness.'}
-          </div>
-        )}
+      <Show when={outdated()}>
+        <div style={mutedLine}>{confidence()?.reasons[0]?.text}</div>
       </Show>
       <Show when={outdated() && (props.dirty || pkg()?.scan.dirty)}>
         <div style={mutedLine}>Commit the uncommitted changes, then refresh evidence.</div>
+      </Show>
+      <Show when={pkg()?.scan.truncated}>
+        <div role="status" style={{ ...mutedLine, color: theme.warning }}>
+          The integrity scan is incomplete; some changes were not inspected.
+        </div>
+      </Show>
+      <Show when={pkg()?.review?.status === 'running'}>
+        <div role="status" style={mutedLine}>
+          AI review running…
+        </div>
+      </Show>
+      <Show when={pkg()?.review?.status === 'error'}>
+        <div role="alert" style={{ ...mutedLine, color: theme.error }}>
+          AI review failed. {pkg()?.review?.error}
+        </div>
       </Show>
       <Show when={activeChecks()}>
         <div role="status" style={mutedLine}>
@@ -270,19 +300,16 @@ export function EvidencePanel(props: EvidencePanelProps) {
       >
         {(current) => (
           <>
-            <div style={mutedLine}>
-              Commit {current().scan.headSha.slice(0, 8)} · {current().scan.tests.length} test
-              changes · {current().scan.files.length} files
-            </div>
             <EvidenceDetails
               task={props.task}
               agentId={props.agentId}
               checks={checks('attention')}
               passedChecks={checks('passed')}
               hasCheckAttention={getTaskChecks(props.task.id).some((check) =>
-                evidenceCheckNeedsAttention(check, props.task, current()),
+                evidenceCheckNeedsAttention(check, props.task, current(), props.headSha),
               )}
               pkg={current()}
+              confidenceLabel={level().label}
               reasons={confidence()?.reasons ?? []}
               onReviewFile={props.onReviewFile}
             />

@@ -553,13 +553,12 @@ export function navigateTask(direction: 'left' | 'right'): void {
 }
 
 export function setPendingAction(
-  action: { type: 'close' | 'merge' | 'push'; taskId: string } | null,
+  action: { type: 'close' | 'finish'; taskId: string } | null,
 ): void {
-  if (action && (action.type === 'merge' || action.type === 'push')) {
+  if (action?.type === 'finish') {
     const task = store.tasks[action.taskId];
     if (task && task.gitIsolation !== 'worktree') {
-      const label = action.type === 'merge' ? 'Merge' : 'Push';
-      showNotification(`${label} is only available for worktree tasks`);
+      showNotification('Finish is only available for worktree tasks');
       return;
     }
   }

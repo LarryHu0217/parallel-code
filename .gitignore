@@ -24,8 +24,10 @@ docs/*
 !docs/reasoning-graph-research.md
 !docs/design-doc.md
 !docs/guided-understanding-plan.md
+!docs/tour-polish-plan.md
 !docs/runtime-separation-plan.md
 !docs/agent-coordination-plan.md
+!docs/agent-handoff-plan.md
 !docs/evidence-packages.md
 
 # Sandbox bind-mount artifacts from user home (not project files).

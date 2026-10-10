@@ -1,3 +1,4 @@
+import { matchesTaskProjectFilter } from './task-project-filter';
 import { batch } from 'solid-js';
 import { documentAgentTaskId, isGitHubAgentTaskId } from '../documents/task-id';
 import { store, setStore } from './core';
@@ -31,9 +32,10 @@ function selectedAgentIdForTask(task: {
 
 /** Visible tile order; the single document workspace follows coding tasks. */
 export function openPanelOrder(): string[] {
+  const taskOrder = store.taskOrder.filter(matchesTaskProjectFilter);
   return store.activeDocumentProjectId
-    ? [...store.taskOrder, documentAgentTaskId(store.activeDocumentProjectId)]
-    : store.taskOrder;
+    ? [...taskOrder, documentAgentTaskId(store.activeDocumentProjectId)]
+    : taskOrder;
 }
 
 export function setActiveTask(id: string): void {
@@ -44,6 +46,7 @@ export function setActiveTask(id: string): void {
   const isDocument =
     store.activeDocumentProjectId && id === documentAgentTaskId(store.activeDocumentProjectId);
   if (!task && !terminal && !isDocument) return;
+  if (!isDocument && !matchesTaskProjectFilter(id)) setStore('taskProjectFilter', null);
   setStore('githubIssuesProjectId', null);
   setStore('newTaskPanelFocused', false);
   setStore('placeholderFocused', false);
@@ -91,11 +94,12 @@ export function moveActiveTask(direction: 'left' | 'right'): void {
   if (store.newTaskPanelFocused) return;
   const { taskOrder, activeTaskId } = store;
   if (!activeTaskId || taskOrder.length < 2) return;
-  const idx = taskOrder.indexOf(activeTaskId);
+  const visibleOrder = taskOrder.filter(matchesTaskProjectFilter);
+  const idx = visibleOrder.indexOf(activeTaskId);
   if (idx === -1) return;
   const target = direction === 'left' ? idx - 1 : idx + 1;
-  if (target < 0 || target >= taskOrder.length) return;
-  reorderTask(idx, target);
+  if (target < 0 || target >= visibleOrder.length) return;
+  reorderTask(taskOrder.indexOf(activeTaskId), taskOrder.indexOf(visibleOrder[target]));
   // Re-focus the moved task and scroll it into view (DOM node move loses focus)
   setTaskFocusedPanel(activeTaskId, getTaskFocusedPanel(activeTaskId));
 }
@@ -130,4 +134,19 @@ export function toggleNewTaskPanel(show?: boolean): void {
   }
   setStore('showNewTaskPanel', shouldShow);
   if (shouldShow) triggerFocus('new-task');
+}
+
+export function setTaskProjectFilter(projectId: string | null): void {
+  batch(() => {
+    setStore('taskProjectFilter', projectId);
+    setStore('sidebarFocusedTaskId', null);
+    if (!store.activeTaskId || !openPanelOrder().includes(store.activeTaskId)) {
+      const nextId = openPanelOrder()[0];
+      if (nextId) setActiveTask(nextId);
+      else {
+        setStore('activeTaskId', null);
+        setStore('activeAgentId', null);
+      }
+    }
+  });
 }

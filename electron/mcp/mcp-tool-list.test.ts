@@ -101,14 +101,12 @@ describe('selectTools — role-based tool list', () => {
     expect(byName.get('get_task_output')).toContain('Improve documentation in @filename');
   });
 
-  it('create_task documents the coordinator branch as the default base branch', () => {
+  it('create_task documents the main branch as the default base branch', () => {
     const createTask = COORDINATOR_TOOLS.find((tool) => tool.name === 'create_task');
     const properties = createTask?.inputSchema.properties as
       | Record<string, { description?: string }>
       | undefined;
-    expect(properties?.baseBranch?.description).toContain(
-      'Defaults to the coordinator task branch',
-    );
+    expect(properties?.baseBranch?.description).toContain('Defaults to the main branch');
   });
 
   it('create_task requires an initial prompt', () => {

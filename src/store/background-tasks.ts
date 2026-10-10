@@ -1,15 +1,42 @@
-import { batch, createEffect, createRoot, createSignal, untrack } from 'solid-js';
+import { matchesTaskProjectFilter } from './task-project-filter';
+import { batch, createEffect, createRoot, createSignal, onCleanup, untrack } from 'solid-js';
 import { store, setStore } from './core';
 import { AGENT_HOOK_STALE_MS, getAgentHookStatus, type AgentHookStatus } from './agentHookStatus';
 import { scrollTaskIntoView } from './focused-panel';
 import { setActiveTask } from './navigation';
+import { collapseTask, uncollapseTask } from './tasks';
+import { getPrChecks } from './pr-checks-state';
 import { getCoordinatorChildren } from './sidebar-order';
 import { getTaskOpenQuestions, isAgentIdle, type TaskOpenQuestion } from './taskStatus';
 
-// Session-only: restarting the app ends the running agents this baseline describes.
-const [backgroundTasks, setBackgroundTasks] = createSignal<ReadonlyMap<string, ActivitySnapshot>>(
+// Activity baselines are session-only. Timed snoozes are also saved on the task.
+const [backgroundTasks, setBackgroundTasks] = createSignal<ReadonlyMap<string, BackgroundTask>>(
   new Map(),
 );
+
+interface BackgroundTask extends ActivitySnapshot {
+  snoozedUntil?: number;
+  /** Returns once the PR's checks stop pending, ignoring agent activity. */
+  untilCi?: boolean;
+  /** Checks were observed this session, so their removal means the PR went away
+   * rather than that the watcher has not reported yet after a restart. */
+  ciSeen?: boolean;
+}
+
+export function getTaskSnoozedUntil(taskId: string): number | undefined {
+  const owner = backgroundOwner(taskId);
+  return owner ? backgroundTasks().get(owner)?.snoozedUntil : undefined;
+}
+
+export function isTaskSnoozedUntilCi(taskId: string): boolean {
+  const owner = backgroundOwner(taskId);
+  return owner ? backgroundTasks().get(owner)?.untilCi === true : false;
+}
+
+/** Only pending checks have an outcome to wait for; a finished run would wake at once. */
+export function canSnoozeTaskUntilCi(taskId: string): boolean {
+  return getPrChecks(backgroundOwner(taskId) ?? taskId)?.overall === 'pending';
+}
 
 export function isTaskBackgrounded(taskId: string): boolean {
   return backgroundOwner(taskId) !== undefined;
@@ -37,6 +64,7 @@ interface AgentActivity {
 
 interface ActivitySnapshot {
   task: string;
+  mergedPrTasks: readonly string[];
   agents: ReadonlyMap<string, AgentActivity>;
 }
 
@@ -66,7 +94,9 @@ function agentActivity(agentId: string, questions: readonly TaskOpenQuestion[]):
  * agents finishing/resuming even when another agent masks the task's status. */
 function activitySnapshot(taskId: string): ActivitySnapshot {
   const agents = new Map<string, AgentActivity>();
-  const tasks = taskBlock(taskId).map((id) => {
+  const block = taskBlock(taskId);
+  const mergedPrTasks = block.filter((id) => getPrChecks(id)?.merged === true);
+  const tasks = block.map((id) => {
     const task = store.tasks[id];
     const agentIds = task?.agentIds ?? [];
     const questions = getTaskOpenQuestions(id);
@@ -84,24 +114,25 @@ function activitySnapshot(taskId: string): ActivitySnapshot {
       agentIds,
     };
   });
-  return { task: JSON.stringify(tasks), agents };
+  return { task: JSON.stringify(tasks), mergedPrTasks, agents };
 }
 
-/** A stale hook claim expires without any new event; the heuristics taking over
- * from it are a new baseline, not activity. */
+/** Expired hooks and cleared merge state reset the baseline without new activity. */
 function activityChange(
   baseline: ActivitySnapshot,
   current: ActivitySnapshot,
-): 'same' | 'expired' | 'new' {
+): 'same' | 'rebaseline' | 'new' {
   if (current.task !== baseline.task) return 'new';
-  let change: 'same' | 'expired' = 'same';
+  if (current.mergedPrTasks.some((id) => !baseline.mergedPrTasks.includes(id))) return 'new';
+  let change: 'same' | 'rebaseline' =
+    current.mergedPrTasks.length !== baseline.mergedPrTasks.length ? 'rebaseline' : 'same';
   for (const [agentId, now] of current.agents) {
     const then = baseline.agents.get(agentId);
     if (!then || now.process !== then.process) return 'new';
     const expired =
       !now.hooked && then.claimAt !== undefined && Date.now() - then.claimAt >= AGENT_HOOK_STALE_MS;
     // Rebaseline hook expiry even when both sources still report the agent busy.
-    if (expired) change = 'expired';
+    if (expired) change = 'rebaseline';
     else if (now.activity !== then.activity) return 'new';
   }
   return change;
@@ -114,7 +145,9 @@ function foregroundNeighbor(taskId: string, block: readonly string[]): string | 
     ...store.taskOrder.slice(0, index).reverse(),
     ...store.taskOrder.slice(index + 1),
   ];
-  return candidates.find((id) => !block.includes(id) && !isTaskBackgrounded(id));
+  return candidates.find(
+    (id) => !block.includes(id) && !isTaskBackgrounded(id) && matchesTaskProjectFilter(id),
+  );
 }
 
 /** Moving a tile re-inserts its DOM nodes, which drops focus inside it, e.g. in
@@ -129,19 +162,68 @@ function keepFocusAcrossReorder(): void {
   });
 }
 
-export function sendTaskToBack(taskId: string): void {
+function validSnoozeHours(hours: number): boolean {
+  return Number.isFinite(hours) && hours >= 0.01 && hours <= 168;
+}
+
+export async function snoozeTask(taskId: string, hours: number, keepRunning = true): Promise<void> {
+  if (!validSnoozeHours(hours)) return;
+  taskId = backgroundOwner(taskId) ?? taskId;
+  const task = store.tasks[taskId];
+  if (!task || task.collapsed || task.closingStatus || !store.taskOrder.includes(taskId)) return;
+  if (keepRunning) {
+    sendTaskToBack(taskId, hours);
+    return;
+  }
+  // The coordinator registry owns its agents; collapse cannot safely replace them.
+  if (task.coordinatorMode || task.delegationParent || task.coordinatedBy) return;
+  const snoozedUntil = Date.now() + hours * 3_600_000;
+  await collapseTask(taskId);
+  if (!store.tasks[taskId]?.collapsed) return;
+  batch(() => {
+    setStore('tasks', taskId, 'snoozedUntil', snoozedUntil);
+    setBackgroundTasks((previous) =>
+      new Map(previous).set(taskId, { ...activitySnapshot(taskId), snoozedUntil }),
+    );
+  });
+}
+
+export function sendTaskToBack(taskId: string, snoozeHours?: number): void {
+  if (snoozeHours !== undefined && !validSnoozeHours(snoozeHours)) return;
+  moveTaskToBack(taskId, {
+    snoozedUntil: snoozeHours === undefined ? undefined : Date.now() + snoozeHours * 3_600_000,
+  });
+}
+
+/** Keeps agents running and returns the task when its PR checks pass or fail. */
+export function snoozeTaskUntilCi(taskId: string): void {
+  if (!canSnoozeTaskUntilCi(taskId)) return;
+  moveTaskToBack(taskId, { untilCi: true, ciSeen: true });
+}
+
+function moveTaskToBack(
+  taskId: string,
+  mode: Pick<BackgroundTask, 'snoozedUntil' | 'untilCi' | 'ciSeen'>,
+): void {
+  taskId = backgroundOwner(taskId) ?? taskId;
   const task = store.tasks[taskId];
   if (!task || task.collapsed || task.closingStatus || !store.taskOrder.includes(taskId)) return;
   const block = taskBlock(taskId);
   const remaining = store.taskOrder.filter((id) => !block.includes(id));
-  const snapshot = activitySnapshot(taskId);
+  const snapshot: BackgroundTask = { ...activitySnapshot(taskId), ...mode };
   const neighbor = foregroundNeighbor(taskId, block);
   batch(() => {
+    for (const id of block) {
+      setStore('tasks', id, 'snoozedUntil', undefined);
+      setStore('tasks', id, 'snoozedUntilCi', undefined);
+    }
     setBackgroundTasks((previous) => {
       const next = new Map(previous);
       for (const id of block) next.delete(id);
       return next.set(taskId, snapshot);
     });
+    setStore('tasks', taskId, 'snoozedUntil', snapshot.snoozedUntil);
+    setStore('tasks', taskId, 'snoozedUntilCi', snapshot.untilCi);
     setStore('taskOrder', [...remaining, ...block]);
     if (store.activeTaskId && block.includes(store.activeTaskId)) {
       if (neighbor) setActiveTask(neighbor);
@@ -156,13 +238,22 @@ export function sendTaskToBack(taskId: string): void {
 export function bringTaskToFront(taskId: string): void {
   const owner = backgroundOwner(taskId);
   if (!owner) return;
+  const restorePaused =
+    store.tasks[owner]?.snoozedUntil !== undefined &&
+    !store.tasks[owner]?.closingStatus &&
+    store.collapsedTaskOrder.includes(owner);
   batch(() => {
+    if (store.tasks[owner]) {
+      setStore('tasks', owner, 'snoozedUntil', undefined);
+      setStore('tasks', owner, 'snoozedUntilCi', undefined);
+    }
     setBackgroundTasks((previous) => {
       const next = new Map(previous);
       next.delete(owner);
       return next;
     });
-    if (!store.taskOrder.includes(owner) || store.tasks[owner]?.collapsed) return;
+    if (restorePaused && store.tasks[owner]?.collapsed) uncollapseTask(owner, { activate: false });
+    if (!store.taskOrder.includes(owner)) return;
     const block = taskBlock(owner);
     keepFocusAcrossReorder();
     setStore('taskOrder', [...block, ...store.taskOrder.filter((id) => !block.includes(id))]);
@@ -176,21 +267,94 @@ export function bringTaskToFront(taskId: string): void {
  * changes order only; it never takes focus from the task the user is working on. */
 export function startBackgroundTaskWatcher(): () => void {
   return createRoot((dispose) => {
+    // loadState restores task/agent sessions first. Rebuild only timed and CI
+    // snoozes; activity baselines belong to the previous run.
+    batch(() => {
+      const restored = new Map(backgroundTasks());
+      for (const taskId of [...store.taskOrder, ...store.collapsedTaskOrder]) {
+        const task = store.tasks[taskId];
+        if (task?.snoozedUntil !== undefined) {
+          restored.set(taskId, { ...activitySnapshot(taskId), snoozedUntil: task.snoozedUntil });
+        } else if (task?.snoozedUntilCi) {
+          // Without a PR no checks update will ever arrive to end the wait.
+          if (!task.collapsed && (task.prUrl || task.githubUrl)) {
+            restored.set(taskId, { ...activitySnapshot(taskId), untilCi: true });
+          } else setStore('tasks', taskId, 'snoozedUntilCi', undefined);
+        }
+      }
+      setBackgroundTasks(restored);
+      // A saved/fallback selection must not immediately cancel a restored snooze.
+      if (store.activeTaskId && isTaskBackgrounded(store.activeTaskId)) {
+        const foreground = store.taskOrder.find(
+          (id) => !isTaskBackgrounded(id) && matchesTaskProjectFilter(id),
+        );
+        if (foreground) setActiveTask(foreground);
+        else {
+          setStore('activeTaskId', null);
+          setStore('activeAgentId', null);
+          setStore('focusMode', false);
+        }
+      }
+    });
+    createEffect(() => {
+      const deadlines = [...backgroundTasks().values()].flatMap((task) =>
+        task.snoozedUntil === undefined ? [] : [task.snoozedUntil],
+      );
+      if (!deadlines.length) return;
+      // Recheck wall time periodically, including after sleep or a clock change.
+      const timer = setTimeout(
+        () => {
+          for (const [taskId, task] of backgroundTasks()) {
+            if (task.snoozedUntil !== undefined && task.snoozedUntil <= Date.now()) {
+              bringTaskToFront(taskId);
+            }
+          }
+          setBackgroundTasks((tasks) => new Map(tasks));
+        },
+        Math.max(0, Math.min(60_000, Math.min(...deadlines) - Date.now())),
+      );
+      onCleanup(() => clearTimeout(timer));
+    });
     createEffect(() => {
       for (const [taskId, baseline] of backgroundTasks()) {
         const task = store.tasks[taskId];
-        const current = activitySnapshot(taskId);
-        const change = activityChange(baseline, current);
+        const current =
+          baseline.snoozedUntil === undefined && !baseline.untilCi
+            ? activitySnapshot(taskId)
+            : undefined;
+        const change = current ? activityChange(baseline, current) : 'same';
+        // 'none' can be transient: GitHub may report a pushed head before its
+        // check runs register. Merged or closed (removed) PRs end the wait.
+        const checks = baseline.untilCi ? getPrChecks(taskId) : undefined;
+        const ciDone =
+          baseline.untilCi === true &&
+          (checks
+            ? checks.merged === true || checks.overall === 'success' || checks.overall === 'failure'
+            : baseline.ciSeen === true);
         if (
           !task ||
-          task.collapsed ||
-          !store.taskOrder.includes(taskId) ||
+          task.closingStatus ||
+          (task.collapsed
+            ? baseline.snoozedUntil === undefined || !store.collapsedTaskOrder.includes(taskId)
+            : !store.taskOrder.includes(taskId)) ||
+          (baseline.snoozedUntil !== undefined && task.snoozedUntil === undefined) ||
+          (baseline.untilCi === true && !task.snoozedUntilCi) ||
           taskBlock(taskId).includes(store.activeTaskId ?? '') ||
-          change === 'new'
+          change === 'new' ||
+          ciDone
         ) {
           untrack(() => bringTaskToFront(taskId));
-        } else if (change === 'expired') {
+        } else if (change === 'rebaseline' && current) {
           untrack(() => setBackgroundTasks((previous) => new Map(previous).set(taskId, current)));
+        } else if (checks && !baseline.ciSeen) {
+          untrack(() =>
+            setBackgroundTasks((previous) =>
+              // An earlier iteration may have just returned this task.
+              previous.get(taskId)?.untilCi
+                ? new Map(previous).set(taskId, { ...baseline, ciSeen: true })
+                : previous,
+            ),
+          );
         }
       }
     });

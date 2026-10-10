@@ -6,6 +6,8 @@ interface IconButtonProps {
   onClick: JSX.EventHandler<HTMLButtonElement, MouseEvent>;
   title?: string;
   size?: 'sm' | 'md';
+  /** Marks the button as a toggle; omit for plain actions. */
+  pressed?: boolean;
 }
 
 export function IconButton(props: IconButtonProps) {
@@ -15,6 +17,8 @@ export function IconButton(props: IconButtonProps) {
     <button
       class="icon-btn"
       title={props.title}
+      aria-label={props.title}
+      aria-pressed={props.pressed}
       onClick={(e) => {
         e.stopPropagation();
         props.onClick(e);

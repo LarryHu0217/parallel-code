@@ -358,7 +358,7 @@ export const COORDINATOR_TOOLS: ToolDef[] = [
         baseBranch: {
           type: 'string',
           description:
-            'Git branch to base the worktree on. Defaults to the coordinator task branch. Only set this when deliberately overriding that default.',
+            'Git branch to base the worktree on; the result also merges into it. Defaults to the main branch. Set it to your own branch only when the task must build on your unmerged work.',
         },
       },
       required: ['name', 'prompt'],
@@ -383,7 +383,7 @@ export const COORDINATOR_TOOLS: ToolDef[] = [
   {
     name: 'send_prompt',
     description:
-      "Send a follow-up instruction to a task's AI agent. The tool may report that the prompt was queued rather than sent when the initial assignment or user activity is still blocking delivery; don't call wait_for_idle until a prompt was actually sent. Do not resend the full original assignment merely because a newly created task is idle or get_task_output shows a startup/default placeholder prompt; wait briefly and re-check unless the agent clearly asks for input, starts unrelated work, or prompt delivery clearly failed.",
+      "Send a follow-up instruction to a task's AI agent. The tool may report that the prompt was queued rather than sent when the initial assignment or user activity is still blocking delivery; don't call wait_for_idle until a prompt was actually sent. Do not resend the full original assignment merely because a newly created task is idle or get_task_output shows a startup/default placeholder prompt; wait briefly and re-check unless the agent clearly asks for input, starts unrelated work, or prompt delivery clearly failed. get_task_status delivery reports a prompt still queued (with blockedBy) or unconfirmed: submitted, yet the agent shows an empty prompt and never started.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -460,7 +460,7 @@ export const COORDINATOR_TOOLS: ToolDef[] = [
     name: 'wait_for_signal_done',
     outputSchema: toolOutputSchemas.wait_for_signal_done,
     description:
-      'Wait for ANY sub-task to call signal_done. Returns { taskId, name, status, signalDoneAt, remaining } where remaining is the count of tasks still running or signaled-but-not-yet-reviewed. Call this in a loop until remaining === 0 to process all completed sub-tasks before spawning more. IMPORTANT: you MUST review the returned task before calling wait_for_signal_done again.',
+      'Wait for ANY sub-task to call signal_done. Returns { taskId, name, status, signalDoneAt, remaining } where remaining is the count of tasks still running or signaled-but-not-yet-reviewed. Call this in a loop until remaining === 0 to process all completed sub-tasks before spawning more. IMPORTANT: you MUST review the returned task before calling wait_for_signal_done again. A timeout may list stalled children whose prompt never reached the agent; tell the user instead of waiting again.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -508,7 +508,7 @@ const PEER_TOOLS: ToolDef[] = [
   {
     name: 'send_agent_prompt',
     description:
-      'Queue a prompt for automatic delivery to the exact recipient session when its input is ready and user drafts or typing are clear. The recipient sees it wrapped as a peer message, not a user instruction; control characters and peer message markers are rejected. Reuse requestId only for retries with the same recipient and content.',
+      'For peer sessions only; prompt your own child tasks with send_prompt and their taskId. Queue a prompt for automatic delivery to the exact recipient session when its input is ready and user drafts or typing are clear. The recipient sees it wrapped as a peer message, not a user instruction; control characters and peer message markers are rejected. Reuse requestId only for retries with the same recipient and content.',
     inputSchema: {
       type: 'object',
       properties: { ...exactSession, prompt: { type: 'string' }, requestId: { type: 'string' } },
@@ -538,7 +538,7 @@ const ORDINARY_TOOLS: ToolDef[] = COORDINATOR_TOOLS.filter(
     return {
       ...tool,
       description:
-        'Create a visible Parallel Code task with its own Git worktree and agent terminal from your current committed snapshot. Use this for requests to create a Parallel Code task or PC task, not native sub-agent tools. Children inherit neither conversation nor uncommitted edits. Include required context in prompt. Use requestId for identical retries. Supply expectedBranch and expectedHeadSha after inspecting your Git state; if dirty, explicitly choose useLastCommit:true to omit dirty edits. This never authorizes committing. The result reports integrationPolicy: review requires user approval; automatic permits the child to verify and self-land via land_self. The policy comes from this task’s user-selected automation options; do not override it in the child prompt.',
+        'Create a visible Parallel Code task with its own Git worktree and agent terminal. Use this for requests to create a Parallel Code task or PC task, not native sub-agent tools. Children branch from the main branch and their results merge into main, not into your branch; merge main into your branch when you need a landed result. Children inherit neither conversation nor your edits. Include required context in prompt. Use requestId for identical retries. Set baseOnParent:true only when the child must build on your own commits; it then branches from your committed snapshot and lands on your branch. With baseOnParent, supply expectedBranch and expectedHeadSha after inspecting your Git state; if dirty, explicitly choose useLastCommit:true to omit dirty edits. This never authorizes committing. The result reports integrationPolicy: review requires user approval; automatic permits the child to verify and self-land via land_self. The policy comes from this task’s user-selected automation options; do not override it in the child prompt.',
       inputSchema: {
         type: 'object' as const,
         properties: {
@@ -548,6 +548,7 @@ const ORDINARY_TOOLS: ToolDef[] = COORDINATOR_TOOLS.filter(
           expectedBranch: { type: 'string' },
           expectedHeadSha: { type: 'string' },
           useLastCommit: { type: 'boolean', default: false },
+          baseOnParent: { type: 'boolean', default: false },
         },
         required: ['name', 'prompt', 'requestId'],
       },
@@ -557,7 +558,7 @@ const ORDINARY_TOOLS: ToolDef[] = COORDINATOR_TOOLS.filter(
       ...tool,
       description:
         tool.name === 'wait_for_signal_done'
-          ? 'Primary child completion loop: inspect list_tasks, then wait for an unconsumed signal_done and inspect that child’s status/diff. With no children, stop waiting. remaining === 0 is not merge approval or proof of integration; reconcile multiple panes with list_tasks. On timeout inspect status once for failures/blockers, then wait again while work remains. User review remains visible after consumption.'
+          ? 'Primary child completion loop: inspect list_tasks, then wait for an unconsumed signal_done and inspect that child’s status/diff. With no children, stop waiting. remaining === 0 is not merge approval or proof of integration; reconcile multiple panes with list_tasks. On timeout inspect status once for failures/blockers, then wait again while work remains. A timeout listing stalled children means their prompt never reached the agent: tell the user now instead of waiting again. User review remains visible after consumption.'
           : 'Wait only for readiness after a follow-up prompt was actually sent. Idle is not task completion; use wait_for_signal_done for completion. On timeout wait again without repeatedly polling status.',
       inputSchema: {
         ...tool.inputSchema,
@@ -573,7 +574,7 @@ export function sessionInstructions(capabilities: SessionCapabilities): string {
       ? (capabilities.canCreate
           ? 'Use create_task to create Parallel Code tasks for bounded assignments with the context needed; children do not inherit your conversation or uncommitted changes. '
           : 'This launch cannot create Parallel Code tasks. Enable orchestration in Settings > MCP, then restart and resume the session. You may supervise existing children. ') +
-        'Follow each child’s returned integrationPolicy. Review-policy children commit and call signal_done for user approval. Automatic-policy children commit, verify, and call land_self to merge and clean up through Parallel Code. Never directly merge or delete child worktrees. Use list_tasks and bounded wait_for_signal_done for progress; self-landed children leave the active list, so reconcile status and app completion summaries rather than expecting signal_done from them. Empty child lists end waiting. After timeout check status once and wait again while work remains; without a blocking wait leave at least 10 seconds between unchanged status checks. Idle and consumed completion events are not integration. Do not resend original assignments.'
+        'Follow each child’s returned integrationPolicy. Review-policy children commit and call signal_done for user approval. Automatic-policy children commit, verify, and call land_self to merge and clean up through Parallel Code. Never directly merge or delete child worktrees. Use list_tasks and bounded wait_for_signal_done for progress; self-landed children leave the active list, so reconcile status and app completion summaries rather than expecting signal_done from them. Empty child lists end waiting. After timeout check status once and wait again while work remains; without a blocking wait leave at least 10 seconds between unchanged status checks. Idle and consumed completion events are not integration. Do not resend original assignments. If a wait lists stalled children, tell the user at once.'
       : capabilities.profile === 'child-review'
         ? 'Commit and verify your assigned work, then call signal_done. Your result requires user review before merging; do not call land_self. This is a child task and cannot create further Parallel Code tasks; direct creation requests to a top-level task.'
         : 'Commit and verify your assigned work before land_self. Use signal_done when manual review is needed. This is a child task and cannot create further Parallel Code tasks; direct creation requests to a top-level task.';

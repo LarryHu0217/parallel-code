@@ -267,4 +267,44 @@ describe('setupAutosave scheduling', () => {
       );
     }
   });
+
+  it('saves a task switch without re-serializing large task data', () => {
+    const id = 'switch-autosave';
+    const previousOrder = [...store.taskOrder];
+    const previousActive = store.activeTaskId;
+    const bigText = 'x'.repeat(100_000);
+    setStore('tasks', id, {
+      id,
+      name: 'Switch',
+      projectId: 'p1',
+      worktreePath: '/switch',
+      branchName: '',
+      agentIds: [],
+      shellAgentIds: [],
+      notes: '',
+      lastPrompt: '',
+      promptHistory: [{ text: bigText, sentAt: 1 }],
+    });
+    setStore('taskOrder', [...previousOrder, id]);
+    const stringify = vi.spyOn(JSON, 'stringify');
+    try {
+      withAutosave(() => {
+        stringify.mockClear();
+        setStore('activeTaskId', id);
+        const serialized = stringify.mock.results.map((r) => String(r.value));
+        expect(serialized.every((s) => s.length < bigText.length)).toBe(true);
+        vi.advanceTimersByTime(AUTOSAVE_DEBOUNCE_MS);
+        expect(mockSaveState).toHaveBeenCalledTimes(1);
+      });
+    } finally {
+      stringify.mockRestore();
+      setStore('activeTaskId', previousActive);
+      setStore('taskOrder', previousOrder);
+      setStore(
+        produce((state) => {
+          delete state.tasks['switch-autosave'];
+        }),
+      );
+    }
+  });
 });

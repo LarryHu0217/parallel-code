@@ -726,17 +726,17 @@ function App() {
         }
         if (listedTask(id)) setPendingAction({ type: 'close', taskId: id });
       },
-      mergeTask: () => {
+      finishTask: () => {
         const id = store.activeTaskId;
-        if (id && listedTask(id)) setPendingAction({ type: 'merge', taskId: id });
-      },
-      pushTask: () => {
-        const id = store.activeTaskId;
-        if (id && listedTask(id)) setPendingAction({ type: 'push', taskId: id });
+        if (id && listedTask(id)) setPendingAction({ type: 'finish', taskId: id });
       },
       spawnShell: () => {
         const id = store.activeTaskId;
         if (id && listedTask(id)) spawnShellForTask(id);
+      },
+      secondOpinion: (e) => {
+        const id = store.activeTaskId;
+        if (!e.repeat && id && listedTask(id)) triggerAction(`${id}:second-opinion`);
       },
       sendPrompt: () => {
         if (!store.githubIssuesProjectId) sendActivePrompt();

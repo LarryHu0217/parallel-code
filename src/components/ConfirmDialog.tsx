@@ -7,6 +7,8 @@ interface ConfirmDialogProps {
   title: string;
   message: string | JSX.Element;
   confirmLabel?: string;
+  /** Shown before the confirm label; the loading spinner takes its place. */
+  confirmIcon?: JSX.Element;
   cancelLabel?: string;
   confirmLoading?: boolean;
   danger?: boolean;
@@ -145,7 +147,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
             gap: '8px',
           }}
         >
-          <Show when={props.confirmLoading}>
+          <Show when={props.confirmLoading} fallback={props.confirmIcon}>
             <span class="inline-spinner" aria-hidden="true" />
           </Show>
           {props.confirmLabel ?? 'Confirm'}

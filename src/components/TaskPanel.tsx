@@ -1,4 +1,3 @@
-import { DelegationReviewDialog } from './DelegationReviewDialog';
 import { DelegationPanel } from './DelegationPanel';
 import { canUsePeerComposer, usePeerComposer } from '../store/delegation';
 import {
@@ -67,11 +66,13 @@ import type { CommitInfo } from '../ipc/types';
 import type { TranscriptMarks } from '../investigation/transcript';
 import { isLandedTaskState } from '../store/landing';
 import { shouldPollTaskCommits } from './task-commit-polling';
+import { ACTIVE_TASK_SETTLE_MS, createSettledFlag } from '../lib/settled-flag';
 import { devQualityFindingProvider } from './dev-quality-finding-fixture';
 import { createEslintQualityFindingProvider } from '../lib/eslint-quality-findings';
 import { createChangeTour } from '../lib/create-change-tour';
 import {
   createUnderstandingTour,
+  documentTourKind,
   planTourSubject,
   tourInputSubject,
   type UnderstandingTourInput,
@@ -106,6 +107,18 @@ export function TaskPanel(props: TaskPanelProps) {
   const eslintQualityFindingProvider = createEslintQualityFindingProvider(
     () => props.task.worktreePath,
   );
+  // Git checks wait until the task stays active; UI and focus react at once.
+  const isSettledActive = createSettledFlag(() => props.isActive, ACTIVE_TASK_SETTLE_MS);
+  // Alt+Arrow also scrolls tiles past; only one that stays in view polls commits.
+  const shouldPollCommits = createSettledFlag(
+    () =>
+      shouldPollTaskCommits(
+        store.focusMode,
+        props.isActive,
+        store.focusMode ? undefined : store.taskViewportVisibility[props.task.id],
+      ),
+    ACTIVE_TASK_SETTLE_MS,
+  );
   const [showCloseConfirm, setShowCloseConfirm] = createSignal(false);
   const [planFullscreen, setPlanFullscreen] = createSignal(false);
 
@@ -130,7 +143,6 @@ export function TaskPanel(props: TaskPanelProps) {
 
   // null while the finish dialog is closed; otherwise the option it shows.
   const [finishAction, setFinishAction] = createSignal<FinishAction | null>(null);
-  const [showDelegationReview, setShowDelegationReview] = createSignal(false);
   const [openPrUrl, setOpenPrUrl] = createSignal<string | null>(null);
   const [pushSuccess, setPushSuccess] = createSignal(false);
   const [pushing, setPushing] = createSignal(false);
@@ -281,8 +293,17 @@ export function TaskPanel(props: TaskPanelProps) {
       worktreePath: props.task.worktreePath,
       filePath,
     });
-  /** A document open on the canvas is read fresh, so an edited file gets a new tour. */
+  /**
+   * A document open on the canvas is read fresh, so an edited file gets a new
+   * tour. The task's own plan takes the plan tour with the same text the notes
+   * button sends, so switching between the two never regenerates it.
+   */
   const openDocumentTour = (path: string) => {
+    const kind = documentTourKind(props.task, path);
+    if (kind === 'plan' && props.task.planContent) {
+      openPlanTour();
+      return;
+    }
     const { worktreePath, name: taskName } = props.task;
     void invoke<DocumentSnapshot>(IPC.ReadDocument, {
       projectRoot: worktreePath,
@@ -290,13 +311,12 @@ export function TaskPanel(props: TaskPanelProps) {
     })
       .then((snapshot) => {
         if (snapshot.missing) throw new Error('the file is not in the worktree');
-        startOrOpenTour({
-          kind: 'plan',
-          taskName,
-          worktreePath,
-          planContent: snapshot.content,
-          subject: path,
-        });
+        const content = snapshot.content;
+        startOrOpenTour(
+          kind === 'plan'
+            ? { kind, taskName, worktreePath, planContent: content, subject: path }
+            : { kind, taskName, worktreePath, content, subject: path },
+        );
       })
       .catch((error: unknown) => showNotification(`Could not read ${path}: ${errMessage(error)}`));
   };
@@ -470,9 +490,8 @@ export function TaskPanel(props: TaskPanelProps) {
       case 'close':
         setShowCloseConfirm(true);
         break;
-      case 'merge':
-      case 'push':
-        openFinish(action.type);
+      case 'finish':
+        openFinish('merge');
         break;
     }
   });
@@ -488,16 +507,7 @@ export function TaskPanel(props: TaskPanelProps) {
     const isolation = props.task.gitIsolation;
     if (isLandedTask()) return;
     if (isolation !== 'worktree' && isolation !== 'direct') return;
-    const focusMode = store.focusMode;
-    if (
-      !shouldPollTaskCommits(
-        focusMode,
-        focusMode ? props.isActive : false,
-        focusMode ? undefined : store.taskViewportVisibility[props.task.id],
-      )
-    ) {
-      return;
-    }
+    if (!shouldPollCommits()) return;
     let cancelled = false;
 
     async function fetchCommits() {
@@ -653,7 +663,7 @@ export function TaskPanel(props: TaskPanelProps) {
   const changedFilesEl = (
     <TaskChangedFilesSection
       task={props.task}
-      isActive={props.isActive}
+      isActive={isSettledActive()}
       commitList={commitList()}
       selectedCommit={selectedCommit()}
       onCommitNavigate={setSelectedCommit}
@@ -945,6 +955,44 @@ export function TaskPanel(props: TaskPanelProps) {
         closingError={props.task.closingError}
         onRetry={() => retryCloseTask(props.task.id)}
       />
+      {/* The title sits above the collaboration banners so they never push it
+          to a different height across tasks. */}
+      <div
+        class="task-header-stack"
+        style={{
+          flex: `0 0 ${props.task.stepsEnabled ? 120 : 96}px`,
+          display: 'flex',
+          'flex-direction': 'column',
+          overflow: 'hidden',
+        }}
+      >
+        {/* Title + branch bars live outside <Show> so they don't remount on layout flips. */}
+        {/* 68px fits the title bar's two rows: a 30px icon-button row, the 2px
+            row gap, a ~21px badge row, and the bar's 12px vertical padding.
+            The stack totals above are this plus the 28px branch bar (and the
+            24px steps line when enabled). */}
+        <div style={{ flex: '0 0 68px', overflow: 'hidden' }}>
+          <TaskTitleBar
+            task={props.task}
+            isActive={props.isActive}
+            onClose={() => setShowCloseConfirm(true)}
+            onFinish={() => openFinish('merge')}
+            pushing={pushing()}
+            pushSuccess={pushSuccess()}
+            onTitleEditRef={(h) => (titleEditHandle = h)}
+          />
+        </div>
+        <Show when={props.task.stepsEnabled}>
+          <TaskCurrentStateLine task={props.task} nowMs={nowMs()} variant="card" />
+        </Show>
+        <div style={{ flex: '0 0 28px', overflow: 'hidden' }}>
+          <TaskBranchInfoBar
+            task={props.task}
+            onEditProject={(id) => setEditingProjectId(id)}
+            onOpenPullRequest={setOpenPrUrl}
+          />
+        </div>
+      </div>
       <Show
         when={
           !!props.task.coordinatedBy ||
@@ -1058,42 +1106,6 @@ export function TaskPanel(props: TaskPanelProps) {
       />
       <TaskBranchAdoptionBanner task={props.task} />
       <TaskSuperProductivityBanner taskId={props.task.id} />
-      <div
-        class="task-header-stack"
-        style={{
-          flex: `0 0 ${props.task.stepsEnabled ? 120 : 96}px`,
-          display: 'flex',
-          'flex-direction': 'column',
-          overflow: 'hidden',
-        }}
-      >
-        {/* Title + branch bars live outside <Show> so they don't remount on layout flips. */}
-        {/* 68px fits the title bar's two rows: a 30px icon-button row, the 2px
-            row gap, a ~21px badge row, and the bar's 12px vertical padding.
-            The stack totals above are this plus the 28px branch bar (and the
-            24px steps line when enabled). */}
-        <div style={{ flex: '0 0 68px', overflow: 'hidden' }}>
-          <TaskTitleBar
-            task={props.task}
-            isActive={props.isActive}
-            onClose={() => setShowCloseConfirm(true)}
-            onFinish={() => openFinish('merge')}
-            pushing={pushing()}
-            pushSuccess={pushSuccess()}
-            onTitleEditRef={(h) => (titleEditHandle = h)}
-          />
-        </div>
-        <Show when={props.task.stepsEnabled}>
-          <TaskCurrentStateLine task={props.task} nowMs={nowMs()} variant="card" />
-        </Show>
-        <div style={{ flex: '0 0 28px', overflow: 'hidden' }}>
-          <TaskBranchInfoBar
-            task={props.task}
-            onEditProject={(id) => setEditingProjectId(id)}
-            onOpenPullRequest={setOpenPrUrl}
-          />
-        </div>
-      </div>
       <div style={{ flex: '1', 'min-height': '0' }}>
         <ResizablePanel
           direction="horizontal"
@@ -1102,11 +1114,6 @@ export function TaskPanel(props: TaskPanelProps) {
           children={canvasVisible() ? [mainChild, canvasChild] : [mainChild]}
         />
       </div>
-      <DelegationReviewDialog
-        task={props.task}
-        open={showDelegationReview()}
-        onClose={() => setShowDelegationReview(false)}
-      />
       <CloseTaskDialog
         open={showCloseConfirm()}
         task={props.task}
@@ -1128,13 +1135,13 @@ export function TaskPanel(props: TaskPanelProps) {
             tour.reset();
             generateTour();
           }}
-          onDelegationReview={() => {
-            setFinishAction(null);
-            setShowDelegationReview(true);
-          }}
           onOpenPullRequest={(url) => {
             setFinishAction(null);
             setOpenPrUrl(url);
+          }}
+          onCloseTask={() => {
+            setFinishAction(null);
+            setShowCloseConfirm(true);
           }}
           onPushStart={() => {
             setPushing(true);

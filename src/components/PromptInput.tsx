@@ -63,6 +63,7 @@ import type { StagedNotification } from '../store/types';
 import { debug, warn as logWarn } from '../lib/log';
 import { theme } from '../lib/theme';
 import { sf } from '../lib/fontScale';
+import { taskAgentOpensSessionPicker } from '../lib/agent-args';
 
 export interface PromptInputHandle {
   getText: () => string;
@@ -213,6 +214,22 @@ export function PromptInput(props: PromptInputProps) {
     if (currentText && currentText !== ip) return;
     setText(ip);
     setTaskPromptDraftActive(props.taskId, false);
+    const agent = store.agents[props.agentId];
+    const task = store.tasks[props.taskId];
+    if (
+      agent?.def &&
+      task &&
+      taskAgentOpensSessionPicker(
+        agent.def,
+        task,
+        agent.resumed,
+        agent.id,
+        task.agentSessionIds?.[props.agentId],
+      )
+    ) {
+      // Keep the queued instruction editable, but never type it into a picker.
+      return;
+    }
     if (autoSentInitialPrompt() === ip) return;
 
     const agentId = props.agentId;

@@ -41,6 +41,34 @@ describe('registerFromRegistry — jump-to-task bindings', () => {
     vi.unstubAllGlobals();
   });
 
+  it('opens second opinion from terminal input but suppresses it while a dialog is open', () => {
+    const handler = vi.fn();
+    const cleanupRegistry = registerFromRegistry(DEFAULT_BINDINGS, { secondOpinion: handler });
+    const cleanupShortcuts = initShortcuts();
+    const event: KeyboardEventStub = {
+      key: 'O',
+      ctrlKey: true,
+      metaKey: false,
+      altKey: false,
+      shiftKey: true,
+      target: { tagName: 'TEXTAREA' } as unknown as EventTarget,
+      composedPath: () => [{ tagName: 'TEXTAREA' }] as unknown as EventTarget[],
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    };
+    try {
+      keydownHandler?.(event as KeyboardEvent);
+      expect(handler).toHaveBeenCalledOnce();
+      expect(event.preventDefault).toHaveBeenCalledOnce();
+      vi.stubGlobal('document', { querySelector: () => ({}) });
+      keydownHandler?.(event as KeyboardEvent);
+      expect(handler).toHaveBeenCalledOnce();
+    } finally {
+      cleanupRegistry();
+      cleanupShortcuts();
+    }
+  });
+
   it('fires jumpToTask:1 handler on Ctrl+1 (key="1") on non-Mac platforms', () => {
     const handler = vi.fn();
     const cleanupRegistry = registerFromRegistry(DEFAULT_BINDINGS, { 'jumpToTask:1': handler });

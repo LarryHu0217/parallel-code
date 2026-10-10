@@ -7,17 +7,19 @@ Native companion app for the desktop's **Connect Phone** (Remote Access) feature
 - **Connect:** scan the QR code in Connect Phone, or paste the link under it. This gives a view-only token.
 - **Pair:** enter the six-digit code from Connect Phone to get a paired token, which may type into terminals. "Keep this phone authorized" asks the desktop to remember the phone across restarts.
 - **Several computers:** link more than one desktop (for example the installed app and a dev build, or two machines) and switch between them in Settings → Computers; each keeps its own pairing.
-- **Agents:** live list with each agent's status and last line, under the desktop's Claude, Codex, and Antigravity 5-hour and weekly usage meters (hidden on desktops without `/api/mobile/usage`).
+- **Agents:** live list with each agent's status and last line, grouped as in the phone web UI (Needs you, Working, Ready to review, Other tasks). Search by task, project, or agent name, and narrow it with the All / Needs you / Review chips. The list sits under the desktop's Claude, Codex, and Antigravity 5-hour and weekly usage meters (hidden on desktops without `/api/mobile/usage`).
 - **Minimized tasks:** tasks minimized on the desktop are pinned below the live list; a setting hides them.
 - **Looks:** the same 15 themes as the desktop, in Settings → Appearance. Follow system / always dark / always light picks the tone, and a separate dark and light look is remembered, so switching your phone's theme switches the look with it. Each look is drawn with a live swatch, and every color and corner radius comes from the desktop's own stylesheet. See [Looks](#looks).
 - **Settings:** theme and looks, keep the screen on, widget background transparency and card color, connection status, wait for VPN (skipped on your home Wi-Fi, which needs location access to read the network name, and "Allow all the time" for agent notifications in the background), and forget this computer.
-- **Swipe between tasks:** with a task open, swipe sideways to the previous or next one in the list; the header shows its position ("2 of 5").
-- **Terminal:** an agent's terminal in the colors of the look you picked, matching the desktop. Once paired: a reply box and keys a phone keyboard lacks (Enter, Esc, Tab, arrows, Ctrl+C). With "Fit the terminal to this phone" on (Settings, off by default), the terminal takes the phone's size while open so full-screen agents such as Claude Code fill it; the computer's own terminal shifts meanwhile and gets its size back when you leave.
+- **Swipe between tasks:** with a task open, swipe sideways to the previous or next one in the list; the header shows its position ("2 of 5"). When another task needs you, **Next task →** at the bottom of the terminal jumps straight to it.
+- **Terminal:** an agent's terminal in the colors of the look you picked, matching the desktop. Once paired: a reply box and keys a phone keyboard lacks (Enter, Esc, Tab, arrows, Ctrl+C). As on the desktop, typing `!` into an empty reply switches to the agent's shell mode; tap the `!` to leave it. With "Fit the terminal to this phone" on (Settings, off by default), the terminal takes the phone's size while open so full-screen agents such as Claude Code fill it; the computer's own terminal shifts meanwhile and gets its size back when you leave.
+- **Terminal space and zoom:** pinch with two fingers to magnify the whole terminal up to 400%, and pan with two fingers (or sideways with one) to read a part of it; one finger still scrolls the history. Swiping between tasks pauses while zoomed; double-tap or the zoom pill resets it. The expand icon in the title bar hides the title, tabs, and quick keys while keeping the message field and Send/Stop available; the restore icon or Android Back returns to the normal layout without losing your draft. Terminal and chat replies use full-width multiline fields, with action buttons below.
+- **History:** opening a terminal loads the desktop's history (up to 10,000 lines), and the phone keeps up to 20,000 lines while the terminal stays open.
 - **Changes:** the task's diff against its base branch, file by file with added and removed lines.
-- **Quick replies and voice:** saved replies above the reply box (edit them in Settings) and a mic button that dictates with Android's speech recognizer.
+- **Quick replies and voice:** saved replies above the built-in chat's reply box (edit them in Settings; the terminal leaves them out to make room) and a mic button that dictates with Android's speech recognizer.
 - **Widget:** a home-screen widget with the agents that need you and the usage meters, updated while the app is connected. Settings → Widget sets its background transparency (opaque, 75%, 50% or 25%; the border fades with the card, so your wallpaper shows through) and its card color (Obsidian, Slate or Light, each with text colors that stay readable).
 - **Notes:** read a task's notes panel; edit and save it once paired.
-- **New task:** pick a project and describe the work; needs pairing.
+- **New task:** pick a project, agent and model, then describe the work; needs pairing.
 - **Notifications:** optional, in Settings. A foreground service keeps the connection open in the background and notifies when an agent needs input, hits an error, or finishes (each can be turned off); tapping one opens that agent.
 - **Close task:** from an agent's screen; needs pairing. Like the desktop, it warns before losing uncommitted or unmerged work.
 
@@ -70,7 +72,7 @@ One-time setup:
 
 CI uses the Android workflow run number as `versionCode` and `internal.<run>` as `versionName`. The initial manual upload must use a lower version code than the next CI run. After a successful upload, start a **new workflow run** for another upload; rerunning the same run reuses its version code, which Play rejects. Keep this workflow's version-code sequence for future Play releases as well.
 
-Publishing fails with a clear error if a required secret is missing. Signing builds do not restore Gradle caches, publishing jobs are serialized, and the temporary signing key is removed even on failure. See the [upload action setup](https://github.com/r0adkll/upload-google-play#configure-access-via-service-account) and [Android bundle publishing guide](https://developer.android.com/studio/publish/upload-bundle).
+Publishing fails with a clear error if a required secret is missing. Signing builds do not restore Gradle caches, publishing jobs are serialized, and older runs skip publishing if a newer run has already published successfully. The check uses Android workflow runs rather than the latest main commit, so unrelated desktop changes do not suppress a test build. The temporary signing key is removed even on failure. See the [upload action setup](https://github.com/r0adkll/upload-google-play#configure-access-via-service-account) and [Android bundle publishing guide](https://developer.android.com/studio/publish/upload-bundle).
 
 ### Releases
 
@@ -91,7 +93,8 @@ See `electron/remote/server.ts` and `electron/remote/protocol.ts`.
 | Watch        | `subscribe` / `unsubscribe`; the server sends `scrollback`, then `output` (base64 PTY bytes)                                  |
 | View size    | `view-size` with `{ cols, rows }` (paired) while a terminal is open; without them, or on disconnect, the desktop size returns |
 | Projects     | `GET /api/mobile/projects` (paired)                                                                                           |
-| New task     | `POST /api/mobile/tasks` with `{ projectId, name, prompt }` (paired); returns `{ taskId }`                                    |
+| Agents       | `GET /api/mobile/agents` (paired) → `[{ id, name, isDefault, models }]`; `403` on older desktops                              |
+| New task     | `POST /api/mobile/tasks` with `{ projectId, name, prompt, agentId?, model? }` (paired); returns `{ taskId }`                  |
 | Usage        | `GET /api/mobile/usage`; the desktop status bar's snapshot, readable view-only                                                |
 | Notes        | `GET` / `PUT /api/mobile/notes/<taskId>` with `{ notes }`; reading works view-only, saving needs pairing                      |
 | Close task   | `POST /api/mobile/tasks/<taskId>/close` with `{ force }` (paired); `409` with `{ warnings }` when work would be lost          |

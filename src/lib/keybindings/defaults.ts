@@ -196,25 +196,15 @@ export const DEFAULT_BINDINGS: KeyBinding[] = [
     global: true,
   },
   {
+    // Keeps the old merge id so users' saved rebindings still apply.
     id: 'app.task.merge',
     layer: 'app',
     category: 'Tasks',
-    description: 'Finish task: merge',
+    description: 'Finish task',
     platform: 'both',
     key: 'M',
     modifiers: { cmdOrCtrl: true, shift: true },
-    action: 'mergeTask',
-    global: true,
-  },
-  {
-    id: 'app.task.push',
-    layer: 'app',
-    category: 'Tasks',
-    description: 'Finish task: push',
-    platform: 'both',
-    key: 'P',
-    modifiers: { cmdOrCtrl: true, shift: true },
-    action: 'pushTask',
+    action: 'finishTask',
     global: true,
   },
   {
@@ -243,6 +233,17 @@ export const DEFAULT_BINDINGS: KeyBinding[] = [
   // -------------------------------------------------------------------------
   // App layer — App shortcuts
   // -------------------------------------------------------------------------
+  {
+    id: 'app.task.second-opinion',
+    layer: 'app',
+    category: 'Tasks',
+    description: 'Ask for a second opinion',
+    platform: 'both',
+    key: 'O',
+    modifiers: { cmdOrCtrl: true, shift: true },
+    action: 'secondOpinion',
+    global: true,
+  },
   {
     id: 'app.new-terminal',
     layer: 'app',

@@ -42,6 +42,11 @@ export function DelegationPanel(props: {
   };
   const attempts = () => state()?.attempts.filter((a) => a.status !== 'created') ?? [];
   const messages = () => state()?.messages.filter((m) => m.state === 'waiting') ?? [];
+  const handoffs = () =>
+    state()
+      ?.messages.filter((m) => m.origin === 'user' && m.state !== 'waiting' && !m.deliveryFailed)
+      .slice(-5) ?? [];
+  const agentLabel = (id: string, fallback: string) => store.agents[id]?.def.name ?? fallback;
   const failures = () => state()?.messages.filter((m) => m.deliveryFailed) ?? [];
   const coordinating = () =>
     props.task.delegationParent ||
@@ -138,6 +143,7 @@ export function DelegationPanel(props: {
         props.task.coordinatedBy ||
         props.task.stagedNotification ||
         messages().length > 0 ||
+        handoffs().length > 0 ||
         failures().length > 0 ||
         rolloutAgents().length > 0
       }
@@ -156,7 +162,8 @@ export function DelegationPanel(props: {
             <div role="alert" style={{ 'overflow-wrap': 'anywhere', 'margin-bottom': '8px' }}>
               <strong style={{ color: theme.error }}>Message delivery failed</strong>
               <div>
-                From {message.sender.name} to {message.recipient.agentLabel}
+                From {message.origin === 'user' ? 'you' : message.sender.name} to{' '}
+                {agentLabel(message.recipient.agentId, message.recipient.agentLabel)}
               </div>
               <p>{message.reason}</p>
               <button
@@ -294,6 +301,28 @@ export function DelegationPanel(props: {
             <small> Marks these updates as read without merging changes.</small>
           </details>
         </Show>
+        <For each={handoffs()}>
+          {(message) => (
+            <details>
+              <summary>
+                {message.state === 'delivered'
+                  ? 'Delivered to '
+                  : message.state === 'handled'
+                    ? 'Moved to composer for '
+                    : 'Canceled for '}
+                {agentLabel(message.recipient.agentId, message.recipient.agentLabel)}
+              </summary>
+              <p>
+                {message.state === 'delivered'
+                  ? 'Prompt submitted; this does not mean the review is complete.'
+                  : (message.reason ?? 'The user took responsibility for this message.')}
+              </p>
+              <pre style={{ 'white-space': 'pre-wrap', 'overflow-wrap': 'anywhere' }}>
+                {message.prompt}
+              </pre>
+            </details>
+          )}
+        </For>
         <Show when={messages().length > 0}>
           <details>
             <summary>Queued messages ({messages().length})</summary>
@@ -313,10 +342,12 @@ export function DelegationPanel(props: {
                   }}
                 >
                   <strong>
-                    {message.sender.name} · {message.sender.agentLabel}
+                    {message.origin === 'user' ? 'You' : message.sender.name} ·{' '}
+                    {agentLabel(message.sender.agentId, message.sender.agentLabel)}
                   </strong>
                   <div class="delegation-message-meta">
-                    To {message.recipient.name} · {message.recipient.agentLabel} ·{' '}
+                    To {message.recipient.name} ·{' '}
+                    {agentLabel(message.recipient.agentId, message.recipient.agentLabel)} ·{' '}
                     {new Date(message.createdAt).toLocaleTimeString()}
                   </div>
                   <p style={{ 'white-space': 'pre-wrap', 'overflow-wrap': 'anywhere' }}>

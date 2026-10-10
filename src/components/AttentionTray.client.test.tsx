@@ -1,7 +1,6 @@
 import { render } from 'solid-js/web';
 import { reconcile } from 'solid-js/store';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { IPC } from '../../electron/ipc/channels';
 import { invoke } from '../lib/ipc';
 import { store, setStore } from '../store/core';
 import { applyAgentHookEvent } from '../store/agentHookStatus';
@@ -67,12 +66,6 @@ beforeEach(() => {
   setStore('activeTaskId', null);
   setStore('sidebarNeedsInputFirst', true);
   setDelegationStates('child', reconcile({ attempts: [], messages: [], paused: false }));
-  vi.mocked(invoke).mockResolvedValue({
-    expectedCommit: 'source',
-    expectedTargetBranch: 'parent',
-    expectedTargetCommit: 'target',
-    diff: '+ reviewed result',
-  });
   host = document.createElement('div');
   document.body.append(host);
   dispose = render(() => <AttentionTray nowMs={Date.now()} />, host);
@@ -105,18 +98,15 @@ it('routes every asker in hidden projects and preserves row focus when another a
   expect(uncollapseTask).not.toHaveBeenCalled();
 });
 
-it('opens a collapsed child review without restarting or acknowledging it', async () => {
+it('opens an unmerged child review in its task, where Finish merges it', () => {
   setStore('tasks', 'child', { collapsed: true, needsReview: true });
   setStore('taskOrder', []);
   setStore('collapsedTaskOrder', ['child']);
-  expect(rows()[0].textContent).not.toContain('Resume and open');
+  expect(rows()[0].textContent).toContain('Resume and open');
   rows()[0].click();
-  await vi.waitFor(() => expect(document.body.textContent).toContain('+ reviewed result'));
-  expect(invoke).toHaveBeenCalledWith(IPC.DelegationRequest, { action: 'review', taskId: 'child' });
-  expect(uncollapseTask).not.toHaveBeenCalled();
+  expect(uncollapseTask).toHaveBeenCalledWith('child');
+  expect(invoke).not.toHaveBeenCalled();
   expect(clearTaskLandingReview).not.toHaveBeenCalled();
-  expect(store.activeTaskId).toBeNull();
-  expect(rows()).toHaveLength(1);
 });
 
 it('keeps an already merged result until explicit acknowledgment without requesting a merge', () => {

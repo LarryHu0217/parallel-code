@@ -72,6 +72,8 @@ let core: {
   resumeChildren: ReturnType<typeof vi.fn>;
   setMaxConcurrentSubTasks: ReturnType<typeof vi.fn>;
   hasPendingPrompt: ReturnType<typeof vi.fn>;
+  recordUserMerge: ReturnType<typeof vi.fn>;
+  assertTaskDirectMergeAllowed: ReturnType<typeof vi.fn>;
 };
 let persist: () => void;
 let prepareParent: ReturnType<typeof vi.fn<() => Promise<void>>>;
@@ -195,6 +197,8 @@ beforeEach(() => {
     resumeChildren: vi.fn(),
     setMaxConcurrentSubTasks: vi.fn(),
     hasPendingPrompt: vi.fn().mockReturnValue(false),
+    recordUserMerge: vi.fn(),
+    assertTaskDirectMergeAllowed: vi.fn().mockResolvedValue(undefined),
   };
   persist = vi.fn();
   prepareParent = vi.fn(async () => {});
@@ -413,7 +417,7 @@ describe('delegation authority and creation', () => {
     expect(core.createTask).toHaveBeenCalledOnce();
   });
 
-  it('prevents generic merge bypass through a symlinked project path', async () => {
+  it('lets Finish merge a review child and records it through a symlinked project path', async () => {
     await register('parent');
     await register('child', {
       parentTaskId: 'parent',
@@ -423,9 +427,46 @@ describe('delegation authority and creation', () => {
     mocks.realpath.mockImplementation(async (value: string) =>
       value === '/project-link' ? '/repo' : value,
     );
-    await expect(service.assertDirectMergeAllowed('/project-link', 'child')).rejects.toThrow(
-      'Review',
+    await expect(service.assertDirectMergeAllowed('/project-link', 'child')).resolves.toBe(
+      undefined,
     );
+    await service.recordDirectMerge('/project-link', 'child');
+    expect(core.recordUserMerge).toHaveBeenCalledWith('child');
+  });
+
+  it.each(['kimi', '/usr/local/bin/kimi'])(
+    'awaits the Finish credential gate for %s children',
+    async (agentCommand) => {
+      await register('parent');
+      await register('child', {
+        parentTaskId: 'parent',
+        branchName: 'child',
+        agentCommand,
+        integrationPolicy: 'review',
+      });
+      core.assertTaskDirectMergeAllowed.mockRejectedValueOnce(new Error('Token history blocked'));
+      await expect(service.assertDirectMergeAllowed('/repo', 'child')).rejects.toThrow(
+        'Token history blocked',
+      );
+      expect(core.assertTaskDirectMergeAllowed).toHaveBeenCalledWith('child');
+      expect(core.recordUserMerge).not.toHaveBeenCalled();
+    },
+  );
+
+  it('does not apply the Kimi gate to unrelated, closed, or ordinary tasks', async () => {
+    await register('parent');
+    await register('kimi-child', {
+      parentTaskId: 'parent',
+      branchName: 'kimi-child',
+      agentCommand: 'kimi',
+    });
+    await service.assertDirectMergeAllowed('/elsewhere', 'kimi-child');
+    await service.assertDirectMergeAllowed('/repo', 'other-branch');
+    service.unregister('kimi-child');
+    await service.assertDirectMergeAllowed('/repo', 'kimi-child');
+    await register('ordinary', { agentCommand: 'kimi' });
+    await service.assertDirectMergeAllowed('/repo', 'feature');
+    expect(core.assertTaskDirectMergeAllowed).not.toHaveBeenCalled();
   });
 
   it.each([{ delegationParent: true }, { coordinatorMode: true }])(
@@ -499,12 +540,25 @@ describe('delegation authority and creation', () => {
     expect(service.state('detached').paused).toBe(false);
   });
 
-  it('requires an explicit committed-state choice when the parent is dirty', async () => {
+  it('bases children on main regardless of the parent Git state', async () => {
     await register('parent');
     dirty = ' M changed.ts';
-    await expect(service.create(assignment())).rejects.toThrow('changed files');
+    await service.create(assignment({ expectedHeadSha: 'b'.repeat(40) }));
+    const options = core.createTask.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(options).not.toHaveProperty('baseBranch');
+    expect(options).not.toHaveProperty('snapshotCommit');
+  });
+
+  it('requires an explicit committed-state choice when a parent-based child sees a dirty parent', async () => {
+    await register('parent');
+    dirty = ' M changed.ts';
+    await expect(service.create(assignment({ baseOnParent: true }))).rejects.toThrow(
+      'changed files',
+    );
     expect(core.createTask).not.toHaveBeenCalled();
-    await service.create(assignment({ requestId: 'confirmed', useLastCommit: true }));
+    await service.create(
+      assignment({ requestId: 'confirmed', useLastCommit: true, baseOnParent: true }),
+    );
     expect(core.createTask).toHaveBeenCalledWith(
       expect.objectContaining({
         snapshotCommit: head,
@@ -516,9 +570,9 @@ describe('delegation authority and creation', () => {
 
   it('retains failed attempts and rejects a changed snapshot', async () => {
     await register('parent');
-    await expect(service.create(assignment({ expectedHeadSha: 'b'.repeat(40) }))).rejects.toThrow(
-      'changed',
-    );
+    await expect(
+      service.create(assignment({ expectedHeadSha: 'b'.repeat(40), baseOnParent: true })),
+    ).rejects.toThrow('changed');
     expect(service.state('parent').attempts).toEqual([
       expect.objectContaining({ status: 'failed', error: expect.stringContaining('changed') }),
     ]);
@@ -527,9 +581,9 @@ describe('delegation authority and creation', () => {
 
   it('forgets launch attempts once their parent is closed', async () => {
     await register('parent');
-    await expect(service.create(assignment({ expectedHeadSha: 'b'.repeat(40) }))).rejects.toThrow(
-      'changed',
-    );
+    await expect(
+      service.create(assignment({ expectedHeadSha: 'b'.repeat(40), baseOnParent: true })),
+    ).rejects.toThrow('changed');
     await service.closeParent('parent', false);
     expect(service.state('parent').attempts).toEqual([]);
   });
@@ -558,6 +612,26 @@ describe('delegation authority and creation', () => {
     await expect(service.callTool(parent, 'merge_task', { taskId: 'child' })).rejects.toThrow(
       'unavailable',
     );
+  });
+
+  it('says a closed child is gone instead of calling it foreign', async () => {
+    await register('parent');
+    core.getTaskStatus.mockReturnValue(null);
+    await expect(
+      service.callTool(session('parent'), 'send_prompt', { taskId: 'landed', prompt: 'more' }),
+    ).rejects.toThrow('no longer active');
+  });
+
+  it('points peer prompts that miss their recipient to send_prompt', async () => {
+    await register('parent');
+    await expect(
+      service.callTool(session('parent'), 'send_agent_prompt', {
+        agentId: 'agent-child',
+        sessionInstanceId: 'guessed',
+        prompt: 'continue',
+        requestId: 'r1',
+      }),
+    ).rejects.toThrow('use send_prompt');
   });
 });
 
@@ -1140,5 +1214,157 @@ describe('backend detach normalization', () => {
     expect(saved.tasks.child).not.toHaveProperty('mcpLaunchArgs');
     expect(saved.tasks.child.delegationPaused).toBe(true);
     expect(saved.taskOrder).toEqual(['child']);
+  });
+});
+
+describe('user handoffs', () => {
+  async function setup() {
+    await register('pair');
+    const source = session('pair');
+    const recipient = { ...source, agentId: 'other-agent', sessionInstanceId: 'other-instance' };
+    sessions.push(recipient);
+    mocks.meta.mockImplementation((agentId: string) => ({
+      agentId,
+      taskId: 'pair',
+      isShell: false,
+    }));
+    const request = {
+      action: 'handoff' as const,
+      taskId: 'pair',
+      sourceAgentId: source.agentId,
+      sourceSessionInstanceId: source.sessionInstanceId,
+      agentId: recipient.agentId,
+      sessionInstanceId: recipient.sessionInstanceId,
+      prompt: 'Review these changes. Do not edit.',
+      requestId: 'user-request',
+    };
+    return { source, recipient, request };
+  }
+
+  it('only broadcasts the last five finished handoffs while retaining pending ones', async () => {
+    const { request, recipient } = await setup();
+    for (let i = 0; i < 7; i++) {
+      const receipt = (await service.request({ ...request, requestId: `review-${i}` })) as {
+        deliveryId: string;
+      };
+      await service.request({
+        action: 'handleMessage',
+        deliveryId: receipt.deliveryId,
+        agentId: recipient.agentId,
+        sessionInstanceId: recipient.sessionInstanceId,
+        state: 'closed',
+      });
+    }
+    expect(service.state('pair').messages).toHaveLength(5);
+    await service.request({ ...request, requestId: 'pending' });
+    expect(service.state('pair').messages).toHaveLength(6);
+    expect(service.state('pair').messages.filter((m) => m.state === 'waiting')).toHaveLength(1);
+  });
+
+  it('queues same-task user requests without enabling cross-task peer access, deduplicates, and preserves origin', async () => {
+    vi.useFakeTimers();
+    const { request, recipient } = await setup();
+    const receipt = (await service.request(request)) as { deliveryId: string };
+    expect(await service.request(request)).toEqual(receipt);
+    expect(service.state('pair').messages).toHaveLength(1);
+    expect(service.state('pair').messages[0].origin).toBe('user');
+    const deliver = () =>
+      service.request({
+        action: 'deliverMessage',
+        deliveryId: receipt.deliveryId,
+        agentId: recipient.agentId,
+        sessionInstanceId: recipient.sessionInstanceId,
+      });
+    await deliver();
+    await vi.advanceTimersByTimeAsync(1500);
+    await expect(deliver()).resolves.toMatchObject({ state: 'delivered' });
+    await deliver();
+    expect(mocks.writePrompt).toHaveBeenCalledOnce();
+    expect(mocks.writePrompt).toHaveBeenCalledWith(
+      recipient.agentId,
+      request.prompt,
+      expect.any(Function),
+      expect.any(Function),
+    );
+    expect(service.state('pair').messages[0].state).toBe('delivered');
+  });
+
+  it('rejects different content on the same request ID and unsafe text', async () => {
+    const { request } = await setup();
+    await service.request(request);
+    await expect(service.request({ ...request, prompt: 'Different' })).rejects.toThrow('reused');
+    await expect(
+      service.request({ ...request, requestId: 'unsafe', prompt: '\u001b[200~bad' }),
+    ).rejects.toThrow('control');
+  });
+
+  it('rejects cross-task, shell, self, replaced source and replaced recipient sessions', async () => {
+    const { request, recipient } = await setup();
+    await register('elsewhere');
+    const other = session('elsewhere');
+    await expect(
+      service.request({
+        ...request,
+        agentId: other.agentId,
+        sessionInstanceId: other.sessionInstanceId,
+      }),
+    ).rejects.toThrow('changed');
+    await expect(
+      service.request({
+        ...request,
+        agentId: request.sourceAgentId,
+        sessionInstanceId: request.sourceSessionInstanceId,
+      }),
+    ).rejects.toThrow('changed');
+    await expect(
+      service.request({ ...request, sourceSessionInstanceId: 'replacement' }),
+    ).rejects.toThrow('changed');
+    await expect(service.request({ ...request, sessionInstanceId: 'replacement' })).rejects.toThrow(
+      'changed',
+    );
+    mocks.meta.mockImplementation((agentId: string) => ({
+      agentId,
+      taskId: 'pair',
+      isShell: agentId === recipient.agentId,
+    }));
+    await expect(service.request(request)).rejects.toThrow('changed');
+  });
+
+  it('preserves user handoffs when peer policy changes in this or another project', async () => {
+    const { request } = await setup();
+    await service.request(request);
+    service.updatePolicy({ projectId: 'unrelated-project', allowPeerAccess: true });
+    expect(service.state('pair').messages[0].state).toBe('waiting');
+    service.updatePolicy({ projectId: 'project', allowPeerAccess: false });
+    expect(service.state('pair').messages[0].state).toBe('waiting');
+  });
+
+  it('closes queued requests on recipient restart, without delivering to a replacement', async () => {
+    const { request, recipient } = await setup();
+    await service.request(request);
+    sessions = sessions.filter((s) => s !== recipient);
+    sessions.push({ ...recipient, sessionInstanceId: 'replacement' });
+    service.expireMessages();
+    expect(service.state('pair').messages[0]).toMatchObject({
+      state: 'closed',
+      reason: expect.stringContaining('ended'),
+    });
+    expect(mocks.writePrompt).not.toHaveBeenCalled();
+  });
+
+  it('cancels queued delivery and rejects new handoffs when orchestration is disabled', async () => {
+    const { request, recipient } = await setup();
+    const receipt = (await service.request(request)) as { deliveryId: string };
+    await service.request({
+      action: 'handleMessage',
+      deliveryId: receipt.deliveryId,
+      agentId: recipient.agentId,
+      sessionInstanceId: recipient.sessionInstanceId,
+      state: 'closed',
+    });
+    expect(service.state('pair').messages[0].state).toBe('closed');
+    await service.request({ action: 'orchestrationSetting', enabled: false });
+    await expect(service.request({ ...request, requestId: 'again' })).rejects.toThrow('disabled');
+    expect(mocks.writePrompt).not.toHaveBeenCalled();
   });
 });

@@ -152,7 +152,7 @@ body.font-smoothing {
 .task-title-actions {
   display: flex;
   align-items: center;
-  gap: 0;
+  gap: 8px;
   padding: 1px 2px;
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--bg-input) 65%, transparent);
@@ -163,13 +163,36 @@ body.font-smoothing {
 .task-action-group {
   display: flex;
   align-items: center;
-  gap: 1px;
+  gap: 2px;
 }
 
-.task-action-group + .task-action-group {
-  margin-left: 5px;
-  padding-left: 5px;
-  border-left: 1px solid var(--border);
+/* Labelled because it is the task's main action, but kept neutral: the header
+   already carries status and badges, and colour there is reserved for urgency. */
+.task-finish-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 8px 0 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.task-finish-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--border);
+  color: var(--fg);
+}
+
+.task-finish-btn[data-state='pushed'] {
+  color: var(--success);
 }
 
 .task-title-details {
@@ -215,6 +238,23 @@ body.font-smoothing {
 
 .task-title-bar .task-title-actions .icon-btn:not(:hover) {
   border-color: transparent !important;
+}
+
+/* Quiet the icon controls in columns you are not working in; pressed toggles
+   stay full strength because they show state. */
+.task-title-bar .task-title-actions .icon-btn {
+  transition: opacity 0.12s ease;
+}
+
+.task-title-bar:not([data-active='true']):not(:hover):not(:focus-within)
+  .task-title-actions
+  .icon-btn:not([aria-pressed='true']) {
+  opacity: 0.45;
+}
+
+.task-title-bar .task-title-actions .icon-btn[aria-pressed='true'] {
+  background: var(--bg-selected-subtle) !important;
+  color: var(--accent) !important;
 }
 
 .task-title-bar[data-active='true'] {
@@ -389,6 +429,12 @@ body.font-smoothing {
   display: none;
   align-items: center;
   flex: 0 0 auto;
+}
+
+/* The merged badge keeps its icon at every width, leading like GitHub's. */
+.task-pr-review-icon--merged {
+  display: inline-flex;
+  order: -1;
 }
 
 .task-branch-project-label,
@@ -681,8 +727,7 @@ html[data-look='parallel-code'] .task-title-actions {
   background: transparent;
 }
 
-html[data-look='parallel-code']
-  :is(.task-action-group + .task-action-group, .task-branch-info-bar) {
+html[data-look='parallel-code'] .task-branch-info-bar {
   border-color: var(--border-subtle);
 }
 
@@ -829,10 +874,6 @@ html[data-look='noir'] .task-title-actions {
   background: transparent;
 }
 
-html[data-look='noir'] .task-action-group + .task-action-group {
-  border-left-color: var(--border-subtle);
-}
-
 html[data-look='noir'] .task-branch-info-bar {
   border-bottom: 1px solid var(--border-subtle);
 }
@@ -878,10 +919,6 @@ html[data-look='noir'] textarea::placeholder {
 
 html[data-look='noir'] .task-notes-body textarea::placeholder {
   color: var(--fg-muted);
-}
-
-html[data-look='noir'] .task-git-status-badge:not([data-result='pending']) {
-  color: var(--accent-text) !important;
 }
 
 html[data-look='noir'] .prompt-send-btn:not(:disabled) {
@@ -4233,8 +4270,7 @@ html[data-look='islands-light'] .window-title-icon {
   font-variant-numeric: tabular-nums;
 }
 
-.sidebar-footer-stat,
-.sidebar-footer-lines {
+.sidebar-footer-stat {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
@@ -4249,19 +4285,6 @@ html[data-look='islands-light'] .window-title-icon {
   font-size: 18px;
   font-weight: 600;
   line-height: 1.2;
-}
-
-.sidebar-footer-lines {
-  color: var(--fg-subtle);
-  font-size: 10px;
-}
-
-.sidebar-footer-line-totals {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 4px 8px;
-  min-width: 0;
-  max-width: 100%;
 }
 
 .sidebar-footer-connection {
@@ -4682,6 +4705,39 @@ html[data-look='islands-light'] .window-title-icon {
   font-family: var(--font-ui);
   font-size: 14px;
   line-height: 1.4;
+}
+
+/* Evidence on demand: a quiet disclosure, not a second body. */
+.understanding-source {
+  margin-top: 14px;
+}
+
+.understanding-source > summary {
+  width: fit-content;
+  cursor: pointer;
+  color: var(--fg-muted);
+  font-family: var(--font-ui);
+  font-size: 11px;
+}
+
+.understanding-source > summary:hover {
+  color: var(--fg);
+}
+
+.understanding-source > blockquote {
+  margin: 8px 0 0;
+  padding-left: 12px;
+  border-left: 1px solid var(--border);
+  font-size: 13px;
+  font-style: italic;
+  line-height: 1.5;
+}
+
+.understanding-omitted {
+  margin: 22px 0 0;
+  font-family: var(--font-ui);
+  font-size: 11px;
+  line-height: 1.5;
 }
 
 /* The card's tone appears once, as the rule beside the consequence. */

@@ -59,7 +59,7 @@ Keep ordinary queued delivery out of the queue: a draft or busy recipient is not
 
 Collect all reasons independently. A child with a question and a pending result gets both. Deduplicate equivalent review signals (`needsReview`, manual completion, latest `awaiting_review`). Suppress only obsolete pre-integration approval signals: `landed_pending_review` retains one review action until explicitly marked reviewed; `landed_cleanup_failed` remains an integration issue. A consumed coordinator completion notification is not human review. Expose all asking agents using a plural selector built on existing question detection; retain the current singular selector for its other callers.
 
-Viewing changes navigation/unread state only. Never dismiss a failure, answer a question, or clear review merely because its row was opened. Already-integrated results use the existing explicit mark-reviewed action; unintegrated results retain approval-and-merge.
+Viewing changes navigation/unread state only. Never dismiss a failure, answer a question, or clear review merely because its row was opened. Already-integrated results use the existing explicit mark-reviewed action; unintegrated results merge through the ordinary Finish dialog.
 
 Use source timestamps where present. Attempts without a recorded onset have no age label. Keep questions first with the existing newest-first order, then failures, then reviews; use stable source/task order for ties and keyed rows to preserve keyboard focus.
 
@@ -124,6 +124,8 @@ Keep only the latest report on the task. Return it through status and completion
 Handle session and legacy done routes with the same parser. Preserve done-token/session ownership, orchestration-off completion behavior, and caller scoping. Update both child guidance generators to request a concise report without copying runtime delimiter strings into project guidance.
 
 ### Review snapshot
+
+> Superseded: review-policy children now merge through the ordinary Finish dialog, and `DelegationReview` was removed.
 
 Extend `DelegationReview` to return one immutable display packet: source/target commit IDs, completion identity/report, captured changed files/diff, and available app verification evidence. Use captured commit objects for the cumulative diff and file inventory; do not call live `getTaskDiff`, mutable HEAD loaders, or live context expansion from the review UI.
 

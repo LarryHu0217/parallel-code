@@ -144,7 +144,10 @@ export interface FileDiffResult {
 
 export interface CommitInfo {
   hash: string;
+  /** Subject line. */
   message: string;
+  /** Message after the subject; only filled when requested with `withBody`. */
+  body?: string;
 }
 
 export type PrCheckBucket = 'pass' | 'fail' | 'pending' | 'skipping' | 'cancel';
@@ -158,6 +161,9 @@ export interface PrCheckRun {
 
 export interface PrChecksUpdatePayload {
   taskId: string;
+  prUrl?: string;
+  /** Actual GitHub merge time, not the time the watcher noticed it. */
+  mergedAt?: string;
   overall: PrChecksOverall;
   /** Additive review metadata from GitHub. Absent for older senders and null
    *  when GitHub has no supported review decision. */

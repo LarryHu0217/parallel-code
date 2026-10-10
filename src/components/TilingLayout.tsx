@@ -1,3 +1,5 @@
+import { createProjectFilterTransition } from '../lib/projectFilterTransition';
+import { matchesTaskProjectFilter, taskProjectFilter } from '../store/task-project-filter';
 import {
   batch,
   Show,
@@ -66,9 +68,11 @@ interface TileChild {
 export function TilingLayout() {
   const documentTaskId = () =>
     store.activeDocumentProjectId ? documentAgentTaskId(store.activeDocumentProjectId) : null;
-  const hasPanels = () => store.taskOrder.length > 0 || !!documentTaskId();
+  const hasPanels = () => store.taskOrder.some(matchesTaskProjectFilter) || !!documentTaskId();
   const focusMode = () => store.focusMode && hasPanels() && !store.showNewTaskPanel;
   let containerRef: HTMLDivElement | undefined;
+  createProjectFilterTransition(taskProjectFilter, () => containerRef);
+  let previousProjectFilter = taskProjectFilter();
   const [hasOverflowLeft, setHasOverflowLeft] = createSignal(false);
   const [hasOverflowRight, setHasOverflowRight] = createSignal(false);
   const [dragging, setDragging] = createSignal<number | null>(null);
@@ -124,6 +128,7 @@ export function TilingLayout() {
     for (const el of taskEls) {
       const taskId = el.dataset.taskId;
       if (!taskId || (!store.tasks[taskId] && taskId !== documentTaskId())) continue;
+      if (store.tasks[taskId] && !matchesTaskProjectFilter(taskId)) continue;
       const rect = el.getBoundingClientRect();
       if (rect.right <= containerRect.left + VIEWPORT_EPSILON_PX) {
         nextVisibility[taskId] = 'offscreen-left';
@@ -206,6 +211,7 @@ export function TilingLayout() {
   // Recompute viewport state when panel order/structure changes.
   createEffect(() => {
     void store.taskOrder.join('|');
+    void taskProjectFilter();
     void documentTaskId();
     requestAnimationFrame(() => updateViewportState());
   });
@@ -214,6 +220,9 @@ export function TilingLayout() {
   // No-op in focus mode: panels are absolute-positioned, scrolling is meaningless.
   createEffect(() => {
     const activeId = store.activeTaskId;
+    const projectFilter = taskProjectFilter();
+    const filterChanged = projectFilter !== previousProjectFilter;
+    previousProjectFilter = projectFilter;
     const newTaskPanelOpen = store.showNewTaskPanel;
     const returningFromNewTask = wasNewTaskPanelOpen && !newTaskPanelOpen;
     const openingNewTask = !wasNewTaskPanelOpen && newTaskPanelOpen;
@@ -234,7 +243,12 @@ export function TilingLayout() {
       // The draft is opened at the far end of the strip. Returning across a
       // long task list must not turn a synchronous Cancel into a long pan.
       const behavior: ScrollBehavior =
-        isFirstActiveTaskScroll || returningFromNewTask ? 'instant' : 'smooth';
+        isFirstActiveTaskScroll ||
+        returningFromNewTask ||
+        filterChanged ||
+        !shouldAnimateTaskAppearance()
+          ? 'instant'
+          : 'smooth';
       isFirstActiveTaskScroll = false;
       scrollTaskIntoView(activeId, behavior);
     }
@@ -478,7 +492,7 @@ export function TilingLayout() {
 
   createEffect(
     on(
-      () => [focusMode(), ...panelChildren().map((child) => child.id)],
+      () => [focusMode(), taskProjectFilter(), ...panelChildren().map((child) => child.id)],
       () => cancelDrag?.(),
     ),
   );
@@ -680,7 +694,10 @@ export function TilingLayout() {
           </Show>
           <For each={panelChildren()}>
             {(child, i) => {
+              const filteredOut = () =>
+                store.taskOrder.includes(child.id) && !matchesTaskProjectFilter(child.id);
               const wrapperStyle = createMemo((): JSX.CSSProperties => {
+                if (filteredOut()) return { display: 'none' };
                 const isPlaceholder = child.id === '__placeholder';
                 if (focusMode()) {
                   if (isPlaceholder) return { display: 'none' };
@@ -712,7 +729,7 @@ export function TilingLayout() {
                 };
               });
               const showHandle = () =>
-                !focusMode() && !child.fixed && i() < panelChildren().length - 1;
+                !filteredOut() && !focusMode() && !child.fixed && i() < panelChildren().length - 1;
               return (
                 <>
                   <div
@@ -733,7 +750,13 @@ export function TilingLayout() {
                         if (dragging() !== null) return;
                         const panels = panelChildren();
                         const left = panels[i()];
-                        const right = panels[i() + 1];
+                        const right = panels
+                          .slice(i() + 1)
+                          .find(
+                            (panel) =>
+                              !store.taskOrder.includes(panel.id) ||
+                              matchesTaskProjectFilter(panel.id),
+                          );
                         if (!left || !right) return;
                         deletePanelUserSize([`tiling:${left.id}`, `tiling:${right.id}`]);
                         requestAnimationFrame(() => updateViewportState());

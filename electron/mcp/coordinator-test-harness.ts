@@ -214,6 +214,7 @@ vi.mock('../ipc/git.js', () => ({
   getChangedFiles: mocks.mockGetChangedFiles,
   getAllFileDiffs: mocks.mockGetAllFileDiffs,
   getDiffBaseSha: mocks.mockGetDiffBaseSha,
+  getMainBranch: async () => 'main',
   mergeTask: mocks.mockGitMergeTask,
 }));
 

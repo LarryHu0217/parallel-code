@@ -8,6 +8,7 @@ type MockTask = {
   collapsed?: boolean;
 };
 type MockStore = {
+  taskProjectFilter?: string | null;
   tasks: Record<string, MockTask>;
   taskOrder: string[];
   collapsedTaskOrder: string[];
@@ -94,5 +95,33 @@ describe('sidebar coordinator ordering', () => {
 
     expect(computeSidebarTaskOrder()).toEqual(['task-2']);
     expect(computeSidebarDraggableTaskOrder()).toEqual(['task-2']);
+  });
+});
+
+describe('project filtering', () => {
+  it('filters active, collapsed, orphaned and keyboard/drag task lists', () => {
+    mockStore.projects = [{ id: 'one' }, { id: 'two' }];
+    mockStore.tasks = {
+      a: { projectId: 'one' },
+      b: { projectId: 'two' },
+      c: { projectId: 'two', collapsed: true },
+      orphan: {},
+    };
+    mockStore.taskOrder = ['a', 'b', 'orphan'];
+    mockStore.collapsedTaskOrder = ['c'];
+    mockStore.taskProjectFilter = 'two';
+    expect(computeSidebarTaskOrder()).toEqual(['b', 'c']);
+    expect(computeSidebarDraggableTaskOrder()).toEqual(['b']);
+    expect(computeGroupedTasks().orphanedActive).toEqual([]);
+    mockStore.taskProjectFilter = null;
+    expect(computeSidebarTaskOrder()).toEqual(['a', 'b', 'c', 'orphan']);
+  });
+
+  it('falls back to all tasks if the filtered project is removed', () => {
+    mockStore.projects = [{ id: 'one' }];
+    mockStore.tasks = { a: { projectId: 'one' } };
+    mockStore.taskOrder = ['a'];
+    mockStore.taskProjectFilter = 'removed';
+    expect(computeSidebarTaskOrder()).toEqual(['a']);
   });
 });

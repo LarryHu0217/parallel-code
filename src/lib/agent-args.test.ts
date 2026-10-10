@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { reviewerWithModel } from './agent-handoff';
 
-import { buildTaskAgentArgs, isResumeArgsFailure } from './agent-args';
+import { buildTaskAgentArgs, isResumeArgsFailure, taskAgentOpensSessionPicker } from './agent-args';
 
 const codexAgent = {
   id: 'codex',
@@ -127,8 +128,37 @@ describe('buildTaskAgentArgs with a session id', () => {
     ]);
   });
 
-  it('falls back to positional resume when no id is known', () => {
+  it('keeps the session picker when a reviewer has a model override', () => {
+    const codex = reviewerWithModel(codexAgent, 'codex-test');
+    const claude = reviewerWithModel({ ...claudeAgent, resume_args: ['--continue'] }, 'opus');
+    const chats = { codexChatThreadId: 'chat-thread', claudeChatSessionId: 'chat' };
+    expect(buildTaskAgentArgs(codex, chats, true)).toEqual(['resume', '--model', 'codex-test']);
+    expect(buildTaskAgentArgs(claude, chats, true)).toEqual(['--resume', '--model', 'opus']);
+    expect(taskAgentOpensSessionPicker(codex, chats, true)).toBe(true);
+    expect(taskAgentOpensSessionPicker(claude, chats, true)).toBe(true);
+  });
+
+  it('restores the latest Codex session after restart when no session id was saved', () => {
     expect(buildTaskAgentArgs(codexAgent, {}, true, undefined)).toEqual(['resume', '--last']);
+    expect(taskAgentOpensSessionPicker(codexAgent, {}, true)).toBe(false);
+  });
+
+  it('offers the picker for a full-path Codex command and an invalid saved id', () => {
+    expect(
+      buildTaskAgentArgs(
+        { ...codexAgent, command: '/usr/local/bin/codex' },
+        { codexChatThreadId: 'chat-thread' },
+        true,
+        undefined,
+        '--invalid',
+      ),
+    ).toEqual(['resume']);
+  });
+
+  it('preserves a configured explicit Codex session without a saved id', () => {
+    const def = { ...codexAgent, resume_args: ['resume', 'specific-session'] };
+    expect(buildTaskAgentArgs(def, {}, true)).toEqual(def.resume_args);
+    expect(buildTaskAgentArgs(codexAgent, {}, false)).toEqual([]);
   });
 
   it('preserves custom launch options when naming a new Claude session', () => {
@@ -201,10 +231,12 @@ describe('buildTaskAgentArgs', () => {
     ]);
     expect(buildTaskAgentArgs(codexAgent, {}, true)).toEqual(['resume', '--last']);
   });
-  it('offers a Claude resume picker when chat could be the newest session', () => {
+  it('offers a Claude resume picker only when chat could be the newest session', () => {
     const agent = { ...claudeAgent, resume_args: ['--continue'] };
     expect(buildTaskAgentArgs(agent, { claudeChatSessionId: 'chat' }, true)).toEqual(['--resume']);
     expect(buildTaskAgentArgs(agent, {}, true)).toEqual(['--continue']);
+    expect(taskAgentOpensSessionPicker(agent, {}, true)).toBe(false);
+    expect(buildTaskAgentArgs(agent, {}, false)).toEqual([]);
     expect(
       buildTaskAgentArgs(
         { ...agent, resume_args: ['--resume', 'explicit'] },
@@ -213,8 +245,24 @@ describe('buildTaskAgentArgs', () => {
       ),
     ).toEqual(['--resume', 'explicit']);
   });
+  it('offers the Claude picker for a full-path command and an invalid saved id', () => {
+    expect(
+      buildTaskAgentArgs(
+        { ...claudeAgent, command: '/usr/local/bin/claude', resume_args: ['--continue'] },
+        {
+          skipPermissions: true,
+          mcpLaunchArgs: ['--mcp-config', '/tmp/mcp.json'],
+          claudeChatSessionId: 'chat',
+        },
+        true,
+        undefined,
+        '--invalid',
+      ),
+    ).toEqual(['--resume', '--dangerously-skip-permissions', '--mcp-config', '/tmp/mcp.json']);
+  });
   it.each([
     [codexAgent, ['resume']],
+    [{ ...codexAgent, command: '/usr/local/bin/codex' }, ['resume']],
     [{ ...claudeAgent, resume_args: ['--continue'] }, ['--resume']],
     [copilotAgent, ['--resume']],
     [{ ...claudeAgent, command: 'gemini', resume_args: ['--resume', 'latest'] }, []],
@@ -385,6 +433,30 @@ describe('buildTaskAgentArgs', () => {
         true,
       ),
     ).toEqual(['--continue', '--additional-mcp-config', '@/tmp/mcp.json']);
+  });
+});
+
+describe('taskAgentOpensSessionPicker', () => {
+  it('does not block custom explicit sessions placed after options', () => {
+    const id = 'fb4f2bc6-62d9-4b29-a795-240caf2fc459';
+    const def = { ...codexAgent, resume_args: ['resume', '--model', 'custom', id] };
+    expect(taskAgentOpensSessionPicker(def, {}, true)).toBe(false);
+  });
+
+  it('does not block custom Codex --last launches with additional options', () => {
+    const def = { ...codexAgent, resume_args: ['resume', '--last', '--model', 'custom'] };
+    expect(taskAgentOpensSessionPicker(def, {}, true)).toBe(false);
+  });
+
+  it('does not block an explicit chat handoff', () => {
+    expect(
+      taskAgentOpensSessionPicker(
+        codexAgent,
+        { agentIds: ['primary'], codexChatHandoff: { threadId: 'owned-thread' } },
+        true,
+        'primary',
+      ),
+    ).toBe(false);
   });
 });
 

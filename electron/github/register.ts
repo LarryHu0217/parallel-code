@@ -141,6 +141,9 @@ export function registerGitHubHandlers(): void {
     if (!method) throw new Error('method must be squash, merge or rebase');
     assertString(args.headSha, 'headSha');
     if (!/^[0-9a-f]{40}$/.test(args.headSha)) throw new Error('headSha must be a commit SHA');
-    return mergePullRequest(prUrl, method, args.headSha);
+    if (args.admin !== undefined && typeof args.admin !== 'boolean') {
+      throw new Error('admin must be a boolean');
+    }
+    return mergePullRequest(prUrl, { method, headSha: args.headSha, admin: args.admin === true });
   });
 }

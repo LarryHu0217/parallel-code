@@ -119,8 +119,10 @@ function positionalAgentArgs(
   resumed: boolean,
 ): string[] {
   let args = resumed && agentDef.resume_args?.length ? agentDef.resume_args : agentDef.args;
-  // A task's separate app-server chat may now be the newest conversation.
-  // Let the user choose the terminal conversation instead of resuming it by accident.
+  // A task's separate chat may now be the newest conversation. Let the user
+  // choose the terminal conversation instead of resuming the chat by accident.
+  // Without a chat, "latest" stays the default: a picker on every pane that
+  // has no saved session id would block restoring older tasks after restart.
   if (
     resumed &&
     task.codexChatThreadId &&
@@ -142,7 +144,7 @@ function positionalAgentArgs(
     // terminal: use a picker, without rewriting explicit IDs or custom flags.
     const command = agentDef.command.split('/').pop();
     const resume = args.join(' ');
-    if (command === 'codex' && resume === 'resume --last') args = ['resume'];
+    if (isCodexCommand(agentDef.command) && resume === 'resume --last') args = ['resume'];
     if ((command === 'claude' || command === 'copilot') && resume === '--continue') {
       args = ['--resume'];
     }
@@ -162,9 +164,9 @@ function positionalAgentArgs(
  * Full argument list for a task's agent launch.
  *
  * `sessionId` names the conversation this pane owns, when the CLI supports it
- * (see session-resume.ts). Without one, resume stays positional — "the most
- * recent session in this directory" — which is what PC did before session ids
- * and remains the fallback for CLIs that cannot do better.
+ * (see session-resume.ts). Without one, resume stays positional ("the most
+ * recent session in this directory"); Codex and Claude switch to their pickers
+ * only where "latest" is ambiguous: a separate chat or a hidden agent.
  */
 export function buildTaskAgentArgs(
   agentDef: AgentDef,
@@ -202,4 +204,31 @@ export function buildTaskAgentArgs(
     ...(task.skipPermissions ? resolveSkipPermissionsArgs(agentDef) : []),
     ...(task.mcpLaunchArgs ?? legacyMcpConfigArgs(agentDef.command, task.mcpConfigPath)),
   ];
+}
+
+/** Recognize the built-in picker launches without interpreting custom CLI options. */
+export function taskAgentOpensSessionPicker(
+  ...launch: Parameters<typeof buildTaskAgentArgs>
+): boolean {
+  const [agentDef, , resumed] = launch;
+  if (!resumed) return false;
+  const selector = isCodexCommand(agentDef.command)
+    ? 'resume'
+    : agentDef.command.split('/').pop() === 'claude'
+      ? '--resume'
+      : undefined;
+  const configuredArgs = agentDef.resume_args?.length ? agentDef.resume_args : agentDef.args;
+  // Reviewer model overrides do not change whether the resume command opens a picker.
+  const configured = configuredArgs
+    .filter((arg, index) => arg !== '--model' && configuredArgs[index - 1] !== '--model')
+    .join(' ');
+  if (
+    !selector ||
+    (configured !== selector &&
+      configured !== (selector === 'resume' ? 'resume --last' : '--continue'))
+  ) {
+    return false;
+  }
+  const args = buildTaskAgentArgs(...launch);
+  return args[0] === selector && args[1] !== '--last' && (!args[1] || args[1].startsWith('-'));
 }

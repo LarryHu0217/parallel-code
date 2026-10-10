@@ -211,8 +211,15 @@ it('shows open issues before passed checks and keeps resolved items reversible',
   evidence.dismissedFindings = ['dismissed'];
   dispose = render(() => <EvidencePanel task={task(evidence)} headSha={HEAD} />, document.body);
   const text = document.body.textContent ?? '';
-  expect(text.indexOf('Open finding')).toBeLessThan(text.indexOf('Supporting evidence'));
-  expect(text.indexOf('Supporting evidence')).toBeLessThan(text.indexOf('Verify'));
+  expect(text.indexOf('Open finding')).toBeLessThan(text.indexOf('View evidence'));
+  expect(text.indexOf('View evidence')).toBeLessThan(text.indexOf('Verify'));
+  const disclosure = Array.from(document.querySelectorAll('details')).find(
+    (item) => item.querySelector('summary')?.textContent === 'View evidence',
+  );
+  expect(disclosure?.open).toBe(false);
+  expect(disclosure?.querySelector('[aria-label="Passed checks"]')).not.toBeNull();
+  expect(disclosure?.textContent).not.toContain('Open finding');
+  if (disclosure) disclosure.open = true;
   button('Undo dismissal').click();
   button('Undo acceptance').click();
   expect(restoreEvidenceFinding).toHaveBeenCalledWith('t1', 'dismissed');
@@ -255,10 +262,90 @@ it('keeps sent gaps visible until fresh evidence replaces the package', () => {
     document.body,
   );
   expect(document.body.textContent).toContain('Sent to agent · awaiting fresh evidence');
-  expect(document.querySelector('[aria-label="Needs attention"]')?.textContent).toContain(
+  expect(document.querySelector('[aria-label="Advisory findings"]')?.textContent).toContain(
     'Browser behavior',
   );
   setEvidence(pkg({ id: 'fresh', claim: { submittedAt: 'y', notVerified: ['Browser behavior'] } }));
   expect(document.body.textContent).not.toContain('Sent to agent');
   expect(button('Ask agent about this')).toBeDefined();
 });
+
+it.each(['running', 'error'] as const)(
+  'keeps AI review %s visible outside collapsed evidence',
+  (status) => {
+    const evidence = pkg({
+      review: {
+        status,
+        provider: 'claude',
+        headSha: HEAD,
+        findings: [],
+        error: status === 'error' ? 'Model unavailable' : undefined,
+      },
+    });
+    dispose = render(() => <EvidencePanel task={task(evidence)} headSha={HEAD} />, document.body);
+    const notice = document.querySelector(
+      status === 'running' ? '[role="status"]' : '[role="alert"]',
+    );
+    expect(notice?.textContent).toContain(
+      status === 'running' ? 'AI review running' : 'AI review failed. Model unavailable',
+    );
+    expect(notice?.closest('details')).toBeNull();
+  },
+);
+
+it('keeps incomplete scans visible and confidence explanations one expansion away', () => {
+  const evidence = pkg();
+  evidence.scan.truncated = true;
+  dispose = render(() => <EvidencePanel task={task(evidence)} headSha={HEAD} />, document.body);
+  const notice = document.querySelector('[role="status"]');
+  expect(notice?.textContent).toContain('some changes were not inspected');
+  expect(notice?.closest('details')).toBeNull();
+  const reason = Array.from(document.querySelectorAll('li')).find((item) =>
+    item.textContent?.includes('The integrity scan is incomplete'),
+  );
+  expect(reason?.closest('details')?.querySelector('summary')?.textContent).toBe('View evidence');
+});
+
+it('summarizes failures once and leaves the check status visible with output collapsed', () => {
+  const evidence = pkg();
+  evidence.checks[0] = {
+    ...evidence.checks[0],
+    status: 'failed',
+    exitCode: 1,
+    outputTail: 'Test failed',
+  };
+  dispose = render(() => <EvidencePanel task={task(evidence)} headSha={HEAD} />, document.body);
+  const headline = document.querySelector('section[aria-label="Evidence"] > div');
+  expect(headline?.textContent).toBe('Checks: 1 failed');
+  const checks = document.querySelector('[aria-label="Checks needing attention"]');
+  expect(checks?.textContent).toContain('required to land');
+  const output = checks?.querySelector('pre');
+  expect(output?.closest('details')?.open).toBe(false);
+  expect(output?.textContent).toBe('Test failed');
+  expect(checks?.querySelector('li > div > div')?.textContent).toContain('Failed (exit 1)');
+});
+
+it.each(['older commit', 'dirty run'] as const)(
+  'keeps a passed check from an %s visible for re-running',
+  (scenario) => {
+    const evidence = pkg();
+    evidence.checks[0] = {
+      ...evidence.checks[0],
+      headSha: scenario === 'older commit' ? 'old' : HEAD,
+      dirty: scenario === 'dirty run',
+    };
+    dispose = render(() => <EvidencePanel task={task(evidence)} headSha={HEAD} />, document.body);
+    const checks = document.querySelector('[aria-label="Checks needing attention"]');
+    expect(checks?.closest('details')).toBeNull();
+    expect(checks?.textContent).toContain(
+      scenario === 'older commit'
+        ? 'Verified at an older commit'
+        : 'Passed with uncommitted changes',
+    );
+    expect(checks?.querySelector('button')?.textContent).toBe('Re-run');
+    expect(checks?.querySelector('summary')?.getAttribute('aria-label')).toBe(
+      'Command and output for Verify',
+    );
+    expect(document.querySelector('[aria-label="Passed checks"]')).toBeNull();
+  },
+);

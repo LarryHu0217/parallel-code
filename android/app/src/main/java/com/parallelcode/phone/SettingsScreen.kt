@@ -29,6 +29,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -38,6 +39,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
@@ -127,8 +129,8 @@ fun SettingsScreen(
                         navigationIconContentColor = MaterialTheme.colorScheme.primary,
                     ),
                     navigationIcon = {
-                        TextButton(onClick = onBack) {
-                            Text("← Back", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                         }
                     },
                     title = {
@@ -444,7 +446,7 @@ fun SettingsScreen(
                         HorizontalDivider(thickness = 1.dp, color = AppTheme.extra.borderSubtle, modifier = Modifier.padding(vertical = 14.dp))
                         SettingSwitchRow(
                             title = "Send quick replies immediately",
-                            description = "Tapping a quick reply sends it straight to the agent. Off, it is added to your draft first.",
+                            description = "Tapping a quick reply in a built-in chat sends it straight away. Off, it is added to your draft first.",
                             checked = sendQuickReplies,
                             onCheckedChange = onSendQuickRepliesChange,
                         )
@@ -1074,7 +1076,7 @@ private fun QuickRepliesEditor(replies: List<String>, onChange: (List<String>) -
             color = MaterialTheme.colorScheme.onSurface,
         )
         Text(
-            "Shown above the reply box; tap one to add it to your message. One per line.",
+            "Shown above the reply box in built-in chats; tap one to add it to your message. One per line.",
             style = MaterialTheme.typography.bodyMedium,
             color = AppTheme.extra.textMuted,
         )

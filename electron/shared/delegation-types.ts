@@ -59,6 +59,8 @@ export interface DelegateAssignment {
   expectedBranch: string;
   expectedHeadSha: string;
   useLastCommit: boolean;
+  /** Branch from the parent's committed snapshot and land on the parent branch instead of main. */
+  baseOnParent?: boolean;
   agentCommand?: string;
   agentArgs?: string[];
   agentEnvFile?: string;
@@ -86,6 +88,8 @@ export interface PeerSession {
 
 export interface PeerMessage {
   deliveryId: string;
+  /** Missing on existing agent-origin peer messages. */
+  origin?: 'user';
   sender: PeerSession;
   recipient: PeerSession;
   prompt: string;
@@ -96,13 +100,6 @@ export interface PeerMessage {
   deliveryFailed?: boolean;
 }
 
-export interface DelegationReview {
-  expectedCommit: string;
-  expectedTargetBranch: string;
-  expectedTargetCommit: string;
-  diff: string;
-}
-
 export type DelegationRequest =
   | { action: 'register'; task: TaskAuthorityInput }
   | { action: 'unregister'; taskId: string }
@@ -110,9 +107,18 @@ export type DelegationRequest =
   | { action: 'orchestrationSetting'; enabled: boolean }
   | { action: 'pause'; taskId: string; paused: boolean }
   | { action: 'childLimit'; taskId: string; limit: number }
-  | { action: 'review'; taskId: string }
-  | { action: 'merge'; taskId: string; review: Omit<DelegationReview, 'diff'> }
   | { action: 'inbox'; taskId: string }
+  | { action: 'handoffSessions'; taskId: string }
+  | {
+      action: 'handoff';
+      taskId: string;
+      sourceAgentId: string;
+      sourceSessionInstanceId: string;
+      agentId: string;
+      sessionInstanceId: string;
+      prompt: string;
+      requestId: string;
+    }
   | { action: 'dismissMessageFailure'; deliveryId: string }
   | {
       action: 'deliverMessage';

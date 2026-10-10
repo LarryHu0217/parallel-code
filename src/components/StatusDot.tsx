@@ -1,4 +1,5 @@
 import {
+  getReadyLabel,
   getTaskActivityTooltip,
   type TaskAttentionState,
   type TaskDotStatus,
@@ -46,7 +47,12 @@ function getDotShadow(attention?: TaskAttentionState): string | undefined {
   return `0 0 0 2px color-mix(in srgb, ${color} 22%, transparent)`;
 }
 
-export function getDotTooltip(status: TaskDotStatus, attention?: TaskAttentionState): string {
+export function getDotTooltip(
+  status: TaskDotStatus,
+  attention?: TaskAttentionState,
+  taskId?: string,
+): string {
+  const readyLabel = () => (taskId ? getReadyLabel(taskId) : 'Ready');
   if (attention === 'active') return 'Active — agent is working';
   if (attention === 'shell_busy') return 'Terminal busy — no agent working';
   if (attention === 'needs_input') return 'Waiting for input';
@@ -54,11 +60,11 @@ export function getDotTooltip(status: TaskDotStatus, attention?: TaskAttentionSt
   // Without this, a review-flagged task whose agent is still active falls
   // through to the dot-status map and reads "Busy" under a purple dot.
   if (attention === 'review') return 'Ready for review';
-  if (attention === 'ready') return 'Ready to merge';
+  if (attention === 'ready') return readyLabel();
+  if (status === 'ready') return readyLabel();
   return {
     busy: 'Busy — agent recently active',
     waiting: 'Waiting — no changes yet',
-    ready: 'Ready to merge',
     review: 'Ready for review',
   }[status];
 }
@@ -85,7 +91,7 @@ export function StatusDot(props: {
     <span
       class="status-glyph"
       title={[
-        getDotTooltip(props.status, props.attention),
+        getDotTooltip(props.status, props.attention, props.taskId),
         props.taskId ? getTaskActivityTooltip(props.taskId) : undefined,
       ]
         .filter(Boolean)

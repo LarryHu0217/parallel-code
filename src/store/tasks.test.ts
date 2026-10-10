@@ -1923,6 +1923,20 @@ describe('Super Productivity completion wiring', () => {
     expect(fireSpCompletion).toHaveBeenCalledWith('task-1');
   });
 
+  it('removes a merged task even when unregistering its authority fails', async () => {
+    mockTasks['task-1'] = { ...worktreeTask(), coordinatedBy: 'coord-1' };
+    mockInvoke.mockImplementation((channel: string) =>
+      channel === IPC.MergeTask
+        ? Promise.resolve({ lines_added: 1, lines_removed: 0 })
+        : channel === IPC.DelegationRequest
+          ? Promise.reject(new Error('persist failed'))
+          : Promise.resolve(undefined),
+    );
+    await mergeTask('task-1', { cleanup: true });
+    // The worktree and branch are gone; keeping the task would leave it unrestorable.
+    expect(fireSpCompletion).toHaveBeenCalledWith('task-1');
+  });
+
   it('does not complete anything for a merge that keeps the task', async () => {
     mockTasks['task-1'] = worktreeTask();
     await mergeTask('task-1', { cleanup: false });
@@ -1999,29 +2013,34 @@ describe('recordTaskMerged counts merges with cleanup, not closures', () => {
     expect(recordTaskMerged).not.toHaveBeenCalled();
   });
 
-  it('merging with cleanup increments the counter once', async () => {
-    mockTasks['task-1'] = {
-      agentIds: [],
-      shellAgentIds: [],
-      gitIsolation: 'worktree',
-      projectId: 'proj-1',
-      branchName: 'task/task-1',
-      worktreePath: '/repo/.worktrees/task-1',
-      baseBranch: 'main',
-    };
-    mockInvoke.mockImplementation((channel: string) => {
-      if (channel === IPC.MergeTask) {
-        return Promise.resolve({ lines_added: 10, lines_removed: 2 });
-      }
-      return Promise.resolve(undefined);
-    });
+  it.each(['prUrl', 'githubUrl'])(
+    'merging with cleanup passes the %s for deduplication',
+    async (urlField) => {
+      mockTasks['task-1'] = {
+        agentIds: [],
+        shellAgentIds: [],
+        gitIsolation: 'worktree',
+        projectId: 'proj-1',
+        branchName: 'task/task-1',
+        worktreePath: '/repo/.worktrees/task-1',
+        baseBranch: 'main',
+        [urlField]: 'https://github.com/acme/app/pull/12',
+      };
+      mockInvoke.mockImplementation((channel: string) => {
+        if (channel === IPC.MergeTask) {
+          return Promise.resolve({ lines_added: 10, lines_removed: 2 });
+        }
+        return Promise.resolve(undefined);
+      });
 
-    await mergeTask('task-1', { cleanup: true });
+      await mergeTask('task-1', { cleanup: true });
 
-    expect(recordTaskMerged).toHaveBeenCalledTimes(1);
-    expect(recordMergedLines).toHaveBeenCalledTimes(1);
-    expect(recordMergedLines).toHaveBeenCalledWith(10, 2);
-  });
+      expect(recordTaskMerged).toHaveBeenCalledTimes(1);
+      expect(recordTaskMerged).toHaveBeenCalledWith('https://github.com/acme/app/pull/12');
+      expect(recordMergedLines).toHaveBeenCalledTimes(1);
+      expect(recordMergedLines).toHaveBeenCalledWith(10, 2);
+    },
+  );
 
   it('merging without cleanup does NOT increment the counter or lines totals', async () => {
     mockTasks['task-1'] = {

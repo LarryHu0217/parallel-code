@@ -63,6 +63,7 @@ afterEach(() => {
 function mountTerminal(
   onData?: (data: Uint8Array) => void,
   onStepNavReady?: ComponentProps<typeof TerminalView>['onStepNavReady'],
+  extra: Partial<ComponentProps<typeof TerminalView>> = {},
 ): Terminal {
   const host = document.createElement('div');
   document.body.append(host);
@@ -78,6 +79,7 @@ function mountTerminal(
           isShell
           onData={onData}
           onStepNavReady={onStepNavReady}
+          {...extra}
         />
       ),
       host,
@@ -190,4 +192,41 @@ describe('TerminalView', () => {
 
     await vi.waitFor(() => expect(onData).toHaveBeenCalled());
   });
+});
+
+it('offers a selection context menu and preserves the captured text for the named recipient', async () => {
+  const onSendSelection = vi.fn();
+  const term = mountTerminal(undefined, undefined, {
+    onSendSelection,
+    onSecondOpinion: vi.fn(),
+    handoffRecipients: [{ id: 'other', label: 'Codex' }],
+  });
+  await new Promise<void>((resolve) => term.write('Review this finding', resolve));
+  term.select(0, 0, 19);
+  const trigger = document.querySelector<HTMLButtonElement>(
+    '[aria-label="Actions for selected text"]',
+  );
+  expect(trigger).not.toBeNull();
+  expect(document.querySelector('.terminal-second-opinion')).toBeNull();
+  trigger?.click();
+  term.clearSelection();
+  const send = [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((b) =>
+    b.textContent?.includes('Send to Codex'),
+  );
+  send?.click();
+  expect(onSendSelection).toHaveBeenCalledWith('Review this finding', 'other');
+});
+
+it('keeps Second opinion on right-click without an overlay button', () => {
+  const onSecondOpinion = vi.fn();
+  const term = mountTerminal(undefined, undefined, { onSecondOpinion });
+  expect(document.querySelector('.terminal-second-opinion')).toBeNull();
+  term.element?.dispatchEvent(
+    new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 30, clientY: 40 }),
+  );
+  const item = [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((b) =>
+    b.textContent?.includes('Second opinion'),
+  );
+  item?.click();
+  expect(onSecondOpinion).toHaveBeenCalledOnce();
 });

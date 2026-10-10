@@ -233,6 +233,7 @@ export interface Task {
   promptedAgentIds?: string[];
   initialPrompt?: string; // auto-sends when agent is ready
   savedInitialPrompt?: string;
+  secondOpinionDismissed?: boolean;
   prefillPrompt?: string; // fills prompt input without sending
   closingStatus?: 'closing' | 'removing' | 'error';
   closingError?: string;
@@ -256,6 +257,10 @@ export interface Task {
   githubUrl?: string;
   prUrl?: string;
   superProductivity?: SuperProductivityLink;
+  /** Absolute return time for a timed snooze, retained across app restarts. */
+  snoozedUntil?: number;
+  /** Backgrounded until the PR checks stop pending, retained across app restarts. */
+  snoozedUntilCi?: boolean;
   collapsed?: boolean;
   savedAgentDef?: AgentDef;
   savedAgentDefs?: AgentDef[];
@@ -389,6 +394,11 @@ export interface PersistedTask {
   /** Validated on load. */
   superProductivity?: unknown;
   savedInitialPrompt?: string;
+  secondOpinionDismissed?: boolean;
+  /** Absolute return time for a timed snooze, retained across app restarts. */
+  snoozedUntil?: number;
+  /** Backgrounded until the PR checks stop pending, retained across app restarts. */
+  snoozedUntilCi?: boolean;
   collapsed?: boolean;
   savedAgentSessionIds?: (string | null)[];
   savedSelectedAgentIndex?: number;
@@ -467,6 +477,7 @@ export interface PersistedState {
   globalScale?: number;
   completedTaskDate?: string;
   completedTaskCount?: number;
+  countedMergedPrs?: string[];
   mergedLinesAdded?: number;
   mergedLinesRemoved?: number;
   terminalFont?: string;
@@ -538,7 +549,7 @@ export interface UsageState {
 export type PanelId = string;
 
 export interface PendingAction {
-  type: 'close' | 'merge' | 'push';
+  type: 'close' | 'finish';
   taskId: string;
 }
 
@@ -590,6 +601,7 @@ export interface AppStore {
   notification: string | null;
   completedTaskDate: string;
   completedTaskCount: number;
+  countedMergedPrs: string[];
   mergedLinesAdded: number;
   mergedLinesRemoved: number;
   terminalFont: string;
@@ -608,6 +620,8 @@ export interface AppStore {
   /** Pin tasks that are waiting on an answer to the top of the sidebar task
    *  list, newest question first. */
   sidebarNeedsInputFirst: boolean;
+  /** Session-only project filter for task navigation and panels. */
+  taskProjectFilter: string | null;
   projectsCollapsed: boolean;
   desktopNotificationsEnabled: boolean;
   inactiveColumnOpacity: number;

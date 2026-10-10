@@ -28,11 +28,13 @@ import type { UnderstandingTourDialog } from './UnderstandingTourDialog';
 // Understanding tours stream through Channel, so the panel's ipc mock provides one.
 const fileInventory = vi.hoisted(() => ({
   report: (_count: number) => {},
+  isActive: (): boolean => false,
   mounts: 0,
   disposals: 0,
 }));
 
 const parentNavigation = vi.hoisted(() => ({ setCollapsed: (_value: boolean) => {} }));
+const viewport = vi.hoisted(() => ({ set: (_taskId: string, _visibility: string) => {} }));
 
 const channels = vi.hoisted(
   () =>
@@ -52,12 +54,14 @@ vi.mock('../store/store', () => {
     focusedPanel: { task: 'prompt' },
     showPromptInput: true,
     taskGitStatus: {},
-    taskViewportVisibility: {},
+    taskViewportVisibility: {} as Record<string, string>,
     askCodeProvider: 'minimax',
     agentEnvFiles: {},
   });
   parentNavigation.setCollapsed = (value: boolean) =>
     setStore('tasks', 'parent', 'collapsed', value);
+  viewport.set = (taskId: string, visibility: string) =>
+    setStore('taskViewportVisibility', taskId, visibility);
   return {
     store,
     getProject: () => undefined,
@@ -209,10 +213,15 @@ vi.mock('./TaskChangedFilesSection', () => ({
   TaskChangedFilesSection: (props: {
     onFileCountChange?: (count: number) => void;
     commitList: CommitInfo[];
+    isActive: boolean;
   }) => {
     fileInventory.mounts++;
     createEffect(() => {
       fileInventory.report = props.onFileCountChange ?? (() => {});
+    });
+    createEffect(() => {
+      const active = props.isActive;
+      fileInventory.isActive = () => active;
     });
     onCleanup(() => fileInventory.disposals++);
     return (
@@ -611,6 +620,71 @@ it('preserves commit rows on unchanged polls and updates changed messages, order
   commits = [{ hash: 'c', message: 'New hash' }];
   await vi.advanceTimersByTimeAsync(5000);
   expect(rows()[0].dataset.commitHash).toBe('c');
+});
+
+it('starts git checks only once a task stays active and stops them at once', async () => {
+  vi.useFakeTimers();
+  toggleFocusMode(true);
+  const commitFetches = () =>
+    vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === IPC.GetBranchCommits).length;
+  const task: Task = {
+    id: 'task',
+    name: 'Task',
+    projectId: 'project',
+    agentIds: [],
+    shellAgentIds: [],
+    notes: '',
+    gitIsolation: 'worktree',
+    branchName: 'task-branch',
+    worktreePath: '/tmp/task',
+    lastPrompt: '',
+  };
+  const [active, setActive] = createSignal(false);
+  const container = document.createElement('div');
+  document.body.append(container);
+  dispose = render(() => <TaskPanel task={task} isActive={active()} />, container);
+
+  // Passed over by a held Alt+Arrow: no git work starts.
+  setActive(true);
+  await vi.advanceTimersByTimeAsync(30);
+  setActive(false);
+  await vi.advanceTimersByTimeAsync(100);
+  expect(commitFetches()).toBe(0);
+  expect(fileInventory.isActive()).toBe(false);
+
+  setActive(true);
+  await vi.advanceTimersByTimeAsync(60);
+  expect(commitFetches()).toBe(1);
+  expect(fileInventory.isActive()).toBe(true);
+
+  setActive(false);
+  expect(fileInventory.isActive()).toBe(false);
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(commitFetches()).toBe(1);
+});
+
+it('starts commit polling only once a tile stays scrolled into view', async () => {
+  vi.useFakeTimers();
+  viewport.set('task', 'offscreen-right');
+  const commitFetches = () =>
+    vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === IPC.GetBranchCommits).length;
+  mountEmptyTask();
+
+  // Scrolled past by a held Alt+Arrow: no git work starts.
+  viewport.set('task', 'visible');
+  await vi.advanceTimersByTimeAsync(30);
+  viewport.set('task', 'offscreen-left');
+  await vi.advanceTimersByTimeAsync(100);
+  expect(commitFetches()).toBe(0);
+
+  viewport.set('task', 'visible');
+  await vi.advanceTimersByTimeAsync(60);
+  expect(commitFetches()).toBe(1);
+  viewport.set('task', 'offscreen-left');
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(commitFetches()).toBe(1);
+  // Other tests expect the shared mock store's tile to poll.
+  viewport.set('task', 'visible');
 });
 
 it('collapses empty support panels without disposing file watching or terminal state', () => {

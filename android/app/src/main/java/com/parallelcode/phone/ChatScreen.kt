@@ -24,6 +24,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Button
@@ -33,6 +34,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -121,10 +123,11 @@ fun ChatScreen(
                     colors = TopAppBarDefaults.topAppBarColors(
                         containerColor = MaterialTheme.colorScheme.surface,
                         titleContentColor = MaterialTheme.colorScheme.onSurface,
+                        navigationIconContentColor = MaterialTheme.colorScheme.primary,
                     ),
                     navigationIcon = {
-                        TextButton(onClick = onBack) {
-                            Text("Back", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                         }
                     },
                     title = {
@@ -535,15 +538,20 @@ private fun ChatComposer(
             if (sendQuickReplies) run({ send(it) }, clearDraft = false)
             else draft = appendToDraft(draft, it)
         }
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(
-                value = draft,
-                onValueChange = { draft = it },
-                modifier = Modifier.weight(1f),
-                placeholder = { Text("Message the agent") },
-                maxLines = 5,
-                enabled = enabled,
-            )
+        OutlinedTextField(
+            value = draft,
+            onValueChange = { draft = it },
+            modifier = Modifier.fillMaxWidth(),
+            placeholder = { Text("Message the agent") },
+            minLines = 2,
+            maxLines = 6,
+            enabled = enabled,
+        )
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.End,
+        ) {
             VoiceInputButton(enabled = enabled && !busy) { draft = appendToDraft(draft, it) }
             if (promptHistory != null) {
                 OutlinedButton(

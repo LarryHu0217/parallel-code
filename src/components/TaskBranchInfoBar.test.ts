@@ -16,6 +16,7 @@ vi.mock('../store/store', () => ({
   getBranchDivergence: vi.fn(() => null),
 }));
 
+vi.mock('../store/github', () => ({ stageFailedChecksPrompt: vi.fn() }));
 vi.mock('../lib/platform', () => ({ isMac: false }));
 vi.mock('../lib/shell', () => ({
   revealItemInDir: vi.fn(() => Promise.resolve()),
@@ -99,7 +100,7 @@ describe('TaskBranchInfoBar PR review metadata', () => {
     expect(html).not.toContain('task-pr-review-icon--approved');
   });
 
-  it('shows a merged PR in GitHub purple instead of its review state', () => {
+  it('shows a merged PR as a GitHub-purple badge instead of its review state', () => {
     mockGetPrChecks.mockReturnValue({
       overall: 'none',
       merged: true,
@@ -113,7 +114,7 @@ describe('TaskBranchInfoBar PR review metadata', () => {
     const html = renderToString(() => TaskBranchInfoBar({ task, onEditProject: vi.fn() }));
 
     expect(html).toContain('<span class="task-pr-review-label">Merged</span>');
-    expect(html).toContain('class="task-pr-review-status" style="color:#8957e5');
+    expect(html).toMatch(/class="task-pr-review-status" style="[^"]*background:#8957e5;color:#fff/);
     expect(html).toContain('task-pr-review-icon--merged">');
     expect(html).toContain('aria-label="PR #12, Merged"');
   });
@@ -150,6 +151,37 @@ describe('TaskBranchInfoBar GitHub actions', () => {
     expect(html).toContain('class="task-pr-conflicts"');
     expect(html).toContain('aria-label="PR #12, Conflicts"');
   });
+
+  const checks = (overall: string, extra: Record<string, unknown> = {}) => ({
+    overall,
+    passing: 1,
+    pending: 0,
+    failing: overall === 'failure' ? 1 : 0,
+    checks: [],
+    checkedAt: '2026-08-04T10:00:00.000Z',
+    ...extra,
+  });
+
+  it('offers a red Fix CI button when the PR checks failed', () => {
+    mockGetPrChecks.mockReturnValue(checks('failure'));
+
+    const html = renderToString(() => TaskBranchInfoBar({ task, onEditProject: vi.fn() }));
+
+    expect(html).toMatch(/class="task-pr-fix-ci"[^>]*style="background:var\(--error\)/);
+    expect(html).toContain('>Fix CI</button>');
+  });
+
+  it.each([
+    ['pending', {}],
+    ['success', {}],
+    ['failure', { merged: true }],
+  ])('does not offer Fix CI when checks are %s %o', (overall, extra) => {
+    mockGetPrChecks.mockReturnValue(checks(overall, extra));
+
+    const html = renderToString(() => TaskBranchInfoBar({ task, onEditProject: vi.fn() }));
+
+    expect(html).not.toContain('task-pr-fix-ci');
+  });
 });
 
 describe('TaskBranchInfoBar source link', () => {
@@ -179,8 +211,8 @@ describe('TaskBranchInfoBar project chip', () => {
 
     const html = renderToString(() => TaskBranchInfoBar({ task, onEditProject: vi.fn() }));
 
-    expect(html).toContain('class="project-swatch"');
-    expect(html).toContain('background:hsl(210, 70%, 75%)');
+    expect(html).not.toContain('class="project-swatch"');
+    expect(html).toContain('border-left:3px solid hsl(210, 70%, 75%)');
     expect(html).toContain('class="task-branch-project-label">parallel-code</span>');
     expect(html).toContain('class="task-branch-project-compact-label"');
     expect(html).toContain('>PC</span>');
@@ -234,6 +266,10 @@ describe('TaskBranchInfoBar responsive styles', () => {
     expect(css).toMatch(
       /@container\s+task-branch-info\s+\(max-width:\s*420px\)[\s\S]*?\.task-pr-review-icon\s*{[^}]*display:\s*inline-flex/,
     );
+  });
+
+  it('keeps the merged icon visible beside its label at every width', () => {
+    expect(css).toMatch(/\.task-pr-review-icon--merged\s*{[^}]*display:\s*inline-flex/);
   });
 
   it('lets secondary identities ellipsize while keeping PR state non-shrinkable', () => {

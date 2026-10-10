@@ -54,24 +54,51 @@ jobs:
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
     concurrency:
       group: android-play-internal
       cancel-in-progress: false
+      queue: max
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      # Builds can finish out of order, even though publishing is serialized.
+      - name: Skip superseded Play builds
+        id: publish-check
+        working-directory: ${{ runner.temp }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          runs=$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/workflows/android.yml/runs?branch=main&per_page=100")
+          newer_ids=$(jq -r --argjson current "$GITHUB_RUN_NUMBER" '.workflow_runs[] | select(.run_number > $current) | .id' <<< "$runs")
+          for run_id in $newer_ids; do
+            jobs=$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs?filter=all&per_page=100")
+            if jq -se 'any(.[] | .jobs[]; .name == "play-internal" and .conclusion == "success")' <<< "$jobs" > /dev/null; then
+              echo "publish=false" >> "$GITHUB_OUTPUT"
+              echo "::notice::Skipping this build: newer Android run $run_id already published successfully."
+              exit 0
+            fi
+          done
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+
+      - if: steps.publish-check.outputs.publish == 'true'
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
 
-      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+      - if: steps.publish-check.outputs.publish == 'true'
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
           java-version: '21'
 
-      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+      - if: steps.publish-check.outputs.publish == 'true'
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
         with:
           cache-disabled: true
 
       - name: Validate publishing secrets and decode signing key
+        if: steps.publish-check.outputs.publish == 'true'
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -89,6 +116,7 @@ jobs:
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/play-upload.jks"
 
       - name: Build signed app bundle
+        if: steps.publish-check.outputs.publish == 'true'
         env:
           ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/play-upload.jks
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -98,6 +126,7 @@ jobs:
         run: ./gradlew bundleRelease -PversionName="internal.$VERSION_CODE" -PversionCode="$VERSION_CODE"
 
       - name: Publish to Google Play internal testing
+        if: steps.publish-check.outputs.publish == 'true'
         uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5 # v1.1.5
         with:
           serviceAccountJsonPlainText: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
@@ -109,6 +138,7 @@ jobs:
 
       - name: Remove signing key
         if: always()
+        working-directory: ${{ runner.temp }}
         run: rm -f "$RUNNER_TEMP/play-upload.jks"
 
   release:

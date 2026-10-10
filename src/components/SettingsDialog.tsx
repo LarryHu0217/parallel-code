@@ -562,7 +562,7 @@ export function SettingsDialog(props: SettingsDialogProps) {
               label="Show progress section in sidebar"
               checked={store.showSidebarProgress}
               onChange={setShowSidebarProgress}
-              description="Daily completed-task count and merged-line totals at the bottom of the sidebar"
+              description="Show today’s local task and tracked PR merge count when nonzero"
             />
             <SettingsCheckboxRow
               label="Show tips section in sidebar"

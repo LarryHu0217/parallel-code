@@ -3,6 +3,7 @@ import { setStore, store } from './core';
 import { fireAndForget, invoke } from '../lib/ipc';
 import { IPC } from '../../electron/ipc/channels';
 import { parseGitHubUrl } from '../lib/github-url';
+import { recordRemotePrMerged } from './completion';
 import { saveState } from './persistence';
 import { removePrChecks, setPrChecks } from './pr-checks-state';
 import type {
@@ -145,6 +146,13 @@ export function startPrChecksSubscription(): () => void {
     // A merged PR is final, so keep its bookkeeping: the effect then neither
     // re-polls it nor misses a later URL change or task removal.
     if (msg.cleared && msg.merged) {
+      if (
+        typeof msg.prUrl === 'string' &&
+        typeof msg.mergedAt === 'string' &&
+        recordRemotePrMerged(msg.prUrl, msg.mergedAt)
+      ) {
+        void saveState();
+      }
       setPrChecks(msg.taskId, {
         overall: 'none',
         merged: true,

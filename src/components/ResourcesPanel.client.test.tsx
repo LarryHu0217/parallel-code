@@ -79,6 +79,48 @@ describe('ResourcesPanel', () => {
     expect(toggleButton(container).style.color).toBe('var(--warning)');
   });
 
+  it.each([
+    ['CPU below capacity', 89, 10, 'var(--warning)'],
+    ['CPU near capacity', 90, 10, 'var(--error)'],
+    ['CPU above capacity', 110, 10, 'var(--error)'],
+    ['RAM below capacity', 10, 89, 'var(--fg-muted)'],
+    ['RAM near capacity', 10, 90, 'var(--error)'],
+    ['RAM above capacity with busy CPU', 50, 95, 'var(--error)'],
+  ])('uses the expected colour for %s', async (_label, cpu, memory, color) => {
+    mockInvoke.mockImplementationOnce(async () => ({
+      ...snapshot,
+      groups: snapshot.groups.map((group) => ({
+        ...group,
+        cpuPercent: (cpu * snapshot.cpuCount) / snapshot.groups.length,
+        memoryBytes: ((memory / 100) * snapshot.totalMemoryBytes) / snapshot.groups.length,
+      })),
+    }));
+    const container = mount();
+    await flush();
+    expect(toggleButton(container).style.color).toBe(color);
+    // Opening the panel triggers a fresh sample with normal usage.
+    toggleButton(container).click();
+    await flush();
+    expect(toggleButton(container).style.color).toBe('var(--fg)');
+  });
+
+  it('keeps red while open and recovers when a later poll reports normal usage', async () => {
+    vi.useFakeTimers();
+    const highUsage = {
+      ...snapshot,
+      totalMemoryBytes: 1024 ** 3,
+    };
+    mockInvoke.mockResolvedValueOnce(highUsage).mockResolvedValueOnce(highUsage);
+    const container = mount();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(toggleButton(container).style.color).toBe('var(--error)');
+    toggleButton(container).click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(toggleButton(container).style.color).toBe('var(--error)');
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(toggleButton(container).style.color).toBe('var(--fg)');
+  });
+
   it('lists groups by cpu with task names, and expands into processes', async () => {
     const container = mount();
     toggleButton(container).click();

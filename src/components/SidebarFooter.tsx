@@ -1,8 +1,7 @@
-import { createMemo, createEffect, onCleanup, Show } from 'solid-js';
+import { createMemo, createEffect, createSignal, onCleanup, Show } from 'solid-js';
 import {
   store,
   getMergedTasksTodayCount,
-  getMergedLineTotals,
   toggleHelpDialog,
   toggleArena,
   hasAnyCoordinatorTask,
@@ -14,8 +13,13 @@ import { alt, mod } from '../lib/platform';
 
 /** Compact utilities and optional activity totals, shared by every theme. */
 export function SidebarFooter(props: { onConnectPhone: () => void }) {
-  const mergedTasksToday = createMemo(() => getMergedTasksTodayCount());
-  const mergedLines = createMemo(() => getMergedLineTotals());
+  const [clock, setClock] = createSignal(Date.now());
+  const dayTimer = setInterval(() => setClock(Date.now()), 60_000);
+  onCleanup(() => clearInterval(dayTimer));
+  const mergedTasksToday = createMemo(() => {
+    clock();
+    return getMergedTasksTodayCount();
+  });
   const hasCoordinator = createMemo(() => hasAnyCoordinatorTask());
   const phoneConnected = () =>
     store.remoteAccess.enabled && store.remoteAccess.connectedClients > 0;
@@ -135,18 +139,11 @@ export function SidebarFooter(props: { onConnectPhone: () => void }) {
         </div>
       </div>
 
-      <Show when={store.showSidebarProgress}>
+      <Show when={store.showSidebarProgress && mergedTasksToday() > 0}>
         <div class="sidebar-footer-progress">
-          <div class="sidebar-footer-stat" title="Tasks merged today">
+          <div class="sidebar-footer-stat" title="Local task merges and tracked PRs merged today">
             <span>Merged today</span>
             <strong>{mergedTasksToday()}</strong>
-          </div>
-          <div class="sidebar-footer-lines" title="Lines added / removed across all merged tasks">
-            <span>Merged lines</span>
-            <span class="sidebar-footer-line-totals">
-              <span style={{ color: theme.success }}>+{mergedLines().added.toLocaleString()}</span>
-              <span style={{ color: theme.error }}>−{mergedLines().removed.toLocaleString()}</span>
-            </span>
           </div>
         </div>
       </Show>

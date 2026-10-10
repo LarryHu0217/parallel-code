@@ -25,6 +25,8 @@ import {
 import { markDirty } from '../lib/terminalFitManager';
 import { isAgentAskingQuestion, isAgentSettled } from '../store/taskStatus';
 import { errMessage, warn as logWarn } from '../lib/log';
+import { AgentHandoffComposer } from './AgentHandoffComposer';
+import { isSupportedDelegationAgent } from '../store/delegation';
 import { InfoBar } from './InfoBar';
 import { PromptHistory } from './PromptHistory';
 import { TerminalView } from './TerminalView';
@@ -34,12 +36,16 @@ import { isAgentChat, agentChatProvider, agentChatUnavailableReason } from '../s
 import { agentViewHandsOff, agentViewSwitchCost, switchMainAgentView } from '../store/agent-view';
 import { setStore } from '../store/core';
 import { saveState } from '../store/persistence';
+import { registerAction, unregisterAction } from '../store/focus';
+import { resolvedBindings } from '../store/keybindings';
+import { formatKeyCombo } from '../lib/keybindings';
 import { Dialog } from './Dialog';
 import { ConfirmDialog } from './ConfirmDialog';
 import {
   CheckIcon,
   CloseIcon,
   CommentIcon,
+  EyeIcon,
   CopyIcon,
   PlayIcon,
   SyncIcon,
@@ -87,6 +93,42 @@ interface TaskAITerminalProps {
 const stepKey = (i: number): string => `step:${i}`;
 
 export function TaskAITerminal(props: TaskAITerminalProps) {
+  const [handoff, setHandoff] = createSignal<{
+    sourceAgentId: string;
+    selection?: string;
+    recipientAgentId?: string;
+  }>();
+  const handoffAgents = () =>
+    props.task.agentIds.filter((id) => {
+      const agent = store.agents[id];
+      return (
+        agent &&
+        agent.status !== 'exited' &&
+        agent.sessionInstanceId &&
+        !isAgentChat(props.task, id) &&
+        isSupportedDelegationAgent(agent.def)
+      );
+    });
+  const canHandoff = (id: string) => store.mcpOrchestrationEnabled && handoffAgents().includes(id);
+  const secondOpinionTitle = () => {
+    const binding = resolvedBindings().find((item) => item.id === 'app.task.second-opinion');
+    return `Ask for a second opinion${binding ? ` (${formatKeyCombo(binding)})` : ''}`;
+  };
+  createEffect(() => {
+    const key = `${props.task.id}:second-opinion`;
+    const open = () => {
+      if (
+        props.isActive &&
+        props.visible !== false &&
+        !handoff() &&
+        canHandoff(props.selectedAgentId)
+      ) {
+        setHandoff({ sourceAgentId: props.selectedAgentId });
+      }
+    };
+    registerAction(key, open);
+    onCleanup(() => unregisterAction(key, open));
+  });
   // Step bookmarks — TerminalView hands us a mark/jump API once the xterm
   // instance is ready. We only mark steps that arrive while the terminal is live;
   // historical steps written before this mount aren't jumpable (anchoring them
@@ -352,6 +394,36 @@ export function TaskAITerminal(props: TaskAITerminalProps) {
           >
             <PromptHistory task={props.task} emptyLabel={infoBarStatus().text} />
             <div class="agent-header-controls">
+              <Show
+                when={
+                  canHandoff(props.selectedAgentId) &&
+                  !handoff() &&
+                  !props.task.secondOpinionDismissed
+                }
+              >
+                <div class="terminal-second-opinion">
+                  <button
+                    title={secondOpinionTitle()}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setHandoff({ sourceAgentId: props.selectedAgentId });
+                    }}
+                  >
+                    <EyeIcon size={12} /> Second opinion
+                  </button>
+                  <button
+                    aria-label="Dismiss second opinion button for this task"
+                    title="Dismiss for this task; still available on right-click"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setStore('tasks', props.task.id, 'secondOpinionDismissed', true);
+                      void saveState();
+                    }}
+                  >
+                    <CloseIcon size={10} />
+                  </button>
+                </div>
+              </Show>
               <div class="agent-header-tabs">
                 <For each={props.task.agentIds}>
                   {(agentId, i) => {
@@ -537,6 +609,20 @@ export function TaskAITerminal(props: TaskAITerminalProps) {
             </div>
           </div>
         </InfoBar>
+        <Show when={handoff()} keyed>
+          {(request) => (
+            <AgentHandoffComposer
+              task={props.task}
+              sourceAgentId={request.sourceAgentId}
+              selection={request.selection}
+              recipientAgentId={request.recipientAgentId}
+              onClose={(recipientAgentId) => {
+                setHandoff(undefined);
+                if (recipientAgentId) selectAgent(recipientAgentId);
+              }}
+            />
+          )}
+        </Show>
         <Show when={viewNotice()}>
           <div class="agent-view-error" role="alert">
             {viewNotice()}
@@ -567,6 +653,23 @@ export function TaskAITerminal(props: TaskAITerminalProps) {
                   if (!props.onFileLink?.(filePath)) handleFileLink(filePath);
                 }}
                 onReview={props.onReview}
+                onSendSelection={
+                  canHandoff(agentId) && !handoff()
+                    ? (selection, recipientAgentId) =>
+                        setHandoff({ sourceAgentId: agentId, selection, recipientAgentId })
+                    : undefined
+                }
+                onSecondOpinion={
+                  canHandoff(agentId) && !handoff()
+                    ? () => setHandoff({ sourceAgentId: agentId })
+                    : undefined
+                }
+                handoffRecipients={handoffAgents()
+                  .filter((id) => id !== agentId)
+                  .map((id) => ({
+                    id,
+                    label: `${store.agents[id].def.name} · ${props.task.agentIds.indexOf(id) + 1}`,
+                  }))}
                 onReady={registerAgentFocus}
                 onUnmount={unregisterAgentFocus}
                 onStepNavReady={(api) => handleStepNavReady(agentId, api)}
@@ -728,6 +831,9 @@ function AddAgentMenu(props: { taskId: string }) {
 }
 
 function AgentTerminalPane(props: {
+  onSendSelection?: (text: string, recipientAgentId?: string) => void;
+  onSecondOpinion?: () => void;
+  handoffRecipients: { id: string; label: string }[];
   task: Task;
   onReview?: (path?: string) => void;
   agentId: string;
@@ -892,6 +998,9 @@ function AgentTerminalPane(props: {
                 <Show when={`${a().id}:${a().generation}`} keyed>
                   <TerminalView
                     taskId={props.task.id}
+                    onSendSelection={props.onSendSelection}
+                    onSecondOpinion={props.onSecondOpinion}
+                    handoffRecipients={props.handoffRecipients}
                     agentId={a().id}
                     visible={props.visible && !isAgentChat(props.task, props.agentId)}
                     isFocused={

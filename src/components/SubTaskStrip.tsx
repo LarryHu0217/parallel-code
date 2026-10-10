@@ -16,7 +16,7 @@ import { getTaskAttentionState } from '../store/taskStatus';
 import { theme } from '../lib/theme';
 import { sf } from '../lib/fontScale';
 import { Dialog } from './Dialog';
-import { CloseIcon, StopIcon, SyncIcon } from './icons';
+import { ChevronDownIcon, ChevronRightIcon, CloseIcon, StopIcon, SyncIcon } from './icons';
 
 interface SubTaskStripProps {
   coordinatorTaskId: string;
@@ -148,12 +148,15 @@ export function SubTaskStrip(props: SubTaskStripProps) {
     return [...active, ...collapsed].map((id) => store.tasks[id]).filter(Boolean);
   });
 
-  const taskTone = (task: (typeof store.tasks)[string]) => {
+  // `urgent` tones get a tinted chip; plain merged work stays neutral.
+  const taskTone = (
+    task: (typeof store.tasks)[string],
+  ): { color: string; label: string; urgent: boolean } | null => {
     if (task.landingState === 'landed_pending_review') {
-      return { color: theme.warning, label: 'Merged · review pending' };
+      return { color: theme.warning, label: 'Merged · review pending', urgent: true };
     }
     if (task.landingState === 'reviewed') {
-      return { color: theme.success, label: 'Merged' };
+      return { color: theme.success, label: 'Merged', urgent: false };
     }
     if (
       task.landingState === 'landed_cleanup_failed' ||
@@ -165,187 +168,143 @@ export function SubTaskStrip(props: SubTaskStripProps) {
           task.landingState === 'landed_cleanup_failed'
             ? 'Merged · cleanup failed'
             : 'Merge needs attention',
+        urgent: true,
       };
     }
     if (task.landingState === 'landing_failed') {
-      return { color: theme.error, label: 'Merge failed' };
+      return { color: theme.error, label: 'Merge failed', urgent: true };
     }
     if (task.signalDoneReceived)
       return {
         color: theme.warning,
         label: task.integrationPolicy === 'review' ? 'Awaiting review' : 'Work complete',
+        urgent: true,
       };
     return null;
   };
+
+  // Wrapped rows keep every subtask visible in narrow columns; the toggle lets
+  // a long list give its height back to the terminal.
+  const [expanded, setExpanded] = createSignal(true);
+  const listId = createUniqueId();
 
   return (
     <>
       <Show when={showLogs()}>
         <MCPLogModal onClose={() => setShowLogs(false)} />
       </Show>
-      <Show when={subTasks().length > 0 || summary()}>
+      <Show when={subTasks().length > 0 || summary() || store.verboseLogging}>
         <div
-          style={{
-            display: 'flex',
-            'align-items': 'center',
-            gap: '6px',
-            padding: '4px 10px',
-            background: theme.bgInput,
-            'border-bottom': `1px solid ${theme.border}`,
-            'overflow-x': 'auto',
-            'flex-shrink': '0',
-          }}
+          class="subtask-strip"
+          style={{ background: theme.bgInput, 'border-bottom': `1px solid ${theme.border}` }}
         >
-          <span
-            style={{
-              'font-size': sf(11),
-              color: theme.fgSubtle,
-              'white-space': 'nowrap',
-              'flex-shrink': '0',
-            }}
-          >
-            Subtasks:
-          </span>
-          <Show when={summary()}>
-            {(text) => (
-              <span style={{ 'font-size': sf(11), color: theme.fgMuted, 'white-space': 'nowrap' }}>
-                {text()}
-              </span>
-            )}
-          </Show>
-          <For each={subTasks()}>
-            {(task) => (
-              <span style={{ display: 'inline-flex', gap: '4px', 'align-items': 'center' }}>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (task.collapsed) {
-                      uncollapseTask(task.id);
-                    }
-                    activateTaskFromPointer(task.id);
-                  }}
-                  title={`${task.collapsed ? 'Resume and open: ' : ''}${task.name} — ${taskTone(task)?.label ?? getDotTooltip(getTaskDotStatus(task.id), getTaskAttentionState(task.id))}`}
-                  style={{
-                    display: 'inline-flex',
-                    'align-items': 'center',
-                    gap: '4px',
-                    padding: '5px 8px',
-                    'border-radius': 'var(--radius-sm)',
-                    background: taskTone(task)
-                      ? `color-mix(in srgb, ${taskTone(task)?.color} 12%, transparent)`
-                      : `color-mix(in srgb, ${theme.fgSubtle} 8%, transparent)`,
-                    border: `1px solid ${taskTone(task) ? `color-mix(in srgb, ${taskTone(task)?.color} 30%, transparent)` : theme.border}`,
-                    color: theme.fgMuted,
-                    'font-size': sf(11),
-                    'font-family': 'var(--font-ui)',
-                    cursor: 'pointer',
-                    'white-space': 'nowrap',
-                    'max-width': '240px',
-                    overflow: 'hidden',
-                    'text-overflow': 'ellipsis',
-                    'flex-shrink': '0',
-                  }}
-                >
-                  <Show
-                    when={taskTone(task)}
-                    fallback={
-                      <StatusDot
-                        status={getTaskDotStatus(task.id)}
-                        attention={getTaskAttentionState(task.id)}
-                        taskId={task.id}
-                        size="sm"
-                      />
-                    }
-                  >
-                    {(tone) => (
-                      <span style={{ color: tone().color, display: 'inline-flex' }}>
-                        <span aria-hidden="true">●</span>
-                      </span>
-                    )}
-                  </Show>
-                  <span class="subtask-label">
-                    <span class="subtask-name">
-                      {task.collapsed ? 'Resume: ' : ''}
-                      {task.name}
-                    </span>
-                    <span
-                      class="subtask-status"
-                      style={{ color: taskTone(task)?.color ?? theme.fgMuted }}
-                    >
-                      {taskTone(task)?.label ??
-                        getDotTooltip(
-                          getTaskDotStatus(task.id),
-                          getTaskAttentionState(task.id),
-                        ).split(' — ')[0]}
-                    </span>
-                  </span>
-                </button>
-                <Show when={task.agentIds.some((id) => store.agents[id]?.status === 'running')}>
-                  <button
-                    class="delegation-button btn-with-icon"
-                    title={`Stop ${task.name}; keep its worktree`}
-                    onClick={() => {
-                      void Promise.all(
-                        task.agentIds.map((agentId) => invoke(IPC.KillAgent, { agentId })),
-                      ).catch((error: unknown) => showNotification(String(error)));
-                    }}
-                  >
-                    <StopIcon size={12} />
-                    Stop
-                  </button>
+          <div class="subtask-strip-header">
+            <Show when={subTasks().length > 0}>
+              <button
+                class="subtask-strip-toggle"
+                aria-expanded={expanded()}
+                aria-controls={listId}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setExpanded((v) => !v);
+                }}
+              >
+                <Show when={expanded()} fallback={<ChevronRightIcon size={12} />}>
+                  <ChevronDownIcon size={12} />
                 </Show>
-              </span>
-            )}
-          </For>
-          <Show when={store.verboseLogging}>
-            <button
-              onClick={() => setShowLogs(true)}
-              title="View MCP logs"
-              style={{
-                'margin-left': 'auto',
-                'flex-shrink': '0',
-                background: 'none',
-                border: `1px solid ${theme.border}`,
-                'border-radius': 'var(--radius-sm)',
-                cursor: 'pointer',
-                color: theme.fgSubtle,
-                'font-size': sf(11),
-                padding: '1px 6px',
-                'white-space': 'nowrap',
-              }}
-            >
-              MCP logs
-            </button>
+                Subtasks ({subTasks().length})
+              </button>
+            </Show>
+            <Show when={summary()}>
+              {(text) => <span class="subtask-strip-summary">{text()}</span>}
+            </Show>
+            <Show when={store.verboseLogging}>
+              <button
+                class="subtask-strip-logs"
+                onClick={() => setShowLogs(true)}
+                title="View MCP logs"
+              >
+                MCP logs
+              </button>
+            </Show>
+          </div>
+          {/* Stays mounted while collapsed so the toggle's aria-controls resolves. */}
+          <Show when={subTasks().length > 0}>
+            <ul id={listId} class="subtask-strip-list" hidden={!expanded()}>
+              <For each={subTasks()}>
+                {(task) => {
+                  const tone = () => taskTone(task);
+                  return (
+                    <li class="subtask-strip-item">
+                      <button
+                        class="subtask-chip"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (task.collapsed) {
+                            uncollapseTask(task.id);
+                          }
+                          activateTaskFromPointer(task.id);
+                        }}
+                        title={`${task.collapsed ? 'Resume and open: ' : ''}${task.name} — ${tone()?.label ?? getDotTooltip(getTaskDotStatus(task.id), getTaskAttentionState(task.id), task.id)}`}
+                        data-urgent={tone()?.urgent ? '' : undefined}
+                        style={{ '--tone': tone()?.color, 'font-size': sf(11) }}
+                      >
+                        <Show
+                          when={tone()}
+                          fallback={
+                            <StatusDot
+                              status={getTaskDotStatus(task.id)}
+                              attention={getTaskAttentionState(task.id)}
+                              taskId={task.id}
+                              size="sm"
+                            />
+                          }
+                        >
+                          {(t) => (
+                            <span style={{ color: t().color, display: 'inline-flex' }}>
+                              <span aria-hidden="true">●</span>
+                            </span>
+                          )}
+                        </Show>
+                        <span class="subtask-name">
+                          {task.collapsed ? 'Resume: ' : ''}
+                          {task.name}
+                        </span>
+                        <span
+                          class="subtask-status"
+                          style={{ color: tone()?.color ?? theme.fgSubtle }}
+                        >
+                          {tone()?.label ??
+                            getDotTooltip(
+                              getTaskDotStatus(task.id),
+                              getTaskAttentionState(task.id),
+                              task.id,
+                            ).split(' — ')[0]}
+                        </span>
+                      </button>
+                      <Show
+                        when={task.agentIds.some((id) => store.agents[id]?.status === 'running')}
+                      >
+                        <button
+                          class="subtask-stop"
+                          title={`Stop ${task.name}; keep its worktree`}
+                          aria-label={`Stop ${task.name}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void Promise.all(
+                              task.agentIds.map((agentId) => invoke(IPC.KillAgent, { agentId })),
+                            ).catch((error: unknown) => showNotification(String(error)));
+                          }}
+                        >
+                          <StopIcon size={12} />
+                        </button>
+                      </Show>
+                    </li>
+                  );
+                }}
+              </For>
+            </ul>
           </Show>
-        </div>
-      </Show>
-      <Show when={subTasks().length === 0 && !summary() && store.verboseLogging}>
-        <div
-          style={{
-            display: 'flex',
-            'justify-content': 'flex-end',
-            padding: '3px 10px',
-            background: theme.bgInput,
-            'border-bottom': `1px solid ${theme.border}`,
-            'flex-shrink': '0',
-          }}
-        >
-          <button
-            onClick={() => setShowLogs(true)}
-            title="View MCP logs"
-            style={{
-              background: 'none',
-              border: `1px solid ${theme.border}`,
-              'border-radius': 'var(--radius-sm)',
-              cursor: 'pointer',
-              color: theme.fgSubtle,
-              'font-size': sf(11),
-              padding: '1px 6px',
-              'white-space': 'nowrap',
-            }}
-          >
-            MCP logs
-          </button>
         </div>
       </Show>
     </>

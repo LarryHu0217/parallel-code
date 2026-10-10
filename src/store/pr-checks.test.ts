@@ -18,6 +18,7 @@ vi.mock('./persistence', () => ({
 }));
 
 import { setStore, store } from './core';
+import { getMergedTasksTodayCount } from './completion';
 import { getPrChecks, startPrChecksSubscription } from './pr-checks';
 
 const flushPromises = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
@@ -25,6 +26,7 @@ const mockOn = vi.fn();
 
 beforeEach(() => {
   vi.clearAllMocks();
+  setStore({ completedTaskCount: 0, countedMergedPrs: [] });
   setStore('taskOrder', []);
   setStore('collapsedTaskOrder', []);
   setStore('tasks', {});
@@ -125,7 +127,16 @@ describe('startPrChecksSubscription updates', () => {
       cleared: true,
     };
 
-    updateHandler?.({ ...cleared, merged: true });
+    const merge = {
+      ...cleared,
+      merged: true,
+      prUrl: 'https://github.com/acme/app/pull/12',
+      mergedAt: new Date().toISOString(),
+    };
+    updateHandler?.(merge);
+    updateHandler?.(merge);
+    expect(getMergedTasksTodayCount()).toBe(1);
+    expect(mockSaveState).toHaveBeenCalledTimes(1);
     expect(getPrChecks('task-1')).toMatchObject({ overall: 'none', merged: true });
 
     updateHandler?.({ ...cleared, merged: false });

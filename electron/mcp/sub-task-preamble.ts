@@ -3,7 +3,7 @@ function preamble(verifyLine: string): string {
 
 You have two sub-task MCP tools available via the parallel-code server:
 
-- land_self — Happy-path finish line. Call this after committing your work and passing verification. The backend will merge your branch into the coordinator branch and clean up your task.
+- land_self — Happy-path finish line. Call this after committing your work and passing verification. The backend will merge your branch into its base branch (main unless the coordinator chose otherwise) and clean up your task.
 - signal_done — Legacy/manual-review finish line. Use this only if the coordinator explicitly asks to review and land your branch manually.
   Include a concise result: summary, verification checks actually run, repository-relative artifact paths if useful, and unresolved issues. Checks are agent reports; never invent passing results.
 

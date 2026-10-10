@@ -1,7 +1,7 @@
 import { For, Match, Show, Switch, createEffect, createMemo, on } from 'solid-js';
 import type { ChatItem } from '../../../electron/shared/agent-chat-types';
 import { DiffStat, DiffView } from './DiffView';
-import { DiffIcon } from '../icons';
+import { ChevronRightIcon, DiffIcon } from '../icons';
 
 const activityLabels = {
   running: 'Running',
@@ -38,15 +38,7 @@ function ActivityRow(props: ActivityActions & { item: ChatItem }) {
   });
   return (
     <div data-chat-id={props.item.id}>
-      <details
-        class="chat-tool"
-        // Edits are what the reader came for; reads and commands stay one line.
-        ref={(element) => {
-          details = element;
-          element.open = !!activity()?.diffs?.length;
-        }}
-        data-status={activity()?.status}
-      >
+      <details class="chat-tool" ref={details} data-status={activity()?.status}>
         <summary>
           <span class="chat-tool-type">{typeLabels[activity()?.type ?? 'tool']}</span>
           <span class="chat-tool-label" title={activity()?.label}>
@@ -131,12 +123,22 @@ function totalStats(items: ChatItem[]) {
 /** One run of consecutive tool calls, folded into a summary line. */
 export function ActivityGroup(props: ActivityActions & { items: ChatItem[] }) {
   let details: HTMLDetailsElement | undefined;
-  const failures = () => props.items.filter((item) => item.activity?.status === 'failed').length;
+  const failures = createMemo(
+    () =>
+      new Set(
+        props.items.filter((item) => item.activity?.status === 'failed').map((item) => item.id),
+      ),
+  );
+  const declined = () => props.items.filter((item) => item.activity?.status === 'declined').length;
+  const stopped = () =>
+    props.items.filter((item) => item.activity?.status === 'interrupted').length;
   const running = () => props.items.findLast((item) => item.activity?.status === 'running');
   const summary = createMemo(() => {
     const readFiles = new Set(
       props.items.flatMap((item) =>
-        item.activity?.type !== 'files' ? (item.activity?.files ?? []) : [],
+        item.activity?.type === 'tool' && item.activity.status === 'completed'
+          ? (item.activity.files ?? [])
+          : [],
       ),
     );
     const commands = props.items.filter((item) => item.activity?.type === 'command').length;
@@ -148,43 +150,62 @@ export function ActivityGroup(props: ActivityActions & { items: ChatItem[] }) {
       ),
     );
     const count = props.items.length;
+    const parts = [
+      readFiles.size
+        ? `${readFiles.size} ${readFiles.size === 1 ? 'file' : 'files'} inspected`
+        : '',
+      commands ? `${commands} ${commands === 1 ? 'command' : 'commands'}` : '',
+      changed.size ? `${changed.size} ${changed.size === 1 ? 'file' : 'files'} changed` : '',
+    ].filter(Boolean);
+    const other = props.items.filter((item) => {
+      const activity = item.activity;
+      return (
+        activity?.type !== 'command' &&
+        !(activity?.status === 'completed' && activity.files?.length)
+      );
+    }).length;
+    if (parts.length && other)
+      parts.push(`${other} other ${other === 1 ? 'operation' : 'operations'}`);
     return {
       changed: changed.size,
-      text:
-        `${count} ${count === 1 ? 'operation' : 'operations'}` +
-        (readFiles.size ? ` · ${readFiles.size} files read` : '') +
-        (commands ? ` · ${commands} ${commands === 1 ? 'command' : 'commands'}` : '') +
-        (changed.size ? ` · ${changed.size} changed ${changed.size === 1 ? 'file' : 'files'}` : ''),
+      text: parts.join(' · ') || `${count} ${count === 1 ? 'operation' : 'operations'}`,
     };
   });
   const stats = createMemo(() => totalStats(props.items));
-  createEffect(() => {
-    if (failures() && details) details.open = true;
-  });
-  // Opens once, when the first edit arrives, so the change shows without a click;
-  // closing it afterwards is the reader's choice and sticks. Any edit counts, so a
-  // declined one does not re-arm the opening for the next.
-  // A memo, because `on` re-runs whenever the items change, not when the answer does.
-  const edited = createMemo(() => props.items.some((item) => item.activity?.diffs?.length));
   createEffect(
-    on(edited, (hasEdits) => {
-      if (hasEdits && details) details.open = true;
+    on(failures, (ids, previous) => {
+      if (details && [...ids].some((id) => !previous?.has(id))) details.open = true;
     }),
   );
+  // Keep successful work compact; the reader opens details or uses Review changes.
+  // Failures still open automatically so actionable errors cannot disappear.
   return (
     <div class="chat-activity-group">
       <details ref={details}>
         <summary
           class="chat-activity-summary"
-          data-status={failures() ? 'failed' : running() ? 'running' : 'completed'}
+          data-status={failures().size ? 'failed' : running() ? 'running' : 'completed'}
         >
-          <span>{summary().text}</span>
+          <span class="chat-activity-chevron" aria-hidden="true">
+            <ChevronRightIcon size={14} />
+          </span>
+          <span class="chat-activity-label">{summary().text}</span>
           <Show when={stats()}>{(total) => <DiffStat {...total()} />}</Show>
-          <Show when={failures()}>
-            <strong>{failures()} failed</strong>
+          <Show when={failures().size}>
+            <strong>{failures().size} failed</strong>
+          </Show>
+          <Show when={declined()}>
+            <span class="chat-activity-outcome">{declined()} declined</span>
+          </Show>
+          <Show when={stopped()}>
+            <span class="chat-activity-outcome">{stopped()} stopped</span>
           </Show>
           <Show when={running()}>
-            {(item) => <span class="chat-current-operation">{item().activity?.label}</span>}
+            {(item) => (
+              <span class="chat-current-operation" title={item().activity?.label}>
+                Running · {item().activity?.label || 'Tool activity'}
+              </span>
+            )}
           </Show>
         </summary>
         <For each={props.items}>

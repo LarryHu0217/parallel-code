@@ -1,4 +1,4 @@
-import { Match, Show, Switch, createMemo, type JSX } from 'solid-js';
+import { Match, Show, Switch, createMemo, createSignal, type JSX } from 'solid-js';
 import { errMessage } from '../lib/log';
 import {
   store,
@@ -7,11 +7,11 @@ import {
   getPrChecks,
   getBranchDivergence,
 } from '../store/store';
+import { stageFailedChecksPrompt } from '../store/github';
 import { sameDivergence } from '../lib/branch-divergence';
 import { badgeStyle } from '../lib/badgeStyle';
 import { revealItemInDir, openInEditor } from '../lib/shell';
 import { InfoBar } from './InfoBar';
-import { ProjectSwatch } from './ProjectSwatch';
 import { theme } from '../lib/theme';
 import { isMac } from '../lib/platform';
 import { parseGitHubUrl } from '../lib/github-url';
@@ -41,6 +41,19 @@ type ReviewStatusKind = 'approved' | 'changes-requested' | 'review-needed' | 'dr
 
 /** GitHub's own "merged" purple, so the state reads the same as on github.com. */
 const GITHUB_MERGED_COLOR = '#8957e5';
+
+/** Solid pill like GitHub's merged label: a finished PR is the one state worth a full badge. */
+const mergedBadgeStyle: JSX.CSSProperties = {
+  'font-size': '11px',
+  'font-weight': '600',
+  padding: '1px 6px',
+  gap: '4px',
+  'border-radius': 'var(--radius-xs)',
+  background: GITHUB_MERGED_COLOR,
+  // Fixed white, not a theme token: the fill is theme-independent too.
+  color: '#fff',
+  'white-space': 'nowrap',
+};
 
 interface ReviewStatus {
   kind: ReviewStatusKind;
@@ -72,6 +85,58 @@ function ReviewStatusIcon(props: { kind: ReviewStatusKind }) {
   );
 }
 
+/** Red because a failed PR check is the kind of urgency the fill is reserved for. */
+const fixCiBtnStyle: JSX.CSSProperties = {
+  background: theme.error,
+  color: '#fff',
+  border: 'none',
+  'border-radius': 'var(--radius-xs)',
+  padding: '1px 8px',
+  'margin-right': '8px',
+  'font-family': 'inherit',
+  'font-size': '11px',
+  'font-weight': '600',
+  cursor: 'pointer',
+  'white-space': 'nowrap',
+  'flex-shrink': '0',
+};
+
+/** Stages the failed checks and their log tails as a prompt in the task input. */
+function FixCiButton(props: { taskId: string; prUrl: string; prNumber: number }) {
+  const [busy, setBusy] = createSignal(false);
+  const fix = async () => {
+    setBusy(true);
+    try {
+      const staged = await stageFailedChecksPrompt(props.taskId, {
+        number: props.prNumber,
+        url: props.prUrl,
+      });
+      showNotification(
+        staged
+          ? 'Prompt staged in the task input. Review it, then send.'
+          : 'No failed checks found.',
+      );
+    } catch (err) {
+      showNotification(`Could not collect failed checks: ${errMessage(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <button
+      type="button"
+      class="task-pr-fix-ci"
+      disabled={busy()}
+      aria-busy={busy()}
+      onClick={() => void fix()}
+      title="Collect failed checks and their log tails into a prompt for the agent"
+      style={{ ...fixCiBtnStyle, opacity: busy() ? '0.7' : '1' }}
+    >
+      {busy() ? 'Collecting…' : 'Fix CI'}
+    </button>
+  );
+}
+
 interface TaskBranchInfoBarProps {
   task: Task;
   onEditProject: (projectId: string) => void;
@@ -81,6 +146,11 @@ interface TaskBranchInfoBarProps {
 
 export function TaskBranchInfoBar(props: TaskBranchInfoBarProps) {
   const project = () => getProject(props.task.projectId);
+  // Keep project color separate from the status indicators above the bar.
+  const projectStripe = () => {
+    const color = project()?.color;
+    return color ? { 'border-left': `3px solid ${color}` } : undefined;
+  };
   const mod = isMac ? 'Cmd' : 'Ctrl';
   const isPrUrl = (url: string | undefined): boolean => {
     const parsed = url ? parseGitHubUrl(url) : null;
@@ -150,7 +220,7 @@ export function TaskBranchInfoBar(props: TaskBranchInfoBarProps) {
   };
 
   return (
-    <InfoBar class="task-branch-info-bar">
+    <InfoBar class="task-branch-info-bar" style={projectStripe()}>
       <Show when={project()}>
         {(p) => (
           <button
@@ -161,7 +231,6 @@ export function TaskBranchInfoBar(props: TaskBranchInfoBarProps) {
             aria-label={`Project: ${p().name} · Project settings`}
             style={{ ...infoBarBtnStyle, margin: '0 8px 0 0' }}
           >
-            <ProjectSwatch color={p().color} />
             <span class="task-branch-project-label">{p().name}</span>
             <span class="task-branch-project-compact-label" aria-hidden="true">
               {projectInitials(p().name)}
@@ -272,7 +341,7 @@ export function TaskBranchInfoBar(props: TaskBranchInfoBarProps) {
               window.open(url(), '_blank');
             }
           };
-          return (
+          const prButton = (
             <button
               type="button"
               class="task-branch-info-button task-pr-link"
@@ -311,7 +380,12 @@ export function TaskBranchInfoBar(props: TaskBranchInfoBarProps) {
               </span>
               <Show when={reviewStatus()}>
                 {(review) => (
-                  <span class="task-pr-review-status" style={{ color: review().color }}>
+                  <span
+                    class="task-pr-review-status"
+                    style={
+                      review().kind === 'merged' ? mergedBadgeStyle : { color: review().color }
+                    }
+                  >
                     <span class="task-pr-review-label">{review().label}</span>
                     <span class={`task-pr-review-icon task-pr-review-icon--${review().kind}`}>
                       <ReviewStatusIcon kind={review().kind} />
@@ -325,6 +399,17 @@ export function TaskBranchInfoBar(props: TaskBranchInfoBarProps) {
                 </span>
               </Show>
             </button>
+          );
+          const ciFailed = () => pr()?.overall === 'failure' && !pr()?.merged;
+          return (
+            <>
+              {prButton}
+              <Show when={ciFailed() && prNumber()}>
+                {(number) => (
+                  <FixCiButton taskId={props.task.id} prUrl={url()} prNumber={Number(number())} />
+                )}
+              </Show>
+            </>
           );
         }}
       </Show>

@@ -14,6 +14,8 @@ const OPEN_POLL_MS = 2000;
 const BACKGROUND_POLL_MS = 5000;
 /** Share of the whole machine above which the button turns to the warning colour. */
 const BUSY_CPU_SHARE = 50;
+/** CPU or RAM share at which the button turns red. */
+const NEAR_CAPACITY_SHARE = 90;
 const PANEL_WIDTH = 440;
 
 /**
@@ -82,10 +84,17 @@ export function ResourcesPanel() {
   let button: HTMLButtonElement | undefined;
   let panel: HTMLDivElement | undefined;
 
-  const busy = () => {
+  const resourceColor = () => {
     const current = snapshot();
-    if (!current) return false;
-    return cpuShare(snapshotTotals(current).cpuPercent, current.cpuCount) >= BUSY_CPU_SHARE;
+    if (current) {
+      const totals = snapshotTotals(current);
+      const cpu = cpuShare(totals.cpuPercent, current.cpuCount);
+      const memory =
+        current.totalMemoryBytes > 0 ? (totals.memoryBytes / current.totalMemoryBytes) * 100 : 0;
+      if (cpu >= NEAR_CAPACITY_SHARE || memory >= NEAR_CAPACITY_SHARE) return theme.error;
+      if (cpu >= BUSY_CPU_SHARE) return theme.warning;
+    }
+    return open() ? theme.fg : theme.fgMuted;
   };
 
   createEffect(() => {
@@ -139,7 +148,7 @@ export function ResourcesPanel() {
           background: open() ? theme.bgHover : 'none',
           border: 'none',
           'border-radius': 'var(--radius-xs)',
-          color: busy() ? theme.warning : open() ? theme.fg : theme.fgMuted,
+          color: resourceColor(),
           font: 'inherit',
           padding: '1px 6px',
           cursor: 'pointer',

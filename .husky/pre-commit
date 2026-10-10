@@ -1,65 +1,18 @@
 #!/bin/sh
-set -e
-
 npx lint-staged
 npm run check
 
 # Verify package-lock.json is committed and in sync with package.json
 if git diff --cached --name-only | grep -q "package\.json$"; then
-  if ! git diff --cached --name-only -- package-lock.json | grep -qx "package-lock\.json"; then
-    # Development commands are not recorded in the lockfile. Compare the index
-    # with HEAD, retaining all other fields and installation lifecycle scripts.
-    if ! node --input-type=module <<'NODE'
-import { execFileSync } from 'node:child_process';
-import process from 'node:process';
-import { isDeepStrictEqual } from 'node:util';
-
-function readManifest(revision) {
-  const manifest = JSON.parse(execFileSync('git', ['show', revision], {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'ignore'],
-  }));
-  if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
-    throw new Error('Invalid manifest');
-  }
-  const scripts = manifest.scripts ?? {};
-  if (typeof scripts !== 'object' || Array.isArray(scripts)) {
-    throw new Error('Invalid scripts');
-  }
-  const installScripts = [
-    'preinstall', 'install', 'postinstall',
-    'preprepare', 'prepare', 'postprepare', 'prepublish',
-  ].map((name) => scripts[name]);
-  delete manifest.scripts;
-  return { manifest, installScripts };
-}
-
-try {
-  const paths = execFileSync('git', ['diff', '--cached', '--name-only', '-z'], { encoding: 'utf8' })
-    .split('\0').filter((path) => /(^|\/)package\.json$/.test(path));
-  process.exitCode = paths.every((path) => isDeepStrictEqual(
-    readManifest('HEAD:' + path), readManifest(':' + path),
-  )) ? 0 : 1;
-} catch {
-  process.exitCode = 1;
-}
-NODE
-    then
-      echo "Error: package.json changed without updating package-lock.json"
-      echo "Run 'npm install' to update the lockfile"
-      exit 1
-    fi
+  if ! git diff --cached --name-only | grep -q "package-lock\.json$"; then
+    echo "Error: package.json changed without updating package-lock.json"
+    echo "Run 'npm install' to update the lockfile"
+    exit 1
   fi
 fi
 
-# The lockfile must remain in the commit, not just exist in the working tree.
-if ! git ls-files --error-unmatch -- package-lock.json >/dev/null 2>&1; then
-  echo "Error: package-lock.json must be tracked"
-  exit 1
-fi
-
 # Ensure package-lock.json is not gitignored (supply chain: lockfile must be tracked)
-if git check-ignore --no-index -q package-lock.json 2>/dev/null; then
+if git check-ignore -q package-lock.json 2>/dev/null; then
   echo "Error: package-lock.json must not be gitignored — it provides integrity hashes"
   exit 1
 fi

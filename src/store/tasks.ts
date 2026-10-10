@@ -1,3 +1,4 @@
+import { matchesTaskProjectFilter } from './task-project-filter';
 import { parseCompletionRecord } from '../../electron/shared/completion-report';
 import {
   registerTaskAuthority,
@@ -132,7 +133,12 @@ function removeTaskDraftEntries(
   delete s.taskGitStatus[taskId];
 
   const neighborId =
-    s.activeTaskId === taskId ? selectActiveNeighborAfterRemoval(s.taskOrder, taskId) : null;
+    s.activeTaskId === taskId
+      ? selectActiveNeighborAfterRemoval(
+          s.taskOrder.filter((id) => id === taskId || matchesTaskProjectFilter(id)),
+          taskId,
+        )
+      : null;
 
   cleanupPanelEntries(s, taskId);
 
@@ -167,6 +173,8 @@ function initTaskInStore(
       assignFreshSessionId(s, taskId, agent.id, agent.def.command);
       s.taskOrder.push(taskId);
       if (opts.activate) {
+        if (s.taskProjectFilter && s.taskProjectFilter !== task.projectId)
+          s.taskProjectFilter = null;
         s.activeTaskId = taskId;
         s.activeAgentId = agent.id;
       }
@@ -657,7 +665,7 @@ export async function mergeTask(
 
   if (cleanup) {
     recordMergedLines(mergeResult.lines_added, mergeResult.lines_removed);
-    recordTaskMerged();
+    recordTaskMerged(task.prUrl ?? task.githubUrl);
     armSpCompletion(taskId, {
       kind: 'merged',
       linesAdded: mergeResult.lines_added,
@@ -674,7 +682,11 @@ export async function mergeTask(
         coordinatorTaskId: task.coordinatedBy,
       }).catch((err) => console.warn('[MCP] Failed to notify coordinator of task close:', err));
     }
-    await delegationRequest({ action: 'unregister', taskId });
+    // The worktree and branch are already gone, so the task must leave the store
+    // regardless: a kept task cannot be restored and fails on every restart.
+    await delegationRequest({ action: 'unregister', taskId }).catch((err: unknown) =>
+      logWarn('tasks', 'Failed to unregister merged task', { taskId, err: String(err) }),
+    );
     removeTaskFromStore(taskId, [...agentIds, ...shellAgentIds]);
   }
 }
@@ -1058,6 +1070,8 @@ export async function collapseTask(taskId: string): Promise<void> {
     produce((s) => {
       if (!s.tasks[taskId]) return;
       s.tasks[taskId].collapsed = true;
+      s.tasks[taskId].snoozedUntil = undefined;
+      s.tasks[taskId].snoozedUntilCi = undefined;
       s.tasks[taskId].savedAgentDef = agentDefs[0];
       s.tasks[taskId].savedAgentDefs = agentDefs.length > 0 ? agentDefs : undefined;
       s.tasks[taskId].savedAgentSessionIds = savedAgentIds.map(
@@ -1084,7 +1098,10 @@ export async function collapseTask(taskId: string): Promise<void> {
 
       // Switch active task to neighbor
       if (s.activeTaskId === taskId) {
-        const neighbor = selectActiveNeighborAfterRemoval(originalOrder, taskId);
+        const neighbor = selectActiveNeighborAfterRemoval(
+          originalOrder.filter(matchesTaskProjectFilter),
+          taskId,
+        );
         s.activeTaskId = neighbor;
         const neighborTask = neighbor ? s.tasks[neighbor] : null;
         s.activeAgentId = neighborTask ? effectiveAgentId(neighborTask) : null;
@@ -1095,7 +1112,8 @@ export async function collapseTask(taskId: string): Promise<void> {
   rescheduleTaskStatusPolling();
 }
 
-export function uncollapseTask(taskId: string): void {
+export function uncollapseTask(taskId: string, options: { activate?: boolean } = {}): void {
+  const activate = options.activate ?? true;
   const task = store.tasks[taskId];
   if (!task || !task.collapsed) return;
 
@@ -1113,9 +1131,13 @@ export function uncollapseTask(taskId: string): void {
     produce((s) => {
       const t = s.tasks[taskId];
       t.collapsed = false;
+      t.snoozedUntil = undefined;
       s.collapsedTaskOrder = s.collapsedTaskOrder.filter((id) => id !== taskId);
       s.taskOrder.push(taskId);
-      s.activeTaskId = taskId;
+      if (activate) {
+        if (s.taskProjectFilter && s.taskProjectFilter !== t.projectId) s.taskProjectFilter = null;
+        s.activeTaskId = taskId;
+      }
 
       for (let i = 0; i < restoredAgents.length; i++) {
         const { id: agentId, def } = restoredAgents[i];
@@ -1147,7 +1169,7 @@ export function uncollapseTask(taskId: string): void {
       t.savedAgentSessionIds = undefined;
       t.savedSelectedAgentIndex = undefined;
       t.savedPromptedAgentIndexes = undefined;
-      s.activeAgentId = t.selectedAgentId ?? null;
+      if (activate) s.activeAgentId = t.selectedAgentId ?? null;
     }),
   );
 
