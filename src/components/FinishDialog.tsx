@@ -18,7 +18,7 @@ import { createPushRun } from './push-run';
 import { getProject } from '../store/store';
 import { showNotification } from '../store/notification';
 import { theme } from '../lib/theme';
-import { SyncIcon, UploadIcon } from './icons';
+import { GitMergeIcon, SyncIcon, UploadIcon } from './icons';
 
 export type FinishAction = 'merge' | 'push';
 
@@ -265,6 +265,7 @@ export function FinishDialog(props: FinishDialogProps) {
         footerNote={footerNote()}
         confirmLoading={merge.merging() || prMerging()}
         confirmLabel={confirmLabel()}
+        confirmIcon={pr.mode() === 'merged' ? undefined : <GitMergeIcon size={14} />}
         cancelLabel={push.pushing() ? 'Close' : 'Cancel'}
         onConfirm={confirm}
         onCancel={() => props.onClose()}
