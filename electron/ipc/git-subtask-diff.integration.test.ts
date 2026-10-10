@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import {
   getAllFileDiffs,
   getAllFileDiffsFromBranch,
+  getBranchCommitMessages,
   getBranchCommits,
   getChangedFiles,
   getChangedFilesFromBranch,
@@ -581,5 +582,25 @@ describe('subtask diffs after the child moves to upstream or loses its parent', 
       (await getChangedFilesFromBranch(root, 'child', 'parent')).map((file) => file.path),
     ).toEqual(['child.txt']);
     expect((await getWorktreeStatus(child, 'parent')).has_committed_changes).toBe(true);
+  });
+});
+
+describe('getBranchCommitMessages', () => {
+  it('returns subjects and multi-paragraph bodies, oldest first', async () => {
+    const { child } = fixture();
+    writeFileSync(join(child, 'a.txt'), 'a\n');
+    git(child, 'add', 'a.txt');
+    git(child, 'commit', '-m', 'feat: a', '-m', 'First paragraph.\n\nSecond paragraph.');
+    commitFile(child, 'b.txt', 'b\n');
+
+    expect(
+      (await getBranchCommitMessages(child, 'parent')).map(({ message, body }) => ({
+        message,
+        body,
+      })),
+    ).toEqual([
+      { message: 'feat: a', body: 'First paragraph.\n\nSecond paragraph.' },
+      { message: 'b.txt', body: '' },
+    ]);
   });
 });

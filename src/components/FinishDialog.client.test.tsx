@@ -31,6 +31,11 @@ vi.mock('../store/store', () => ({
 vi.mock('../lib/ipc', () => ({
   invoke: vi.fn(async (channel: string) => {
     if (channel === IPC.GetBranchLog) return '';
+    if (channel === IPC.GetBranchCommits)
+      return [
+        { hash: 'a1', message: 'feat: add thing', body: 'Co-authored-by: Bot <bot@x>' },
+        { hash: 'b2', message: 'fix: tweak thing', body: 'Because reasons.' },
+      ];
     if (channel === IPC.CheckMergeStatus) return { conflicting_files: [], main_ahead_count: 0 };
     return { current_branch: 'task/parent', has_committed_changes: true, head_sha: 'local' };
   }),
@@ -254,6 +259,54 @@ describe('FinishDialog merge', () => {
     expect(confirmButton()?.textContent).toBe('Merge into main');
     confirmButton()?.click();
     expect(mergeTask).toHaveBeenCalled();
+  });
+
+  it('prefills the squash description once commits load, if ticked before', async () => {
+    mount();
+    const squash = [...document.querySelectorAll('label')].find((l) =>
+      l.textContent?.includes('Squash commits'),
+    );
+    squash?.querySelector('input')?.click();
+    await flush();
+    expect(
+      document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Commit description"]')
+        ?.value,
+    ).toContain('* feat: add thing');
+  });
+
+  it('prefills a GitHub-style squash title and description', async () => {
+    mount();
+    await flush();
+    const squash = [...document.querySelectorAll('label')].find((l) =>
+      l.textContent?.includes('Squash commits'),
+    );
+    squash?.querySelector('input')?.click();
+    const title = document.querySelector<HTMLInputElement>('input[aria-label="Commit title"]');
+    const body = document.querySelector<HTMLTextAreaElement>(
+      'textarea[aria-label="Commit description"]',
+    );
+    expect(title?.value).toBe('Parent');
+    expect(body?.value).toBe(
+      '* feat: add thing\n\n* fix: tweak thing\n\nBecause reasons.\n\nCo-authored-by: Bot <bot@x>',
+    );
+
+    if (title) {
+      title.value = ' ';
+      title.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    expect(confirmButton()?.disabled).toBe(true);
+    expect(document.querySelector('[data-testid="footer-note"]')?.textContent).toBe(
+      'Add a commit title.',
+    );
+    if (title) {
+      title.value = 'feat: thing';
+      title.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    confirmButton()?.click();
+    expect(mergeTask).toHaveBeenCalledWith(
+      'parent',
+      expect.objectContaining({ squash: true, message: `feat: thing\n\n${body?.value}` }),
+    );
   });
 });
 

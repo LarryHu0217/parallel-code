@@ -1,4 +1,4 @@
-import { createEffect, createResource, createSignal } from 'solid-js';
+import { createEffect, createResource, createSignal, untrack } from 'solid-js';
 import { IPC } from '../../electron/ipc/channels';
 import { isAdoptableBranch } from '../lib/branch-divergence';
 import type { CoverageComparison } from '../lib/coverage-comparison';
@@ -14,8 +14,9 @@ import {
   store,
 } from '../store/store';
 import type { Task } from '../store/types';
-import type { MergeStatus, WorktreeStatus } from '../ipc/types';
+import type { CommitInfo, MergeStatus, WorktreeStatus } from '../ipc/types';
 import { buildMergeReadiness } from './merge-readiness';
+import { buildSquashMessage, formatSquashMessage } from './squash-message';
 
 interface MergeStateProps {
   open: boolean;
@@ -31,7 +32,8 @@ export function createMergeState(props: MergeStateProps) {
   const [merging, setMerging] = createSignal(false);
   const [squash, setSquash] = createSignal(false);
   const [cleanupAfterMerge, setCleanupAfterMerge] = createSignal(false);
-  const [squashMessage, setSquashMessage] = createSignal('');
+  const [squashTitle, setSquashTitle] = createSignal('');
+  const [squashBody, setSquashBody] = createSignal('');
   // Rebase and merge-base share one slot: both rewrite the same worktree.
   const [syncing, setSyncing] = createSignal<BaseSync | null>(null);
   const [syncError, setSyncError] = createSignal('');
@@ -47,6 +49,14 @@ export function createMergeState(props: MergeStateProps) {
     (src) =>
       invoke<string>(IPC.GetBranchLog, { worktreePath: src.path, baseBranch: src.baseBranch }),
   );
+  const [branchCommits, { refetch: refetchBranchCommits, mutate: mutateBranchCommits }] =
+    createResource(resourceSource, (src) =>
+      invoke<CommitInfo[]>(IPC.GetBranchCommits, {
+        worktreePath: src.path,
+        baseBranch: src.baseBranch,
+        withBody: true,
+      }),
+    );
   const [worktreeStatus, { refetch: refetchWorktreeStatus, mutate: mutateWorktreeStatus }] =
     createResource(resourceSource, (src) =>
       invoke<WorktreeStatus>(IPC.GetWorktreeStatus, {
@@ -64,6 +74,7 @@ export function createMergeState(props: MergeStateProps) {
   );
   const refetchAll = () => {
     refetchBranchLog();
+    refetchBranchCommits();
     refetchMergeStatus();
     refetchWorktreeStatus();
   };
@@ -123,6 +134,7 @@ export function createMergeState(props: MergeStateProps) {
     if (hasBranchMismatch()) return "The worktree is not on this task's branch.";
     if (!hasCommittedChangesToMerge()) return 'Nothing to merge yet.';
     if (hasConflicts()) return `Resolve the conflicts with ${baseBranchName()} first.`;
+    if (squash() && !squashTitle().trim()) return 'Add a commit title.';
     return undefined;
   };
   const canMerge = () => !merging() && !mergeBlocker();
@@ -131,7 +143,8 @@ export function createMergeState(props: MergeStateProps) {
     if (props.open) {
       setCleanupAfterMerge(props.initialCleanup);
       setSquash(false);
-      setSquashMessage('');
+      setSquashTitle('');
+      setSquashBody('');
       setMergeError('');
       setSyncError('');
       setSyncDone(null);
@@ -145,6 +158,7 @@ export function createMergeState(props: MergeStateProps) {
       // where source tracking alone misses (e.g. external rebase by AI
       // agent while dialog was closed).
       mutateBranchLog(undefined);
+      mutateBranchCommits(undefined);
       mutateMergeStatus(undefined);
       mutateWorktreeStatus(undefined);
       refetchAll();
@@ -176,18 +190,17 @@ export function createMergeState(props: MergeStateProps) {
     }
   }
 
-  function enableSquash(checked: boolean): void {
-    setSquash(checked);
-    if (checked && !squashMessage()) {
-      const log = branchLog() ?? '';
-      setSquashMessage(
-        log
-          .split('\n')
-          .map((l) => l.replace(/^- [a-f0-9]+ /, '- '))
-          .join('\n'),
-      );
-    }
-  }
+  // Squash may be ticked before the commits load; prefill once they do, unless typed in.
+  createEffect(() => {
+    const commits = branchCommits();
+    if (!squash() || !commits || untrack(squashTitle) || untrack(squashBody)) return;
+    const message = buildSquashMessage(
+      commits,
+      untrack(() => props.task.name),
+    );
+    setSquashTitle(message.title);
+    setSquashBody(message.body);
+  });
 
   /** Resolves true when the merge went through; errors land in `mergeError`. */
   async function merge(): Promise<boolean> {
@@ -196,7 +209,9 @@ export function createMergeState(props: MergeStateProps) {
     try {
       await mergeTask(props.task.id, {
         squash: squash(),
-        message: squash() ? squashMessage() || undefined : undefined,
+        message: squash()
+          ? formatSquashMessage({ title: squashTitle(), body: squashBody() })
+          : undefined,
         cleanup: !requiresSeparateClose() && cleanupAfterMerge(),
       });
       return true;
@@ -227,9 +242,11 @@ export function createMergeState(props: MergeStateProps) {
     mergeError,
     merging,
     squash,
-    enableSquash,
-    squashMessage,
-    setSquashMessage,
+    setSquash,
+    squashTitle,
+    setSquashTitle,
+    squashBody,
+    setSquashBody,
     cleanupAfterMerge,
     setCleanupAfterMerge,
     syncing,

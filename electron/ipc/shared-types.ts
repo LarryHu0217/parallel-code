@@ -137,7 +137,10 @@ export interface FileDiffResult {
 
 export interface CommitInfo {
   hash: string;
+  /** Subject line. */
   message: string;
+  /** Message after the subject; only filled when requested with `withBody`. */
+  body?: string;
 }
 
 export type PrCheckBucket = 'pass' | 'fail' | 'pending' | 'skipping' | 'cancel';

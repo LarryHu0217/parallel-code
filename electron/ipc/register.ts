@@ -120,6 +120,7 @@ import {
   checkMergeStatus,
   mergeTask,
   getBranchLog,
+  getBranchCommitMessages,
   pushTask,
   rebaseTask,
   mergeBaseIntoTask,
@@ -1103,6 +1104,8 @@ export function registerAllHandlers(win: BrowserWindow): void {
   });
   ipcMain.handle(IPC.GetBranchCommits, (_e, args) => {
     const worktreePath = worktreePathArg(args);
+    if (args.withBody === true)
+      return getBranchCommitMessages(worktreePath, optionalBaseBranch(args));
     const recentFallback =
       typeof args.recentFallback === 'number' && args.recentFallback > 0
         ? args.recentFallback
