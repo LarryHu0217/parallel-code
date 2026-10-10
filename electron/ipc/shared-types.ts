@@ -4,6 +4,8 @@ import type { TriageKind, TriageSort } from '../shared/github-triage.js';
 export interface AutoDiscoveredMcpConfigState {
   path: string;
   writtenParallelCodeFingerprint: string;
+  /** Original user permissions, without copying any configuration content. */
+  previousMode?: number;
 }
 
 export type PtyOutput =

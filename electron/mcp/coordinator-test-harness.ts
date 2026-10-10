@@ -29,6 +29,7 @@ const mocks = vi.hoisted(() => {
   const mockWriteFileSync = vi.fn();
   const mockReadFileSync = vi.fn();
   const mockExistsSync = vi.fn();
+  const mockStatSync = vi.fn();
   const mockUnlinkSync = vi.fn();
   const mockMkdirSync = vi.fn();
   const mockFsWriteFile = vi.fn();
@@ -68,6 +69,7 @@ const mocks = vi.hoisted(() => {
     mockWriteFileSync,
     mockReadFileSync,
     mockExistsSync,
+    mockStatSync,
     mockUnlinkSync,
     mockMkdirSync,
     mockFsWriteFile,
@@ -112,6 +114,7 @@ vi.mock('fs', () => ({
   writeFileSync: mocks.mockWriteFileSync,
   readFileSync: mocks.mockReadFileSync,
   existsSync: mocks.mockExistsSync,
+  statSync: mocks.mockStatSync,
   unlinkSync: mocks.mockUnlinkSync,
   mkdirSync: mocks.mockMkdirSync,
 }));
@@ -261,6 +264,7 @@ export const {
   mockWriteFileSync,
   mockReadFileSync,
   mockExistsSync,
+  mockStatSync,
   mockUnlinkSync,
   mockMkdirSync,
   mockFsWriteFile,
@@ -332,6 +336,8 @@ export function resetCoordinatorMocks(): void {
   mockReadFileSync.mockReturnValue('# existing\n');
   mockExistsSync.mockReset();
   mockExistsSync.mockReturnValue(false);
+  mockStatSync.mockReset();
+  mockStatSync.mockReturnValue({ mode: 0o600 });
   mockUnlinkSync.mockReset();
   mockMkdirSync.mockReset();
 

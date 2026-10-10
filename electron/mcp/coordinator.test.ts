@@ -19,6 +19,7 @@ import {
   mockSpawnSync,
   mockReadFileSync,
   mockExistsSync,
+  mockStatSync,
   mockUnlinkSync,
   mockFsReadFile,
   mockFsAccess,
@@ -4169,6 +4170,36 @@ describe('Coordinator sub-task MCP config isolation', () => {
     );
   });
 
+  it('refuses to overwrite a user Kimi config when its permissions cannot be read', async () => {
+    const configPath = '/tmp/test/.kimi-code/mcp.json';
+    mockExistsSync.mockImplementation((path) => path === configPath);
+    mockReadFileSync.mockImplementation((path) =>
+      path === configPath
+        ? JSON.stringify({ mcpServers: { other: { command: 'user-server' } } })
+        : '# existing\n',
+    );
+    mockStatSync.mockImplementationOnce(() => {
+      throw new Error('permission lookup failed');
+    });
+    coordinator.setCoordinatorSpawnDefaults('coord-1', 'kimi', []);
+    coordinator.setMCPServerInfo(
+      'coord-1',
+      'http://localhost:3001',
+      'coordinator-token',
+      'subtask-token',
+      '/path/server.js',
+    );
+    await expect(
+      coordinator.createTask({
+        name: 'test',
+        prompt: 'do',
+        coordinatorTaskId: 'coord-1',
+      }),
+    ).rejects.toThrow('permission lookup failed');
+    expect(mockAtomicWriteFileSync.mock.calls.some(([path]) => path === configPath)).toBe(false);
+    expect(mockSpawnAgent).not.toHaveBeenCalled();
+  });
+
   it('preserves concurrent Kimi config edits while removing its managed entry', async () => {
     const configPath = '/tmp/test/.kimi-code/mcp.json';
     let currentConfig = JSON.stringify({
@@ -4243,6 +4274,7 @@ describe('Coordinator sub-task MCP config isolation', () => {
     expect(persistedState).toEqual({
       path: configPath,
       writtenParallelCodeFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+      previousMode: 0o600,
     });
     expect(JSON.stringify(persistedState)).not.toContain('old-subtask-token');
     expect(JSON.stringify(persistedState)).not.toContain('other-server');
@@ -4275,6 +4307,7 @@ describe('Coordinator sub-task MCP config isolation', () => {
     expect(result.autoDiscoveredMcpConfig).toEqual({
       path: configPath,
       writtenParallelCodeFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+      previousMode: 0o600,
     });
     const refreshed = JSON.parse(currentConfig) as {
       mcpServers: { 'parallel-code': { env: Record<string, string> } };
@@ -4746,6 +4779,47 @@ describe('Coordinator hydrateTask — restart hydration', () => {
       { taskId: task.id },
     );
   });
+
+  it.each([-1, 0.5, 0o1000])(
+    'ignores invalid persisted permission mode %s',
+    async (previousMode) => {
+      coordinator.setCoordinatorSpawnDefaults('coord-1', 'kimi', []);
+      coordinator.setMCPServerInfo(
+        'coord-1',
+        'http://localhost:3001',
+        'coordinator-token',
+        'subtask-token',
+        '/path/server.js',
+      );
+      const task = await coordinator.createTask({
+        name: 'test',
+        prompt: 'do',
+        coordinatorTaskId: 'coord-1',
+      });
+      const liveState = task.autoDiscoveredMcpConfig;
+      if (!liveState) throw new Error('Expected managed discovery state');
+      liveState.previousMode = 0o640;
+      const result = coordinator.hydrateTask({
+        id: task.id,
+        name: task.name,
+        projectId: task.projectId,
+        projectRoot: task.projectRoot,
+        branchName: task.branchName,
+        worktreePath: task.worktreePath,
+        agentId: task.agentId,
+        coordinatorTaskId: task.coordinatorTaskId,
+        mcpConfigPath: task.mcpConfigPath,
+        agentCommand: task.agentCommand,
+        autoDiscoveredMcpConfig: { ...liveState, previousMode },
+      });
+      expect(result.autoDiscoveredMcpConfig?.previousMode).toBe(0o640);
+      expect(mockLogWarn).toHaveBeenCalledWith(
+        'coordinator.kimi_mcp',
+        'ignored invalid persisted Kimi MCP state; preserving live state',
+        { taskId: task.id },
+      );
+    },
+  );
 
   it('hydrateTask restores an undelivered initial prompt for backend delivery', () => {
     coordinator.hydrateTask({

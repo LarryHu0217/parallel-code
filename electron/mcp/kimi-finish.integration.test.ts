@@ -2,12 +2,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import {
   appendFileSync,
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   realpathSync,
   rmSync,
+  statSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -30,7 +32,7 @@ function git(cwd: string, ...args: string[]): string {
   }).trim();
 }
 
-async function fixture(command = 'kimi') {
+async function fixture(command = 'kimi', mode = 0o644, fallback = false) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'kimi-finish-')));
   directories.push(root);
   git(root, 'init', '-b', 'main');
@@ -46,10 +48,17 @@ async function fixture(command = 'kimi') {
   const id = randomUUID();
   const config = getSubTaskMcpConfigPath(null, '', id);
   credentials.push(config);
-  const discovery = join(child, '.kimi-code/mcp.json');
+  if (fallback) {
+    mkdirSync(join(child, '.kimi-code'), { recursive: true });
+    writeFileSync(join(child, '.kimi-code/mcp.json'), '{}');
+    git(child, 'add', '.kimi-code/mcp.json');
+    git(child, 'commit', '-m', 'track preferred discovery config');
+  }
+  const discovery = join(child, fallback ? '.mcp.json' : '.kimi-code/mcp.json');
   const other = { command: 'user-owned-server' };
   mkdirSync(dirname(discovery), { recursive: true });
   writeFileSync(discovery, JSON.stringify({ mcpServers: { other } }));
+  chmodSync(discovery, mode);
   const coordinator = new Coordinator();
   coordinator.setNotify(() => undefined);
   coordinator.registerCoordinator('parent', 'project', {
@@ -65,7 +74,7 @@ async function fixture(command = 'kimi') {
     'synthetic-child-token',
     '/server.js',
   );
-  coordinator.hydrateTask({
+  const hydration = {
     id,
     name: 'child',
     projectId: 'project',
@@ -75,10 +84,11 @@ async function fixture(command = 'kimi') {
     worktreePath: child,
     agentId: `agent-${id}`,
     coordinatorTaskId: 'parent',
-    integrationPolicy: 'review',
+    integrationPolicy: 'review' as const,
     agentCommand: command,
     mcpConfigPath: config,
-  });
+  };
+  coordinator.hydrateTask(hydration);
   const service = new DelegationService({
     coordinator: async () => coordinator,
     currentCoordinator: () => coordinator,
@@ -125,7 +135,19 @@ async function fixture(command = 'kimi') {
     git(child, 'add', '-f', path);
     git(child, 'commit', '-m', 'child change');
   };
-  return { root, child, id, config, discovery, other, coordinator, service, finish, commit };
+  return {
+    root,
+    child,
+    id,
+    config,
+    discovery,
+    other,
+    coordinator,
+    service,
+    finish,
+    commit,
+    hydration,
+  };
 }
 
 afterEach(() => {
@@ -135,6 +157,116 @@ afterEach(() => {
 });
 
 describe('Kimi children merged through Finish', () => {
+  it.each([
+    [0o644, false],
+    [0o640, false],
+    [0o600, false],
+    [0o644, true],
+  ])(
+    'restores user config mode %s (fallback: %s) after removing tokens',
+    async (mode, fallback) => {
+      const f = await fixture('kimi', mode, fallback);
+      expect(statSync(f.discovery).mode & 0o777).toBe(0o600);
+      f.commit('result.txt', 'safe result\n');
+      await f.finish();
+      expect(statSync(f.discovery).mode & 0o777).toBe(mode);
+      expect(JSON.parse(readFileSync(f.discovery, 'utf8'))).toEqual({
+        mcpServers: { other: f.other },
+      });
+    },
+  );
+
+  it('preserves the original mode across token refresh and restart hydration', async () => {
+    const f = await fixture('kimi', 0o640);
+    f.coordinator.setMCPServerInfo(
+      'parent',
+      'http://localhost:3002',
+      'parent-refresh',
+      'child-refresh',
+      '/server.js',
+    );
+    expect(statSync(f.discovery).mode & 0o777).toBe(0o600);
+    const state = JSON.parse(JSON.stringify(f.coordinator.getTask(f.id)?.autoDiscoveredMcpConfig));
+    const restarted = new Coordinator();
+    restarted.setNotify(() => undefined);
+    restarted.registerCoordinator('parent', 'project', {
+      projectRoot: f.root,
+      branchName: 'main',
+      worktreePath: f.root,
+      automaticNotifications: false,
+    });
+    restarted.setMCPServerInfo(
+      'parent',
+      'http://localhost:3003',
+      'parent-restart',
+      'child-restart',
+      '/server.js',
+    );
+    restarted.hydrateTask({ ...f.hydration, autoDiscoveredMcpConfig: state });
+    expect(statSync(f.discovery).mode & 0o777).toBe(0o600);
+    expect(readFileSync(f.discovery, 'utf8')).toContain('child-restart');
+    restarted.deregisterCoordinator('parent');
+    expect(statSync(f.discovery).mode & 0o777).toBe(0o640);
+    expect(JSON.parse(readFileSync(f.discovery, 'utf8'))).toEqual({
+      mcpServers: { other: f.other },
+    });
+  });
+
+  it('retains the user mode when a rejected merge re-arms the private config', async () => {
+    const f = await fixture('kimi', 0o640);
+    f.commit('.kimi-code/.parallel-code-atomic-child.tmp', readFileSync(f.discovery, 'utf8'));
+    await expect(f.finish()).rejects.toThrow('Managed Kimi MCP token was found');
+    expect(statSync(f.discovery).mode & 0o777).toBe(0o600);
+    f.coordinator.deregisterCoordinator('parent');
+    expect(statSync(f.discovery).mode & 0o777).toBe(0o640);
+    expect(JSON.parse(readFileSync(f.discovery, 'utf8'))).toEqual({
+      mcpServers: { other: f.other },
+    });
+  });
+
+  it('preserves a user permission edit through another token rotation and teardown', async () => {
+    const f = await fixture('kimi', 0o644);
+    chmodSync(f.discovery, 0o640);
+    f.coordinator.setMCPServerInfo(
+      'parent',
+      'http://localhost:3002',
+      'parent-refresh',
+      'child-refresh',
+      '/server.js',
+    );
+    expect(statSync(f.discovery).mode & 0o777).toBe(0o600);
+    f.coordinator.deregisterCoordinator('parent');
+    expect(statSync(f.discovery).mode & 0o777).toBe(0o640);
+  });
+
+  it('preserves a user permission edit made just before teardown', async () => {
+    const f = await fixture('kimi', 0o644);
+    chmodSync(f.discovery, 0o640);
+    f.coordinator.deregisterCoordinator('parent');
+    expect(statSync(f.discovery).mode & 0o777).toBe(0o640);
+    expect(JSON.parse(readFileSync(f.discovery, 'utf8'))).toEqual({
+      mcpServers: { other: f.other },
+    });
+  });
+
+  it('does not guess the lost original mode in older persisted state', async () => {
+    const f = await fixture('kimi', 0o640);
+    const state = f.coordinator.getTask(f.id)?.autoDiscoveredMcpConfig;
+    if (!state) throw new Error('Expected managed discovery state');
+    f.coordinator.hydrateTask({
+      ...f.hydration,
+      autoDiscoveredMcpConfig: {
+        path: state.path,
+        writtenParallelCodeFingerprint: state.writtenParallelCodeFingerprint,
+      },
+    });
+    f.coordinator.deregisterCoordinator('parent');
+    expect(statSync(f.discovery).mode & 0o777).toBe(0o600);
+    expect(JSON.parse(readFileSync(f.discovery, 'utf8'))).toEqual({
+      mcpServers: { other: f.other },
+    });
+  });
+
   it.each([
     '.kimi-code/mcp.json',
     '.kimi-code/.parallel-code-atomic-child.tmp',

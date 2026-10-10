@@ -6,7 +6,7 @@ import { createHash, randomUUID, randomBytes } from 'crypto';
 import { execFile, spawnSync } from 'child_process';
 import { dirname, join } from 'path';
 import { promisify } from 'util';
-import { mkdirSync, unlinkSync, readFileSync, existsSync } from 'fs';
+import { mkdirSync, unlinkSync, readFileSync, existsSync, statSync } from 'fs';
 import { unlink as fsUnlink } from 'fs/promises';
 import {
   buildSubTaskMcpConfig,
@@ -217,9 +217,18 @@ function validateAutoDiscoveredMcpConfigState(
     !/^[a-f0-9]{64}$/.test(state.writtenParallelCodeFingerprint)
   )
     return undefined;
+  if (
+    state.previousMode !== undefined &&
+    (typeof state.previousMode !== 'number' ||
+      !Number.isInteger(state.previousMode) ||
+      state.previousMode < 0 ||
+      state.previousMode > 0o777)
+  )
+    return undefined;
   return {
     path: state.path,
     writtenParallelCodeFingerprint: state.writtenParallelCodeFingerprint,
+    previousMode: state.previousMode as number | undefined,
   };
 }
 
@@ -2488,11 +2497,20 @@ export class Coordinator {
     }
 
     content.mcpServers = { ...servers, 'parallel-code': writtenParallelCode };
+    const currentMode = existsSync(configPath) ? statSync(configPath).mode & 0o777 : undefined;
+    // Rotation must not replace the original user mode with our temporary 0600.
+    // A different current mode is an explicit user edit and becomes the new mode
+    // to restore. Older persisted state has no original mode; do not guess it.
+    const previousMode =
+      priorState?.path === configPath && (currentMode === 0o600 || currentMode === undefined)
+        ? priorState.previousMode
+        : currentMode;
     mkdirSync(dirname(configPath), { recursive: true });
     atomicWriteFileSync(configPath, JSON.stringify(content, null, 2), { mode: 0o600 });
     task.autoDiscoveredMcpConfig = {
       path: configPath,
       writtenParallelCodeFingerprint: mcpEntryFingerprint(writtenParallelCode),
+      previousMode,
     };
     if (syncState) this.syncAutoDiscoveredMcpConfig(task);
   }
@@ -2554,7 +2572,9 @@ export class Coordinator {
       }
       if (hasServers) content.mcpServers = servers;
       else delete content.mcpServers;
-      atomicWriteFileSync(state.path, JSON.stringify(content, null, 2), { mode: 0o600 });
+      const currentMode = statSync(state.path).mode & 0o777;
+      const mode = currentMode === 0o600 ? (state.previousMode ?? 0o600) : currentMode;
+      atomicWriteFileSync(state.path, JSON.stringify(content, null, 2), { mode });
       task.autoDiscoveredMcpConfig = undefined;
       this.syncAutoDiscoveredMcpConfig(task);
       return { status: 'restored', managedEntry };
