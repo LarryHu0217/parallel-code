@@ -55,18 +55,19 @@ STOP is ${stop}.
 ${
   partial
     ? ''
-    : `gist opens the tour and is brief: the whole change in a title and one or two sentences (at most ${GIST_EXPLANATION_CHARS} characters) on what was wrong or missing and what is different now.
-verify closes the tour with what the reviewer should check before merging: 1-3 concrete behaviors to confirm, each specific to this change, never generic advice such as "run the tests". Its locations are optional and point at the code to check.
+    : `gist is optional; when useful, gist opens the tour and is brief: the whole change in a title and one or two sentences (at most ${GIST_EXPLANATION_CHARS} characters) on what was wrong or missing and what is different now.
+verify is optional; when useful, verify closes the tour with what the reviewer should check before merging: 1-3 concrete behaviors to confirm, each specific to this change, never generic advice such as "run the tests". Its locations are optional and point at the code to check.
+Omit gist and verify for simple changes; put the takeaway and any specific verification advice in the stop itself. For larger changes, include these cards only when they add information rather than repeat the stops.
 `
 }label names the stop's role in at most ${TOUR_CARD_LIMITS.label} characters, such as "ENTRY POINT" or "TESTS".
 title states the stop's takeaway as one short, complete claim of at most about twelve words, not a topic: "Uploads now retry three times on 429", not "Retry logic". Reading only the titles in order must tell the story of the change.
 tone is exactly one of: "neutral", "important" (the reviewer must not miss this), "risk" (can break behavior, lose data or weaken security), "uncertainty" (intent is inferred or unverified), "mechanical" (plumbing the reviewer can skim).
 whyItMatters is optional: one sentence of at most ${TOUR_CARD_LIMITS.whyItMatters} characters on the consequence for the reviewer. Omit it when the explanation already says it.
 questions is optional on each stop${partial ? '' : ', gist and verify'}: suggest 0-${TOUR_CARD_LIMITS.questions} short, specific questions of at most ${TOUR_CARD_LIMITS.question} characters each that explore a real boundary, trade-off or assumption tied to that card. Do not repeat answered facts or ask generic questions. Omit it when nothing useful remains to ask.
-${partial ? 'This is part of a larger diff. Use only 1-2 concise stops for this part.' : 'Aim for 4-6 concise stops for the whole change, fewer for small changes.'}
+${partial ? 'This is part of a larger diff. Use only 1-2 concise stops for this part.' : 'Scale the tour to the number of distinct ideas, not the number of files or hunks. For simple changes, use 1-2 cards total, usually a single stop. Use more cards only for distinct behavior, risks or interactions that need separate explanation; 4-6 stops are for complex changes, not a target to fill.'}
 Order the stops as a short story: the problem or gap the change addresses (only when the diff shows it), what changes, how it works (entry point, behavior, supporting changes, tests), then what remains uncertain. Contrast old and new behavior where it helps the reviewer judge the trade-off.
 If one concrete scenario explains the change, such as a request that used to fail, introduce it early and reuse it across stops.
-Group related changes across files. Explain what changed and why the pieces relate in 1-2 short sentences per stop.
+Group related changes across files, including their tests, in the same stop. Do not create separate problem, implementation and test cards for one simple idea. Explain what changed and why the pieces relate in 1-2 short sentences per stop.
 Cite exact file paths and lines inside the supplied diff hunks or numbered excerpts. Use new-side line numbers, or old-side numbers for deleted files. endLine is optional and ends a tight range, a few lines that are the evidence for the stop's claim.
 Large diffs arrive in separate requests; explain only the supplied part. Other parts will have their own tour stops.
 Numbered excerpts label each line with its original old/new line numbers and add/remove/context type. Long lines may have multiple fragments with the same line numbers; these are parts of one line, not separate lines.

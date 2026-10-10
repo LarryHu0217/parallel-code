@@ -1,3 +1,5 @@
+import type { TriageKind, TriageSort } from '../shared/github-triage.js';
+
 /** Persisted ownership fingerprint for an auto-discovered MCP configuration. */
 export interface AutoDiscoveredMcpConfigState {
   path: string;
@@ -203,6 +205,60 @@ export interface GitHubIssueDetails {
   url: string;
 }
 
+/** Repository issue browser data; full bodies are kept out of task prompts. */
+export interface GitHubIssueSummary extends GitHubIssueDetails {
+  kind: 'issue' | 'pr';
+  baseRefName?: string;
+  isCrossRepository?: boolean;
+  issueType?: string;
+  isDraft: boolean;
+  commentCount: number;
+  reactionCount: number;
+  createdAt: string;
+  state: 'open' | 'closed' | 'merged';
+  author: string;
+  updatedAt: string;
+  labels: string[];
+  assignees: string[];
+}
+
+export interface GitHubIssueQuery {
+  kind: TriageKind;
+  sort: TriageSort;
+  author: string;
+  search: string;
+  state: 'open' | 'closed' | 'all';
+  label: string;
+  assignee: string;
+  page: number;
+}
+
+export interface GitHubIssuePage {
+  labels: string[];
+  repository: string;
+  items: GitHubIssueSummary[];
+  total: number;
+  hasMore: boolean;
+  limited: boolean;
+}
+
+export interface GitHubIssueActivity {
+  id: string;
+  author: string;
+  createdAt: string;
+  event: string;
+  body: string;
+}
+
+export interface GitHubIssueActivityPage {
+  items: GitHubIssueActivity[];
+  hasMore: boolean;
+}
+
+export type GitHubIssueChange =
+  | { field: 'labels' | 'assignees'; values: string[] }
+  | { field: 'state'; value: 'open' | 'closed'; reason?: 'completed' | 'not_planned' };
+
 export interface CreatePrTaskResult extends CreateTaskResult {
   pr_url: string;
   base_branch: string;
@@ -294,17 +350,56 @@ export interface UsageWindow {
   resetsAt: number | null;
 }
 
+export interface CreditUsage {
+  /** Amount used in standard currency units (e.g. 2.12 for $2.12). */
+  used: number;
+  /** Spending limit in standard currency units, null if unlimited or not set. */
+  limit: number | null;
+  /** Currency code, e.g. "USD". */
+  currency: string;
+  /** Percent of limit used (0–100), null if limit is not set. */
+  usedPercent: number | null;
+}
+
 export type UsageResult =
   | {
       status: 'ok';
       fiveHour: UsageWindow | null;
       sevenDay: UsageWindow | null;
+      creditUsage?: CreditUsage | null;
       fetchedAt: number;
     }
   /** No subscription login to read — the status bar hides itself. */
   | { status: 'unavailable'; reason: string }
   /** Transient failure — the renderer keeps its last good snapshot. */
   | { status: 'error'; message: string };
+
+/** One OS process in the resources panel. */
+export interface ResourceProcess {
+  pid: number;
+  name: string;
+  /** Percent of one CPU core; a busy multi-threaded process can exceed 100. */
+  cpuPercent: number;
+  /** Resident memory. */
+  memoryBytes: number;
+}
+
+/** A PTY's process tree, the app itself, or the app's other subprocesses. */
+export interface ResourceGroup {
+  kind: 'agent' | 'shell' | 'app' | 'other';
+  agentId: string | null;
+  taskId: string | null;
+  cpuPercent: number;
+  memoryBytes: number;
+  processes: ResourceProcess[];
+}
+
+export interface ResourceSnapshot {
+  groups: ResourceGroup[];
+  cpuCount: number;
+  totalMemoryBytes: number;
+  sampledAt: number;
+}
 
 export type UpdatePhase =
   | 'unsupported'

@@ -12,6 +12,7 @@ import type { PersistedWindowState, TaskViewportVisibility } from './types';
 import { invoke } from '../lib/ipc';
 import { IPC } from '../../electron/ipc/channels';
 import { defaultAskCodeModel, type AskCodeProvider } from '../../electron/shared/ask-code-models';
+import type { TaskNameModelId } from '../../electron/shared/task-name-model';
 
 // Set to true after loadCustomThemes() resolves. Sanitization of persisted slot
 // IDs is skipped until then so the startup reactive effect cannot null them out
@@ -162,6 +163,14 @@ export function setAutoTrustFolders(autoTrustFolders: boolean): void {
 
 export function setShowPlans(showPlans: boolean): void {
   setStore('showPlans', showPlans);
+}
+
+export function setModelTaskNames(enabled: boolean): void {
+  setStore('modelTaskNames', enabled);
+}
+
+export function setTaskNameModel(model: TaskNameModelId): void {
+  setStore('taskNameModel', model);
 }
 
 export function setShowSidebarTips(show: boolean): void {

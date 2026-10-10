@@ -2,6 +2,7 @@ import type { SessionCapabilities } from '../shared/delegation-types.js';
 import { graphOperationsSchema } from '../shared/graph-schema.js';
 import { CANVAS_INSTRUCTIONS, canvasViews } from '../shared/canvas-view.js';
 import { AGENT_TOUR_LIMITS } from '../shared/agent-tour.js';
+import { GITHUB_LIST_LIMITS, isGitHubAgentTaskId } from '../shared/github-list.js';
 import { EVIDENCE_LIMITS } from '../shared/evidence.js';
 import { TOUR_CARD_LIMITS, TOUR_FORMS, TOUR_TONES } from '../shared/understanding-limits.js';
 import { semanticNodeKinds, reasoningStatuses } from '../shared/graph.js';
@@ -28,6 +29,13 @@ export interface ToolDef {
 
 export const APP_TASK_INSTRUCTIONS =
   'You are running inside Parallel Code. When the user asks to create a Parallel Code task (or PC task), use this server’s create_task MCP tool. It creates a visible task in the app with its own Git worktree and agent terminal. Native sub-agent tools such as spawn_agent do not create Parallel Code tasks and must not substitute for this request. Only report a task as created after create_task succeeds and returns its taskId. If the tool is missing or rejected, explain the limitation instead of silently using a native sub-agent. Task creation requires orchestration enabled in Settings > MCP, a supported top-level Git worktree task, and an app-managed MCP session. After enabling tools, restart and resume the session where supported.';
+
+/**
+ * Without this, "list them in Parallel Code" matches the canvas guidance and the
+ * agent fills the Mind map instead of the page the user is looking at.
+ */
+export const GITHUB_AGENT_INSTRUCTIONS =
+  'You are the agent of this project’s GitHub page in Parallel Code; the user talks to you from that page. When the user asks to list, rank, prioritize, triage, group or show GitHub issues or PRs, including "in Parallel Code", "here" or "on the page", publish them with github_list_publish so they appear on the GitHub page. Do not put issue lists in the Mind map or Reasoning graph unless the user names one of those canvases.';
 
 const initialReasoningUpdate = {
   runId: null,
@@ -177,6 +185,54 @@ export const TOUR_TOOLS: ToolDef[] = [
         context: { type: 'string', maxLength: AGENT_TOUR_LIMITS.context },
       },
       required: ['subject', 'gist', 'cards'],
+    },
+  },
+];
+
+const listCaps = GITHUB_LIST_LIMITS;
+
+export const GITHUB_LIST_TOOLS: ToolDef[] = [
+  {
+    name: 'github_list_publish',
+    description:
+      'Publish an ordered, grouped list of GitHub issues and PRs to the project’s GitHub page in the app, where the user picks it from the list menu. ' +
+      'Use it when the user asks for a list, ranking, triage or grouping of issues or PRs, for example "create a list of the most important issues this week, sorted by priority and grouped by area". ' +
+      'First find and read the items yourself with the gh CLI in the project checkout, for example `gh issue list --search "updated:>=YYYY-MM-DD" --json number,title,url,labels,updatedAt` or `gh pr list`; resolve relative dates against today. Do not change anything on GitHub. ' +
+      `Send {name, groups: [{name, items: [{url, title, reason}]}]}: groups and items in display order, between 1 and ${listCaps.groups} non-empty groups and at most ${listCaps.items} items in total. ` +
+      `url is the exact https://github.com/OWNER/REPO/issues/N or /pull/N URL; every item comes from the project's repository and appears once. title is the item title (at most ${listCaps.title} characters); reason says in a sentence why it sits in that group and position (at most ${listCaps.reason} characters). name and group names are at most ${listCaps.name} characters. ` +
+      'Publishing again with the same list name replaces that list.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', maxLength: listCaps.name },
+        groups: {
+          type: 'array',
+          minItems: 1,
+          maxItems: listCaps.groups,
+          items: {
+            type: 'object',
+            required: ['name', 'items'],
+            properties: {
+              name: { type: 'string', maxLength: listCaps.name },
+              items: {
+                type: 'array',
+                minItems: 1,
+                maxItems: listCaps.items,
+                items: {
+                  type: 'object',
+                  required: ['url', 'title', 'reason'],
+                  properties: {
+                    url: { type: 'string' },
+                    title: { type: 'string', maxLength: listCaps.title },
+                    reason: { type: 'string', maxLength: listCaps.reason },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      required: ['name', 'groups'],
     },
   },
 ];
@@ -542,6 +598,7 @@ export function serverInstructions(options: {
 }): string {
   const { taskId, coordinatorId, canvasOnly, sessionCapabilities } = options;
   return [
+    ...(isGitHubAgentTaskId(taskId) ? [GITHUB_AGENT_INSTRUCTIONS] : []),
     ...(sessionCapabilities ? [sessionInstructions(sessionCapabilities)] : []),
     APP_TASK_INSTRUCTIONS,
     ...(hasCanvasTools(taskId, coordinatorId, canvasOnly) ? [CANVAS_INSTRUCTIONS] : []),
@@ -564,6 +621,8 @@ export function selectTools(
     ...REASONING_TOOLS,
     ...CANVAS_VIEW_TOOLS,
     ...TOUR_TOOLS,
+    // Publishing opens the GitHub page's list picker; other tasks have no page to publish to.
+    ...(isGitHubAgentTaskId(taskId) ? GITHUB_LIST_TOOLS : []),
     ...EVIDENCE_TOOLS,
   ];
   if (capabilities) {

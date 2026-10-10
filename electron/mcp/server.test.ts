@@ -679,6 +679,34 @@ describe('mind map tools', () => {
     expect(client.publishTour).toHaveBeenCalledTimes(1);
   });
 
+  it('publishes a GitHub list for the session task and rejects a malformed one before transport', async () => {
+    const client = {
+      publishGitHubList: vi.fn().mockResolvedValue({ ok: true, name: 'This week' }),
+    } as unknown as MCPClient;
+    const item = { url: 'https://github.com/o/r/issues/2', title: 'Two', reason: 'Data loss' };
+    const list = { name: 'This week', groups: [{ name: 'Sync', items: [item] }] };
+    const context = { client, taskId: 'gh-agent-p1', coordinatorId: '', canvasOnly: true };
+    expect(await handleMCPToolCall(context, 'github_list_publish', list)).not.toHaveProperty(
+      'isError',
+    );
+    expect(client.publishGitHubList).toHaveBeenCalledWith('gh-agent-p1', list);
+    expect(
+      await handleMCPToolCall(context, 'github_list_publish', { ...list, groups: [] }),
+    ).toMatchObject({ isError: true, content: [{ text: expect.stringContaining('groups') }] });
+    expect(client.publishGitHubList).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses github_list_publish from tasks other than the GitHub page agent', async () => {
+    const client = { publishGitHubList: vi.fn() } as unknown as MCPClient;
+    const result = await handleMCPToolCall(
+      { client, taskId: 'own-task', coordinatorId: '', canvasOnly: true },
+      'github_list_publish',
+      {},
+    );
+    expect(result).toMatchObject({ isError: true });
+    expect(client.publishGitHubList).not.toHaveBeenCalled();
+  });
+
   it('refuses tour_publish without a task-scoped session', async () => {
     const client = { publishTour: vi.fn() } as unknown as MCPClient;
     const card = { label: 'KEY DECISION', title: 'One idea', body: 'Body text.' };

@@ -5,7 +5,8 @@ import { IPC } from '../../electron/ipc/channels';
 import { store, setStore } from './core';
 import type { Project } from './types';
 import { sanitizeBranchPrefix } from '../lib/branch-name';
-import { documentAgentTaskId } from '../documents/task-id';
+import { documentAgentTaskId, githubAgentTaskId } from '../documents/task-id';
+import { forgetGitHubLists } from './github-list-storage';
 import { clearAgentActivity } from './taskStatus';
 import { assignFreshSessionId } from './session-ids';
 import { forgetAgentPrompts } from '../lib/prompt-history';
@@ -83,8 +84,11 @@ export function removeProject(projectId: string): void {
         s.lastProjectId = s.projects[0]?.id ?? null;
       }
       delete s.missingProjectIds[projectId];
+      // A stale id would keep task shortcuts disabled with no page shown.
+      if (s.githubIssuesProjectId === projectId) s.githubIssuesProjectId = null;
     }),
   );
+  forgetGitHubLists(projectId);
 }
 
 export function updateProject(
@@ -246,10 +250,13 @@ export async function relinkProject(projectId: string): Promise<boolean> {
   const project = getProject(projectId);
   if (!project) return false;
   const task =
-    project.kind === 'document' ? store.tasks[documentAgentTaskId(projectId)] : undefined;
+    store.tasks[
+      project.kind === 'document' ? documentAgentTaskId(projectId) : githubAgentTaskId(projectId)
+    ];
   if (task && task.worktreePath !== newPath) {
     // Unmount before stopping old PTYs; an attached process cannot change cwd.
     if (store.activeDocumentProjectId === projectId) setStore('activeDocumentProjectId', null);
+    if (store.githubIssuesProjectId === projectId) setStore('githubIssuesProjectId', null);
     await Promise.all(
       [...task.agentIds, ...task.shellAgentIds].map((agentId) =>
         invoke(IPC.KillAgent, { agentId }),

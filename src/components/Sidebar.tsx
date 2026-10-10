@@ -1,5 +1,7 @@
 import { createSignal, createEffect, createMemo, onMount, onCleanup, For, Show } from 'solid-js';
 import type { JSX } from 'solid-js';
+import { GitHubIcon } from './icons';
+import { openGitHubIssues } from '../store/github';
 import { errMessage } from '../lib/log';
 import {
   store,
@@ -755,6 +757,33 @@ export function Sidebar() {
                         >
                           Folder not found
                         </span>
+                      </Show>
+                      <Show when={!isDocumentProject(project) && !isProjectMissing(project.id)}>
+                        <button
+                          type="button"
+                          class="icon-btn"
+                          title={`Browse GitHub issues for ${project.name}`}
+                          aria-label={`Browse GitHub issues for ${project.name}`}
+                          aria-pressed={store.githubIssuesProjectId === project.id}
+                          onKeyDown={(e) => e.stopPropagation()}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openGitHubIssues(project.id);
+                          }}
+                          style={{
+                            color:
+                              store.githubIssuesProjectId === project.id
+                                ? theme.accent
+                                : theme.fgMuted,
+                            display: 'flex',
+                            background: 'transparent',
+                            border: 'none',
+                            padding: '2px',
+                            'flex-shrink': '0',
+                          }}
+                        >
+                          <GitHubIcon size={14} />
+                        </button>
                       </Show>
                       <button
                         class="icon-btn"

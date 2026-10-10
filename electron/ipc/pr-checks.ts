@@ -3,7 +3,7 @@ import { promisify } from 'util';
 import { Notification, type BrowserWindow } from 'electron';
 import { stat } from 'fs/promises';
 import { IPC } from './channels.js';
-import { parseMergeable } from '../github/gh.js';
+import { parseMergeable, parsePrRef } from '../github/gh.js';
 import type {
   PrCheckBucket,
   PrCheckRun,
@@ -404,17 +404,7 @@ export function summarize(checks: PrCheckRun[]): {
 }
 
 export function isPrUrl(url: string): boolean {
-  try {
-    const u = new URL(url);
-    if (u.hostname !== 'github.com' && u.hostname !== 'www.github.com') return false;
-    // Reject URLs carrying credentials. Harmless to gh in practice, but we
-    // pass this value as a CLI arg and ought to keep it boring.
-    if (u.username || u.password) return false;
-    const parts = u.pathname.split('/').filter(Boolean);
-    return parts.length >= 4 && parts[2] === 'pull' && /^\d+$/.test(parts[3]);
-  } catch {
-    return false;
-  }
+  return parsePrRef(url) !== null;
 }
 
 export async function detectPrUrlForBranch(

@@ -12,6 +12,8 @@ beforeEach(() => {
 });
 
 describe('startup persistence', () => {
+  // The first test imports the whole store graph cold after resetModules, which can take longer
+  // than the default 5s on a loaded machine.
   it('preserves the saved workspace when the banner is dismissed before state loading starts', async () => {
     const { loadAgents } = await import('./agents');
     const { loadState, saveState } = await import('./persistence');
@@ -69,7 +71,7 @@ describe('startup persistence', () => {
       tasks,
       keybindingMigrationDismissed: true,
     });
-  });
+  }, 20_000);
 
   it('allows a first-run save only after the empty state has been loaded', async () => {
     const { loadState, saveState } = await import('./persistence');

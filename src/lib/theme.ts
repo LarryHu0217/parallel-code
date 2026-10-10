@@ -153,6 +153,30 @@ const NOIR_TERMINAL_THEME = {
   brightWhite: '#f2f2f7',
 } as const;
 
+// Website cyan with muted ANSI colors on its blue-black workspace surface.
+const PARALLEL_CODE_TERMINAL_THEME = {
+  foreground: '#f0f4f7',
+  cursor: '#67d9ed',
+  cursorAccent: '#080c10',
+  selectionBackground: '#18343e',
+  black: '#29343d',
+  red: '#f08f8a',
+  green: '#98c9ae',
+  yellow: '#dfba83',
+  blue: '#8fbddd',
+  magenta: '#c1b0e8',
+  cyan: '#67d9ed',
+  white: '#c4d0d9',
+  brightBlack: '#8193a2',
+  brightRed: '#f5a8a4',
+  brightGreen: '#addcc1',
+  brightYellow: '#ead0a5',
+  brightBlue: '#a9cdea',
+  brightMagenta: '#d2c4f0',
+  brightCyan: '#91e5f3',
+  brightWhite: '#f0f4f7',
+} as const;
+
 /**
  * Returns an xterm-compatible theme object for the given preset.
  * For light-background presets we override xterm's defaults (white text,
@@ -160,6 +184,9 @@ const NOIR_TERMINAL_THEME = {
  */
 export function getTerminalTheme(preset: LookPreset) {
   const background = readCssVarsForPreset(preset)['--task-panel-bg'] ?? '#000000';
+  if (preset === 'parallel-code') {
+    return { background, ...PARALLEL_CODE_TERMINAL_THEME };
+  }
   if (isLightPreset(preset)) {
     return { background, ...LIGHT_TERMINAL_THEME };
   }

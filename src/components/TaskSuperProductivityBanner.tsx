@@ -2,6 +2,7 @@ import { createSignal, Show, type JSX } from 'solid-js';
 import { dismissSpBanner, showNotification, spBanner, trackTaskInSp } from '../store/store';
 import { theme } from '../lib/theme';
 import type { SpBanner } from '../store/superProductivity';
+import { ClockIcon } from './icons';
 
 const bannerBtnStyle: JSX.CSSProperties = {
   background: 'transparent',
@@ -81,11 +82,13 @@ export function TaskSuperProductivityBanner(props: { taskId: string }) {
           </span>
           <button
             type="button"
+            class="btn-with-icon"
             style={{ ...bannerBtnStyle, opacity: pending() ? 0.6 : 1 }}
             disabled={pending()}
             title="Track time on this task in Super Productivity instead"
             onClick={() => void track()}
           >
+            <ClockIcon size={12} />
             {pending() ? 'Starting…' : 'Track this task'}
           </button>
           <button

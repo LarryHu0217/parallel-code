@@ -20,6 +20,8 @@ import {
 import { loadEnvFile } from './env-file.js';
 import {
   createTerminalQueryResponder,
+  MIRROR_SCROLLBACK_LINES,
+  REMOTE_SCROLLBACK_LINES,
   type TerminalQueryResponder,
 } from './terminal-query-responder.js';
 import {
@@ -54,6 +56,12 @@ interface PtySession {
   peerInputQueue?: { data: string; at: number }[];
   /** Assigned container name when running in Docker mode, null otherwise. */
   containerName: string | null;
+  /** The size the desktop pane asked for; restored when a phone stops overriding it. */
+  desktopSize?: { cols: number; rows: number };
+  /** A viewing phone's size, which the PTY takes while it is set. */
+  remoteSize?: { cols: number; rows: number };
+  /** Send batched output now, so subscribers have everything the mirror has parsed. */
+  flushOutput?: () => void;
 }
 
 const sessions = new Map<string, PtySession>();
@@ -632,13 +640,17 @@ function attachPtyOutputHandlers(
     }
   };
 
+  session.flushOutput = flush;
+
   session.proc.onData((data: string) => {
     session.queries.feed(data);
     const chunk = Buffer.from(data, 'utf8');
 
     tailChunks.push(chunk);
     tailSize += chunk.length;
-    if (tailSize > TAIL_CAP) {
+    // Trim only at twice the cap: compacting on every chunk past the cap would
+    // copy the whole tail per chunk. Exit slices it back to TAIL_CAP.
+    if (tailSize > 2 * TAIL_CAP) {
       const combined = Buffer.concat(tailChunks);
       const trimmed = combined.subarray(combined.length - TAIL_CAP);
       tailChunks = [trimmed];
@@ -678,7 +690,7 @@ function attachPtyOutputHandlers(
 
     flush();
 
-    const tailBuf = Buffer.concat(tailChunks);
+    const tailBuf = Buffer.concat(tailChunks).subarray(-TAIL_CAP);
     const tailStr = tailBuf.toString('utf8');
     if (path.basename(command) === 'codex' && exitCode === 0 && !signal) {
       const id = codexResumeId(tailStr);
@@ -755,10 +767,7 @@ export async function spawnAgent(
     existing.taskId = args.taskId;
     existing.isShell = args.isShell ?? existing.isShell;
     existing.proc.resume();
-    if (args.cols > 0 && args.rows > 0) {
-      existing.proc.resize(args.cols, args.rows);
-      existing.queries.resize(args.cols, args.rows);
-    }
+    if (args.cols > 0 && args.rows > 0) resizeDesktopView(existing, args.cols, args.rows);
     if (existing.scrollback.length > 0) {
       sendToChannel(notify, channelId, {
         type: 'Data',
@@ -866,6 +875,7 @@ export async function spawnAgent(
       cols: args.cols,
       rows: args.rows,
       reply: (data) => proc.write(data),
+      scrollback: mirrorScrollback,
     }),
     containerName: spawnSpec.containerName,
   };
@@ -1016,11 +1026,58 @@ export async function writeAgentPrompt(
   }
 }
 
+// shortcut: the long history is kept for every PTY while Remote Access is on —
+// per-agent growth if desktops with many long-running agents need the memory.
+let mirrorScrollback = MIRROR_SCROLLBACK_LINES;
+
+/**
+ * Keep the full history in each PTY's mirror while phones can connect, so a
+ * phone opening a terminal sees what the desktop shows; desktop-only use keeps
+ * the short mirror.
+ */
+export function setRemoteHistory(enabled: boolean): void {
+  mirrorScrollback = enabled ? REMOTE_SCROLLBACK_LINES : MIRROR_SCROLLBACK_LINES;
+  for (const session of sessions.values()) session.queries.setScrollback(mirrorScrollback);
+}
+
+function applySize(session: PtySession, cols: number, rows: number): void {
+  if (session.proc.cols === cols && session.proc.rows === rows) return;
+  session.proc.resize(cols, rows);
+  session.queries.resize(cols, rows);
+}
+
+function resizeDesktopView(session: PtySession, cols: number, rows: number): void {
+  session.desktopSize = { cols, rows };
+  if (!session.remoteSize) applySize(session, cols, rows);
+}
+
+/** Resize for the desktop pane. While a phone overrides the size, it is remembered instead. */
 export function resizeAgent(agentId: string, cols: number, rows: number): void {
   const session = sessions.get(agentId);
   if (!session) throw new Error(`Agent not found: ${agentId}`);
-  session.proc.resize(cols, rows);
-  session.queries.resize(cols, rows);
+  resizeDesktopView(session, cols, rows);
+}
+
+/**
+ * Give the PTY a viewing phone's size, so a full-screen TUI fills the phone, or
+ * pass null to hand it back to the desktop pane's last size.
+ */
+export function setAgentRemoteSize(
+  agentId: string,
+  size: { cols: number; rows: number } | null,
+): void {
+  const session = sessions.get(agentId);
+  if (!session) throw new Error(`Agent not found: ${agentId}`);
+  if (size) {
+    session.desktopSize ??= { cols: session.proc.cols, rows: session.proc.rows };
+    session.remoteSize = size;
+    applySize(session, size.cols, size.rows);
+    return;
+  }
+  if (!session.remoteSize) return;
+  session.remoteSize = undefined;
+  const desktop = session.desktopSize;
+  if (desktop) applySize(session, desktop.cols, desktop.rows);
 }
 
 export function pauseAgent(agentId: string): void {
@@ -1098,6 +1155,41 @@ export function subscribeToAgent(agentId: string, cb: (encoded: string) => void)
   return true;
 }
 
+/**
+ * Subscribe starting from a rendered snapshot: the screen and the history the
+ * main-process mirror keeps (10k lines while Remote Access is on, see setRemoteHistory), as ANSI text, instead of the raw
+ * byte replay, which redraw-heavy TUIs fill with repaints of one screen.
+ * Output already in the snapshot is not sent again; later output reaches `cb`
+ * after `onSnapshot`. The snapshot is null when the mirror is gone (the process
+ * exited), so the caller can fall back to the raw replay. Returns the
+ * subscriber to pass to unsubscribeFromAgent, or null for an unknown agent.
+ */
+export function subscribeToAgentRendered(
+  agentId: string,
+  onSnapshot: (snapshot: { data: string; cols: number; rows: number } | null) => void,
+  cb: (encoded: string) => void,
+): ((encoded: string) => void) | null {
+  const session = sessions.get(agentId);
+  if (!session) return null;
+  // The mirror parses output as it arrives but subscribers get it in batches:
+  // flush, so what the snapshot will contain has all been sent already.
+  session.flushOutput?.();
+  const { cols, rows } = session.proc;
+  let queued: string[] | null = [];
+  const subscriber = (encoded: string) => {
+    if (queued) queued.push(encoded);
+    else cb(encoded);
+  };
+  session.subscribers.add(subscriber);
+  void session.queries.serialize().then((text) => {
+    const later = queued ?? [];
+    queued = null;
+    onSnapshot(text === null ? null : { data: Buffer.from(text).toString('base64'), cols, rows });
+    for (const encoded of later) cb(encoded);
+  });
+  return subscriber;
+}
+
 /** Remove a previously registered output subscriber. */
 export function unsubscribeFromAgent(agentId: string, cb: (encoded: string) => void): void {
   sessions.get(agentId)?.subscribers.delete(cb);
@@ -1111,6 +1203,24 @@ export function getAgentScrollback(agentId: string): string | null {
 /** Return all active agent IDs. */
 export function getActiveAgentIds(): string[] {
   return Array.from(sessions.keys());
+}
+
+/**
+ * The local root process of every live PTY. In Docker mode this is the
+ * `docker run` client; the container's own load is not visible from here.
+ */
+export function getPtyProcessRoots(): {
+  agentId: string;
+  taskId: string;
+  isShell: boolean;
+  pid: number;
+}[] {
+  return Array.from(sessions.values(), (s) => ({
+    agentId: s.agentId,
+    taskId: s.taskId,
+    isShell: s.isShell,
+    pid: s.proc.pid,
+  }));
 }
 
 /** Return metadata for a specific agent, or null if not found. */

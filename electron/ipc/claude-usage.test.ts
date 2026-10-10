@@ -7,6 +7,7 @@ import {
   fetchClaudeUsage,
   parseAccessToken,
   parseClaudeUsageResponse,
+  parseCreditUsage,
   readKeychainCredentials,
   type KeychainExec,
 } from './claude-usage.js';
@@ -40,11 +41,139 @@ describe('parseClaudeUsageResponse', () => {
     });
   });
 
-  it('returns null when no window carries a percentage', () => {
+  it('includes creditUsage when extra_usage is present', () => {
+    const result = parseClaudeUsageResponse(
+      {
+        five_hour: { utilization: 10 },
+        extra_usage: {
+          is_enabled: true,
+          monthly_limit: 3000,
+          used_credits: 212,
+          utilization: 7.07,
+          currency: 'USD',
+          decimal_places: 2,
+        },
+      },
+      NOW,
+    );
+    expect(result).toEqual({
+      status: 'ok',
+      fiveHour: { usedPercent: 10, resetsAt: null },
+      sevenDay: null,
+      creditUsage: {
+        used: 2.12,
+        limit: 30,
+        currency: 'USD',
+        usedPercent: 7.07,
+      },
+      fetchedAt: NOW,
+    });
+  });
+
+  it('returns ok if only creditUsage is present without rate limit windows', () => {
+    const result = parseClaudeUsageResponse(
+      {
+        extra_usage: {
+          is_enabled: true,
+          monthly_limit: 1000,
+          used_credits: 500,
+        },
+      },
+      NOW,
+    );
+    expect(result).toEqual({
+      status: 'ok',
+      fiveHour: null,
+      sevenDay: null,
+      creditUsage: {
+        used: 5,
+        limit: 10,
+        currency: 'USD',
+        usedPercent: 50,
+      },
+      fetchedAt: NOW,
+    });
+  });
+
+  it('returns null when neither windows nor credit usage are present', () => {
     expect(parseClaudeUsageResponse({ five_hour: { resets_at: 1 } })).toBeNull();
     expect(parseClaudeUsageResponse({})).toBeNull();
     expect(parseClaudeUsageResponse(null)).toBeNull();
     expect(parseClaudeUsageResponse('nope')).toBeNull();
+  });
+});
+
+describe('parseCreditUsage', () => {
+  it('parses extra_usage with custom decimal places and currency', () => {
+    expect(
+      parseCreditUsage({
+        extra_usage: {
+          is_enabled: true,
+          monthly_limit: 5000,
+          used_credits: 1250,
+          currency: 'EUR',
+          decimal_places: 2,
+        },
+      }),
+    ).toEqual({
+      used: 12.5,
+      limit: 50,
+      currency: 'EUR',
+      usedPercent: 25,
+    });
+  });
+
+  it('falls back to spend object when extra_usage is absent', () => {
+    expect(
+      parseCreditUsage({
+        spend: {
+          enabled: true,
+          used: { amount_minor: 350, currency: 'USD', exponent: 2 },
+          limit: { amount_minor: 1000, exponent: 2 },
+          percent: 35,
+        },
+      }),
+    ).toEqual({
+      used: 3.5,
+      limit: 10,
+      currency: 'USD',
+      usedPercent: 35,
+    });
+  });
+
+  it('returns null when extra_usage is disabled and 0 credits used', () => {
+    expect(
+      parseCreditUsage({
+        extra_usage: {
+          is_enabled: false,
+          monthly_limit: 3000,
+          used_credits: 0,
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it('returns usage if credits have been used even if is_enabled is false', () => {
+    expect(
+      parseCreditUsage({
+        extra_usage: {
+          is_enabled: false,
+          monthly_limit: 3000,
+          used_credits: 150,
+        },
+      }),
+    ).toEqual({
+      used: 1.5,
+      limit: 30,
+      currency: 'USD',
+      usedPercent: 5,
+    });
+  });
+
+  it('returns null for missing, null, or malformed data', () => {
+    expect(parseCreditUsage(null)).toBeNull();
+    expect(parseCreditUsage({})).toBeNull();
+    expect(parseCreditUsage('hello')).toBeNull();
   });
 });
 

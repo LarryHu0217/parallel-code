@@ -1274,7 +1274,7 @@ describe('getUncommittedChangedFiles', () => {
       isFile: () => true,
       size: 100,
     } as unknown as Awaited<ReturnType<typeof fs.promises.stat>>);
-    vi.mocked(fs.promises.readFile).mockResolvedValueOnce('one\ntwo\n');
+    vi.mocked(fs.promises.readFile).mockResolvedValueOnce(Buffer.from('one\ntwo\n'));
 
     const files = await getUncommittedChangedFiles(uniqueWorktreePath());
 

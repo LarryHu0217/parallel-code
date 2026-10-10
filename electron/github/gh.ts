@@ -13,21 +13,23 @@ const GH_TIMEOUT_MS = 30_000;
 const GH_MAX_BUFFER = 8 * 1024 * 1024;
 
 /** Runs `gh` and returns stdout. Failures throw with a user-facing message. */
-export async function runGh(args: string[], cwd?: string): Promise<string> {
+export async function runGh(args: string[], cwd?: string, input?: string): Promise<string> {
   try {
-    const { stdout } = await exec('gh', args, {
+    const pending = exec('gh', args, {
       cwd,
       timeout: GH_TIMEOUT_MS,
       maxBuffer: GH_MAX_BUFFER,
     });
+    if (input !== undefined) pending.child.stdin?.end(input);
+    const { stdout } = await pending;
     return stdout;
   } catch (err) {
     throw new Error(describeGhError(err));
   }
 }
 
-export async function runGhJson(args: string[], cwd?: string): Promise<unknown> {
-  return JSON.parse(await runGh(args, cwd)) as unknown;
+export async function runGhJson(args: string[], cwd?: string, input?: string): Promise<unknown> {
+  return JSON.parse(await runGh(args, cwd, input)) as unknown;
 }
 
 /** Maps a failed `gh` invocation to a message the user can act on. */
@@ -84,12 +86,13 @@ export function authorLogin(v: unknown): string {
 }
 
 export interface PrRef {
+  host: string;
   owner: string;
   repo: string;
   number: number;
 }
 
-/** Parses a canonical github.com pull request URL. */
+/** Parses an HTTPS PR URL; gh handles host support and authentication. */
 export function parsePrRef(url: string): PrRef | null {
   let u: URL;
   try {
@@ -98,10 +101,14 @@ export function parsePrRef(url: string): PrRef | null {
     return null;
   }
   if (u.protocol !== 'https:') return null;
-  if (u.hostname !== 'github.com' && u.hostname !== 'www.github.com') return null;
   if (u.username || u.password) return null;
   const [owner, repo, kind, num] = u.pathname.split('/').filter(Boolean);
   if (!owner || !repo || kind !== 'pull' || !/^\d+$/.test(num ?? '')) return null;
   if (!/^[\w.-]+$/.test(owner) || !/^[\w.-]+$/.test(repo)) return null;
-  return { owner, repo, number: Number(num) };
+  return {
+    host: u.host === 'www.github.com' ? 'github.com' : u.host,
+    owner,
+    repo,
+    number: Number(num),
+  };
 }

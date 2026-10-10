@@ -43,6 +43,8 @@ function mount(
     cell.getBoundingClientRect = () =>
       new DOMRect(0, 0, direction === 'horizontal' ? sizes[index] : 600, sizes[index]);
   });
+  // Stand-in for the ResizeObserver tick that re-reads the layout in browsers.
+  host.querySelectorAll('.resize-handle').forEach((h) => h.dispatchEvent(new Event('focus')));
   return {
     cells,
     setAxis,
@@ -71,6 +73,7 @@ const notes: PanelChild = {
   content: () => 'Notes',
 };
 const terminal: PanelChild = { id: 'terminal', minSize: 80, content: () => 'Terminal' };
+const prompt: PanelChild = { id: 'prompt', minSize: 54, content: () => 'Prompt' };
 const shell: PanelChild = { id: 'shell', minSize: 28, content: () => 'Shell' };
 
 describe('ResizablePanel drag release', () => {
@@ -138,7 +141,6 @@ describe('ResizablePanel drag release', () => {
     setPanelUserSize('test:notes', 100);
     setPanelUserSize('test:terminal', 300);
     const sizes = [200, 600, 100];
-    const prompt: PanelChild = { id: 'prompt', minSize: 54, content: () => 'Prompt' };
     const panel = mount([notes, terminal, prompt], ['notes', 'terminal'], sizes);
     panel.start(1);
     panel.move(-80);
@@ -214,4 +216,116 @@ describe('horizontal resizing', () => {
       expect(document.querySelector('.resize-handle.dragging')).toBeNull();
     },
   );
+});
+
+describe('keyboard resizing', () => {
+  const press = (key: string, index = 0) => {
+    const handle = document.querySelectorAll<HTMLElement>('.resize-handle')[index];
+    const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true });
+    handle.dispatchEvent(event);
+    return { handle, event };
+  };
+  const setHeight = (cell: HTMLElement, size: number) => {
+    cell.getBoundingClientRect = () => new DOMRect(0, 0, 600, size);
+  };
+
+  it('moves a fixed side with arrow keys and stops at the neighbor minimum', () => {
+    const panel = mount([terminal, shell], ['terminal'], [360, 534], 'horizontal');
+    const { handle } = press('ArrowLeft');
+    expect(handle.getAttribute('role')).toBe('separator');
+    expect(getPanelUserSize('test:shell')).toBe(558);
+    press('ArrowRight');
+    expect(getPanelUserSize('test:shell')).toBe(510);
+    // Leave only 10px above the terminal minimum, so the step is capped at +10.
+    panel.cells[0].getBoundingClientRect = () => new DOMRect(0, 0, 90, 90);
+    press('ArrowLeft');
+    expect(getPanelUserSize('test:shell')).toBe(544);
+  });
+
+  it('exposes orientation, measured value, limits and the fixed child label', () => {
+    mount(
+      [terminal, { ...shell, resizeLabel: 'Resize shell' }],
+      ['terminal'],
+      [360, 534],
+      'horizontal',
+    );
+    const handle = document.querySelector<HTMLElement>('.resize-handle');
+    expect(handle?.getAttribute('aria-orientation')).toBe('vertical');
+    expect(handle?.getAttribute('aria-label')).toBe('Resize shell');
+    expect(handle?.getAttribute('aria-valuenow')).toBe('534');
+    expect(handle?.getAttribute('aria-valuemin')).toBe('28');
+    expect(handle?.getAttribute('aria-valuemax')).toBe('814');
+    expect(handle?.getAttribute('tabindex')).toBe('0');
+  });
+
+  it('resizes vertically with ArrowUp and ArrowDown', () => {
+    const panel = mount([terminal, shell], ['terminal'], [300, 200]);
+    expect(document.querySelector('.resize-handle')?.getAttribute('aria-orientation')).toBe(
+      'horizontal',
+    );
+    expect(press('ArrowUp').event.defaultPrevented).toBe(true);
+    expect(getPanelUserSize('test:shell')).toBe(224);
+    setHeight(panel.cells[1], 224);
+    press('ArrowDown');
+    expect(getPanelUserSize('test:shell')).toBe(200);
+  });
+
+  it('jumps to the minimum with Home and the maximum with End', () => {
+    mount([terminal, shell], ['terminal'], [300, 200]);
+    press('Home');
+    expect(getPanelUserSize('test:shell')).toBe(28);
+    press('End');
+    // 200 + (300 - 80 terminal minimum)
+    expect(getPanelUserSize('test:shell')).toBe(420);
+  });
+
+  it('resets the pin with Enter', () => {
+    mount([terminal, shell], ['terminal'], [300, 200]);
+    setPanelUserSize('test:shell', 250);
+    press('Enter');
+    expect(getPanelUserSize('test:shell')).toBeUndefined();
+  });
+
+  it('leaves other keys alone', () => {
+    mount([terminal, shell], ['terminal'], [300, 200]);
+    const { event } = press('a');
+    expect(event.defaultPrevented).toBe(false);
+    expect(getPanelUserSize('test:shell')).toBeUndefined();
+  });
+
+  it('does not shrink the fixed pane when the neighbor is already below its minimum', () => {
+    mount([terminal, shell], ['terminal'], [50, 200]);
+    const { handle, event } = press('ArrowUp');
+    expect(event.defaultPrevented).toBe(true);
+    expect(handle.getAttribute('aria-valuemax')).toBe('200');
+    expect(getPanelUserSize('test:shell')).toBe(200);
+    press('End');
+    expect(getPanelUserSize('test:shell')).toBe(200);
+  });
+
+  it('is not focusable without a persistKey', () => {
+    const host = document.createElement('div');
+    document.body.append(host);
+    dispose = render(
+      () => <ResizablePanel direction="vertical" children={[terminal, shell]} />,
+      host,
+    );
+    const handle = host.querySelector('.resize-handle');
+    expect(handle?.hasAttribute('tabindex')).toBe(false);
+    expect(handle?.hasAttribute('aria-valuenow')).toBe(false);
+  });
+
+  it('leaves a handle beside a noPin child out of the tab order', () => {
+    mount([terminal, { ...shell, noPin: () => true }, prompt], ['prompt'], [300, 28, 60]);
+    for (const handle of document.querySelectorAll('.resize-handle')) {
+      expect(handle.hasAttribute('tabindex')).toBe(false);
+    }
+  });
+
+  it('leaves handles between two absorbers drag-only', () => {
+    mount([notes, terminal], ['notes', 'terminal'], [120, 480], 'horizontal');
+    const { handle } = press('ArrowLeft');
+    expect(handle.hasAttribute('tabindex')).toBe(false);
+    expect(getPanelUserSize('test:notes')).toBeUndefined();
+  });
 });

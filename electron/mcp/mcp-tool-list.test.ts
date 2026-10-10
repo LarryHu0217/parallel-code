@@ -14,10 +14,12 @@ import {
   CANVAS_VIEW_TOOLS,
   CANVAS_INSTRUCTIONS,
   TOUR_TOOLS,
+  GITHUB_LIST_TOOLS,
   EVIDENCE_TOOLS,
   hasCanvasTools,
   APP_TASK_INSTRUCTIONS,
   serverInstructions,
+  GITHUB_AGENT_INSTRUCTIONS,
   sessionInstructions,
   type ToolDef,
 } from './mcp-tool-list.js';
@@ -155,6 +157,17 @@ it('ordinary canvas sessions advertise only map tools', () => {
     ...REASONING_TOOLS,
     ...CANVAS_VIEW_TOOLS,
     ...TOUR_TOOLS,
+    ...EVIDENCE_TOOLS,
+  ]);
+});
+
+it('offers github_list_publish only to the GitHub page agent', () => {
+  expect(selectTools('gh-agent-p1', '', true)).toEqual([
+    ...MINDMAP_TOOLS,
+    ...REASONING_TOOLS,
+    ...CANVAS_VIEW_TOOLS,
+    ...TOUR_TOOLS,
+    ...GITHUB_LIST_TOOLS,
     ...EVIDENCE_TOOLS,
   ]);
 });
@@ -322,6 +335,19 @@ describe('serverInstructions', () => {
       const text = serverInstructions({ taskId, coordinatorId, canvasOnly });
       expect(text.startsWith(APP_TASK_INSTRUCTIONS)).toBe(true);
     }
+  });
+
+  it('tells the GitHub page agent to publish lists there, first and within the client limit', () => {
+    // Hidden agents are never delegation tasks, so they launch canvas-only without capabilities.
+    const text = serverInstructions({ taskId: 'gh-agent-p1', coordinatorId: '', canvasOnly: true });
+    expect(text.startsWith(GITHUB_AGENT_INSTRUCTIONS)).toBe(true);
+    expect(GITHUB_AGENT_INSTRUCTIONS).toContain('github_list_publish');
+    const essential = `${GITHUB_AGENT_INSTRUCTIONS}\n\n${APP_TASK_INSTRUCTIONS}`;
+    expect(text.startsWith(essential)).toBe(true);
+    expect(essential.length).toBeLessThanOrEqual(CLIENT_LIMIT);
+    expect(
+      serverInstructions({ taskId: 'task', coordinatorId: '', canvasOnly: true }),
+    ).not.toContain(GITHUB_AGENT_INSTRUCTIONS);
   });
 
   it('still includes app and canvas guidance', () => {

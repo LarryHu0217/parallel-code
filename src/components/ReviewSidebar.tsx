@@ -4,6 +4,7 @@ import { sf } from '../lib/fontScale';
 import type { QualityFinding } from '../lib/quality-findings';
 import type { ReviewAnnotation } from './review-types';
 import { QualityFindingSidebarItem } from './QualityFindingSidebarItem';
+import { SendIcon } from './icons';
 
 interface ReviewSidebarProps {
   annotations: ReviewAnnotation[];
@@ -265,6 +266,7 @@ export function ReviewSidebar(props: ReviewSidebarProps) {
         <button
           type="button"
           aria-label="Send review to agent"
+          class="btn-with-icon"
           onClick={() => props.onSubmit()}
           disabled={!canSend()}
           style={{
@@ -280,6 +282,7 @@ export function ReviewSidebar(props: ReviewSidebarProps) {
           }}
           title={sendTitle()}
         >
+          <SendIcon size={12} />
           {props.submitting ? 'Sending...' : `Send to agent (${submissionCount()})`}
         </button>
       </div>

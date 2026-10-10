@@ -1,6 +1,7 @@
 import { For, Show, createEffect, createSignal, on } from 'solid-js';
 import { getDeepActiveElement } from '../../lib/dom-focus';
 import type { ChatDecision, ChatRequest } from '../../../electron/shared/agent-chat-types';
+import { CheckIcon, CloseIcon, SendIcon } from '../icons';
 
 export type RespondToRequest = (
   request: ChatRequest,
@@ -159,18 +160,23 @@ export function RequestCard(props: {
           ref={(element) => {
             if (allowIsDefault()) preselected = element;
           }}
-          class={allowIsDefault() ? 'chat-request-default' : undefined}
+          class={allowIsDefault() ? 'chat-request-default btn-with-icon' : 'btn-with-icon'}
           disabled={pending() || props.request.questions?.some((q) => !answers()[q.id]?.trim())}
           onClick={() => void submit('accept')}
         >
+          <Show when={props.request.kind === 'question'} fallback={<CheckIcon size={14} />}>
+            <SendIcon size={14} />
+          </Show>
           {props.request.kind === 'question' ? 'Submit answers' : 'Allow once'}
         </button>
         <Show when={canRemember()}>
           <button
+            class="btn-with-icon"
             disabled={pending()}
             title={props.request.alwaysAllowNote}
             onClick={() => void submit('accept-always')}
           >
+            <CheckIcon size={14} />
             Always allow
           </button>
         </Show>
@@ -179,10 +185,13 @@ export function RequestCard(props: {
             ref={(element) => {
               if (props.request.defaultToNo) preselected = element;
             }}
-            class={props.request.defaultToNo ? 'chat-request-default' : undefined}
+            class={
+              props.request.defaultToNo ? 'chat-request-default btn-with-icon' : 'btn-with-icon'
+            }
             disabled={pending()}
             onClick={() => void submit('decline')}
           >
+            <CloseIcon size={14} />
             Decline
           </button>
         </Show>

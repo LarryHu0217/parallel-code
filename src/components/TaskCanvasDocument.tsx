@@ -13,6 +13,7 @@ import type { DocumentSnapshot } from '../documents/types';
 import type { Task } from '../store/types';
 import { TaskCanvasBody } from './TaskCanvasBody';
 import type { CanvasEditorApi, CanvasWrite } from './TaskCanvasEditor';
+import { SyncIcon } from './icons';
 
 interface TaskCanvasDocumentProps {
   task: Task;
@@ -189,7 +190,13 @@ export function TaskCanvasDocument(props: TaskCanvasDocumentProps) {
       <Show when={changedOnDisk()}>
         <div style={{ padding: '4px 8px', color: theme.warning, 'font-size': sf(11) }}>
           The file changed on disk while you were editing.{' '}
-          <button type="button" style={textBtnStyle()} onClick={reloadFromDisk}>
+          <button
+            class="btn-with-icon"
+            type="button"
+            style={textBtnStyle()}
+            onClick={reloadFromDisk}
+          >
+            <SyncIcon size={12} />
             Reload and drop my edits
           </button>
         </div>

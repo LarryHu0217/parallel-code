@@ -12,6 +12,7 @@ import { FILE_LINK_PREFIX } from './chat-markdown';
 import type { RespondToRequest } from './RequestCard';
 import { Transcript } from './Transcript';
 import { TranscriptSearch } from './TranscriptSearch';
+import { DiffIcon } from '../icons';
 import './chat.css';
 
 export interface ChatActions {
@@ -146,7 +147,10 @@ function Conversation(props: { chat: ChatProps; threadId: string }) {
         <div class="chat-toolbar">
           {search(false)}
           <Show when={chat.onReview}>
-            <button onClick={() => chat.onReview?.()}>Review changes ↗</button>
+            <button class="btn-with-icon" onClick={() => chat.onReview?.()}>
+              <DiffIcon size={12} />
+              Review changes ↗
+            </button>
           </Show>
         </div>
       </Show>

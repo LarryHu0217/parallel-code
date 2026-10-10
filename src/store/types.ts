@@ -16,6 +16,7 @@ import type {
   AgentDef,
   AutoDiscoveredMcpConfigState,
   StepEntry,
+  CreditUsage,
   UsageProvider,
   UsageWindow,
   VerificationRun,
@@ -23,6 +24,7 @@ import type {
 } from '../ipc/types';
 import type { ChatPermissionMode, ChatSession } from '../../electron/shared/agent-chat-types';
 import type { AskCodeProvider } from '../../electron/shared/ask-code-models';
+import type { TaskNameModelId } from '../../electron/shared/task-name-model';
 import type {
   EvidenceModelSettings,
   EvidencePackage,
@@ -475,6 +477,8 @@ export interface PersistedState {
   windowState?: PersistedWindowState;
   autoTrustFolders?: boolean;
   showPlans?: boolean;
+  modelTaskNames?: boolean;
+  taskNameModel?: TaskNameModelId;
   showSidebarTips?: boolean;
   showSidebarProgress?: boolean;
   sidebarNeedsInputFirst?: boolean;
@@ -521,6 +525,7 @@ export interface MCPStatus {
 export interface UsageState {
   fiveHour: UsageWindow | null;
   sevenDay: UsageWindow | null;
+  creditUsage?: CreditUsage | null;
   /** When the current windows were fetched; null until the first success. */
   fetchedAt: number | null;
   /** `unavailable` means no subscription login — the bar hides. `error` keeps the last snapshot. */
@@ -595,6 +600,9 @@ export interface AppStore {
   windowState: PersistedWindowState | null;
   autoTrustFolders: boolean;
   showPlans: boolean;
+  /** Opt-in: ask a cheap model for a short title when a task is named from its prompt. */
+  modelTaskNames: boolean;
+  taskNameModel: TaskNameModelId;
   showSidebarTips: boolean;
   showSidebarProgress: boolean;
   /** Pin tasks that are waiting on an answer to the top of the sidebar task
@@ -617,6 +625,9 @@ export interface AppStore {
     name?: string;
     baseBranch?: string;
     canvasSource?: CanvasTaskSource;
+    /** null marks a batch without a single issue association. */
+    githubUrl?: string | null;
+    githubPr?: import('../ipc/types').GitHubWorkItem;
     /** Set when the form was opened from a Super Productivity task. */
     superProductivity?: SpNewTaskSource;
   } | null;
@@ -624,6 +635,7 @@ export interface AppStore {
   remoteAccess: RemoteAccess;
   /** Persisted: start the remote (Connect Phone) server automatically on launch. */
   autoStartRemoteAccess: boolean;
+  githubIssuesProjectId: string | null;
   showArena: boolean;
   keybindingPreset: string;
   /** Per-preset user overrides. Outer key = preset ID, inner = binding ID → override. */

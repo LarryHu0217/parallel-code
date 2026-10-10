@@ -2,6 +2,7 @@ import { Show, type JSX } from 'solid-js';
 import { undoBranchAdoption, dismissBranchAdoptionNotice } from '../store/store';
 import { theme } from '../lib/theme';
 import type { Task } from '../store/types';
+import { UndoIcon } from './icons';
 
 const bannerBtnStyle: JSX.CSSProperties = {
   background: 'transparent',
@@ -42,11 +43,13 @@ export function TaskBranchAdoptionBanner(props: { task: Task }) {
             branch.
           </span>
           <button
+            class="btn-with-icon"
             type="button"
             style={bannerBtnStyle}
             title={`Track '${previousBranch()}' again and stop offering '${props.task.branchName}'`}
             onClick={() => undoBranchAdoption(props.task.id)}
           >
+            <UndoIcon size={12} />
             Undo
           </button>
           <button

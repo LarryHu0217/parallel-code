@@ -1,12 +1,12 @@
 import { createEffect } from 'solid-js';
 import { store, saveState } from './store';
-import { documentAgentTaskIds } from '../documents/task-id';
+import { hiddenAgentTaskIds } from '../documents/task-id';
 
 function persistedTaskIds(): string[] {
   return [
     ...store.taskOrder,
     ...store.collapsedTaskOrder,
-    ...documentAgentTaskIds(store.projects),
+    ...hiddenAgentTaskIds(store.projects),
   ].filter((id) => store.tasks[id]);
 }
 
@@ -40,6 +40,8 @@ function structuralSnapshot(): string {
     defaultSkipPermissions: store.defaultSkipPermissions,
     defaultPropagateSkipPermissions: store.defaultPropagateSkipPermissions,
     canvasOwnershipBadges: store.canvasOwnershipBadges,
+    modelTaskNames: store.modelTaskNames,
+    taskNameModel: store.taskNameModel,
     showSidebarTips: store.showSidebarTips,
     showSidebarProgress: store.showSidebarProgress,
     sidebarNeedsInputFirst: store.sidebarNeedsInputFirst,

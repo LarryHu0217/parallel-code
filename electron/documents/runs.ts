@@ -15,7 +15,12 @@ import { errMessage } from '../log.js';
 import { atomicWriteFileSync } from '../mcp/atomic.js';
 import { buildPtySpawnEnv, validateCommand } from '../ipc/pty.js';
 import { loadEnvFile } from '../ipc/env-file.js';
-import { createWorktree, ensureWorktreeContainerExclude, removeWorktree } from '../ipc/git.js';
+import {
+  createWorktree,
+  ensureWorktreeContainerExclude,
+  parseStatusV2,
+  removeWorktree,
+} from '../ipc/git.js';
 import { git, gitOk } from './git.js';
 import { buildHeadlessLaunch, createHeadlessParser } from './agents.js';
 import { buildDocumentPrompt, parseDocumentRationale, type MergeCandidateInput } from './prompt.js';
@@ -200,21 +205,6 @@ async function currentBranch(projectRoot: string): Promise<string | null> {
 const CONTENT_PATHSPEC = ['--', '.', ':(exclude).parallel'];
 
 /**
- * Uncommitted changes to tracked files. Untracked files are deliberately not
- * "pending edits": sweeping them into a commit would put scratch files into
- * the canonical history.
- */
-async function isDirty(projectRoot: string): Promise<boolean> {
-  const out = await git(projectRoot, [
-    'status',
-    '--porcelain',
-    '--untracked-files=no',
-    ...CONTENT_PATHSPEC,
-  ]);
-  return out.trim().length > 0;
-}
-
-/**
  * Where a document really lives inside the project. A clone can track a
  * symlink pointing anywhere its owner can read, and the file's contents go on
  * into prompts and annotations, so neither reading nor writing follows one.
@@ -237,12 +227,31 @@ export async function readDocumentSnapshot(
   } catch {
     missing = true;
   }
-  const [sha, branch, dirty] = await Promise.all([
-    headSha(projectRoot),
-    currentBranch(projectRoot),
-    isDirty(projectRoot).catch(() => false),
-  ]);
-  return { content, headSha: sha, branch, dirty, missing };
+  // One status call answers HEAD, branch and dirty: the watcher polls this
+  // every few seconds, so three git spawns per tick add up.
+  let state = { headSha: null as string | null, branch: null as string | null, dirty: false };
+  try {
+    const out = await git(projectRoot, [
+      '--no-optional-locks',
+      'status',
+      '--porcelain=v2',
+      '--branch',
+      '--no-ahead-behind',
+      // Untracked files are deliberately not "pending edits": sweeping them
+      // into a commit would put scratch files into the canonical history.
+      '--untracked-files=no',
+      ...CONTENT_PATHSPEC,
+    ]);
+    const parsed = parseStatusV2(out);
+    state = {
+      headSha: parsed.headSha,
+      branch: parsed.currentBranch,
+      dirty: parsed.hasUncommittedChanges,
+    };
+  } catch {
+    // Not a repository (or it vanished): report no git state, as before.
+  }
+  return { content, ...state, missing };
 }
 
 /** Manual block edits share the project lock with acceptance and dispatch. */
@@ -339,7 +348,10 @@ export function startDocumentWatcher(
     debounce: null,
     // HEAD and dirty state change without touching the document (commits in
     // a terminal, edits to other files), so poll those on a slow cadence.
-    poll: setInterval(() => void emit(), WATCH_POLL_MS),
+    // Nobody sees a hidden window; the first tick after it reappears catches up.
+    poll: setInterval(() => {
+      if (!win.isDestroyed() && win.isVisible() && !win.isMinimized()) void emit();
+    }, WATCH_POLL_MS),
     lastKey: '',
   });
 }

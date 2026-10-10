@@ -11,6 +11,7 @@ import {
   parseProjectChecks,
 } from '../../electron/shared/evidence-settings';
 import { sectionLabelStyle, theme } from '../lib/theme';
+import { PlusIcon } from './icons';
 
 /** A check being edited; the name follows the kind and new rows get their id when saved. */
 export type CheckDraft = Omit<ProjectCheck, 'id' | 'name'> & { id?: string };
@@ -122,12 +123,14 @@ export function EvidenceSettingsFields(props: EvidenceSettingsFieldsProps) {
       </Index>
       <Show when={props.checks.length < MAX_PROJECT_CHECKS}>
         <button
+          class="btn-with-icon"
           type="button"
           style={{ ...fieldStyle, 'justify-self': 'start' }}
           onClick={() =>
             props.onChecksChange([...props.checks, { kind: 'unit', command: '', run: 'auto' }])
           }
         >
+          <PlusIcon size={14} />
           Add check
         </button>
       </Show>

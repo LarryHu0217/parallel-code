@@ -7,6 +7,7 @@ import { isLandedTaskState } from '../store/landing';
 import type { Task } from '../store/types';
 import { Dialog } from './Dialog';
 import { theme } from '../lib/theme';
+import { CheckIcon, GitMergeIcon, SyncIcon } from './icons';
 
 /** The reviewed commits are sent back to main, where approval and merge are one operation. */
 export function DelegationReviewDialog(props: { task: Task; open: boolean; onClose: () => void }) {
@@ -157,7 +158,10 @@ export function DelegationReviewDialog(props: { task: Task; open: boolean; onClo
         </Show>
         <Show when={review.error}>
           <p role="alert">{String(review.error)}</p>
-          <button onClick={() => void refetch()}>Retry</button>
+          <button class="btn-with-icon" onClick={() => void refetch()}>
+            <SyncIcon size={14} />
+            Retry
+          </button>
         </Show>
         <Show when={!landed() && review()}>
           {(value) => (
@@ -195,21 +199,23 @@ export function DelegationReviewDialog(props: { task: Task; open: boolean; onClo
           </button>
           <Show when={props.task.landingState === 'landed_pending_review'}>
             <button
-              class="btn-primary"
+              class="btn-primary btn-with-icon"
               onClick={() => {
                 clearTaskLandingReview(props.task.id);
                 props.onClose();
               }}
             >
+              <CheckIcon size={14} />
               Mark reviewed
             </button>
           </Show>
           <Show when={!landed()}>
             <button
-              class="btn-primary"
+              class="btn-primary btn-with-icon"
               disabled={merging() || review.loading || !!review.error || !review()}
               onClick={() => void merge()}
             >
+              <GitMergeIcon size={14} />
               {merging() ? 'Merging…' : 'Approve and merge this result'}
             </button>
           </Show>

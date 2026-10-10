@@ -2,7 +2,7 @@ import { expectDefined } from '../store/test-helpers';
 import { For, Show, createEffect, createSignal, onCleanup, type ComponentProps } from 'solid-js';
 import { render } from 'solid-js/web';
 import { createStore } from 'solid-js/store';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, expect, it, vi } from 'vitest';
 import { TaskPanel } from './TaskPanel';
 import { IPC } from '../../electron/ipc/channels';
 import type { CommitInfo } from '../ipc/types';
@@ -239,6 +239,15 @@ vi.mock('./TaskReasoningGraphHost', () => ({
 }));
 
 let dispose: (() => void) | undefined;
+// The graph canvases and document tabs are lazy-loaded; transform them before the tests poll for them.
+beforeAll(async () => {
+  await Promise.all([
+    import('./TaskMindMap'),
+    import('./TaskReasoningGraphHost'),
+    import('./TaskCanvasDocument'),
+  ]);
+});
+
 afterEach(() => {
   dispose?.();
   toggleFocusMode(false);
@@ -310,7 +319,7 @@ it.each([undefined, 'landed_pending_review'] as const)(
 
 it.each(['reasoning', 'mindmap'] as const)(
   'gives the %s canvas the larger share in focus mode and keeps every pane',
-  (kind) => {
+  async (kind) => {
     const [task, setTask] = createStore<Task>({
       id: 'task',
       name: 'Task',
@@ -348,7 +357,9 @@ it.each(['reasoning', 'mindmap'] as const)(
     expect(terminal).not.toBeNull();
     prompt.value = 'Draft';
     const notes = expectDefined(container.querySelector<HTMLTextAreaElement>('.test-notes'));
-    const canvas = expectDefined(container.querySelector<HTMLTextAreaElement>('.test-canvas'));
+    const canvas = await vi.waitFor(() =>
+      expectDefined(container.querySelector<HTMLTextAreaElement>('.test-canvas')),
+    );
     notes.value = 'Unsaved notes';
     canvas.value = 'Unsaved Markdown';
     expectDefined(
@@ -360,8 +371,10 @@ it.each(['reasoning', 'mindmap'] as const)(
       ),
     ).click();
     const graphSelector = kind === 'reasoning' ? '.test-graph' : '.mindmap-editor';
-    const graph = expectDefined(
-      container.querySelector<HTMLTextAreaElement>(`.task-canvas-reasoning ${graphSelector}`),
+    const graph = await vi.waitFor(() =>
+      expectDefined(
+        container.querySelector<HTMLTextAreaElement>(`.task-canvas-reasoning ${graphSelector}`),
+      ),
     );
     graph.value = 'Held graph state';
     const canvasCell = expectDefined(graph.closest<HTMLElement>('.rp-cell'));

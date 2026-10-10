@@ -11,6 +11,7 @@ import { parseMindMapUpdate } from '../shared/mindmap.js';
 import { parseReasoningUpdate } from '../shared/reasoning-feed.js';
 import { parseCanvasView } from '../shared/canvas-view.js';
 import { parseAgentTourPayload } from '../shared/agent-tour.js';
+import { isGitHubAgentTaskId, parseGitHubList } from '../shared/github-list.js';
 import { parseEvidenceSubmission } from '../shared/evidence.js';
 import {
   LEGACY_WAIT_DEFAULT_MS,
@@ -104,6 +105,7 @@ export async function handleMCPToolCall(
     'reasoning_update',
     'canvas_open',
     'tour_publish',
+    'github_list_publish',
     'submit_evidence',
     'get_evidence',
   ].includes(name);
@@ -117,6 +119,8 @@ export async function handleMCPToolCall(
       content: [{ type: 'text', text: `Error: '${name}' is not available to this session.` }],
       isError: true,
     };
+  if (name === 'github_list_publish' && !isGitHubAgentTaskId(taskId))
+    return toolError(`Error: only the GitHub page's agent can publish GitHub lists.`);
   // Legacy launches enforce exactly what selectTools advertises.
   if (
     !sessionCapabilities &&
@@ -177,6 +181,12 @@ export async function handleMCPToolCall(
         const id = taskId || coordinatorId;
         if (!id) throw new Error('A task-scoped MCP session is required.');
         const result = await client.publishTour(id, parseAgentTourPayload(params));
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      }
+      case 'github_list_publish': {
+        const id = taskId || coordinatorId;
+        if (!id) throw new Error('A task-scoped MCP session is required.');
+        const result = await client.publishGitHubList(id, parseGitHubList(params).list);
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       }
       case 'submit_evidence':

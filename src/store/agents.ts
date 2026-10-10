@@ -1,3 +1,4 @@
+import { createSignal } from 'solid-js';
 import { produce } from 'solid-js/store';
 import { invoke } from '../lib/ipc';
 import { IPC } from '../../electron/ipc/channels';
@@ -11,11 +12,26 @@ import { assignFreshSessionId } from './session-ids';
 import { widenTaskColumnForAgentPanes } from './task-column';
 import { forgetAgentPrompts } from '../lib/prompt-history';
 
+const [agentsLoaded, setAgentsLoaded] = createSignal(false);
+const [agentsLoadFailed, setAgentsLoadFailed] = createSignal(false);
+
+/** False until the first agent list arrived, so "none installed" is not shown while it is empty. */
+export { agentsLoaded };
+/** The listing failed, so an empty agent list says nothing about what is installed. */
+export { agentsLoadFailed };
+
 export async function loadAgents(): Promise<void> {
-  const defaults = await invoke<AgentDef[]>(IPC.ListAgents);
-  const custom = store.customAgents;
-  const customIds = new Set(custom.map((a) => a.id));
-  setStore('availableAgents', [...defaults.filter((d) => !customIds.has(d.id)), ...custom]);
+  try {
+    const defaults = await invoke<AgentDef[]>(IPC.ListAgents);
+    const custom = store.customAgents;
+    const customIds = new Set(custom.map((a) => a.id));
+    setStore('availableAgents', [...defaults.filter((d) => !customIds.has(d.id)), ...custom]);
+    setAgentsLoaded(true);
+    setAgentsLoadFailed(false);
+  } catch (error) {
+    setAgentsLoadFailed(true);
+    throw error;
+  }
 }
 
 export async function addAgentToTask(taskId: string, agentDef: AgentDef): Promise<string | null> {

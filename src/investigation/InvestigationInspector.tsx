@@ -11,6 +11,15 @@ import {
 } from 'solid-js';
 import { notePresentation, recordTrail } from './presentation';
 import { KindMark } from '../graph/KindMark';
+import {
+  CommentIcon,
+  CopyIcon,
+  ExternalLinkIcon,
+  SendIcon,
+  TerminalIcon,
+  TrashIcon,
+  UndoIcon,
+} from '../components/icons';
 import type { InvestigationRecord, InvestigationSource, Snapshot } from './state';
 import type { NoteDraft } from './editing';
 import { invoke } from '../lib/ipc';
@@ -170,8 +179,10 @@ export function InvestigationInspector(props: Props) {
       <small>This node’s title and notes are included with your question.</small>
       <button
         type="submit"
+        class="btn-with-icon"
         disabled={props.sending || !!props.askBlocker || !props.draft?.question.trim()}
       >
+        <SendIcon size={14} />
         {props.sending ? 'Sending…' : 'Send question'}
       </button>
       <Show when={props.askBlocker}>
@@ -240,12 +251,18 @@ export function InvestigationInspector(props: Props) {
             <Show when={!asking() || !props.draft}>
               <div class="investigation-editor-actions">
                 <Show when={props.onAsk}>
-                  <button aria-expanded={asking()} onClick={() => setAsking(!asking())}>
+                  <button
+                    class="btn-with-icon"
+                    aria-expanded={asking()}
+                    onClick={() => setAsking(!asking())}
+                  >
+                    <CommentIcon size={14} />
                     Ask agent
                   </button>
                 </Show>
                 <Show when={props.onJumpToTranscript}>
                   <button
+                    class="btn-with-icon"
                     onClick={() =>
                       setJumpMessage(
                         props.onJumpToTranscript?.(props.selected)
@@ -254,6 +271,7 @@ export function InvestigationInspector(props: Props) {
                       )
                     }
                   >
+                    <TerminalIcon size={14} />
                     Jump to transcript
                   </button>
                 </Show>
@@ -324,7 +342,10 @@ export function InvestigationInspector(props: Props) {
                     </button>
                   </Show>
                   <Show when={dirty()}>
-                    <button onClick={() => props.onDiscard?.()}>Use agent version</button>
+                    <button class="btn-with-icon" onClick={() => props.onDiscard?.()}>
+                      <UndoIcon size={14} />
+                      Use agent version
+                    </button>
                   </Show>
                 </div>
                 <small>
@@ -384,9 +405,11 @@ export function InvestigationInspector(props: Props) {
                           <p>{entry.answer}</p>
                           <Show when={props.onRemoveExplanation}>
                             <button
+                              class="btn-with-icon"
                               aria-label={`Remove answer to “${entry.question}”`}
                               onClick={() => removeExplanation(entry.id)}
                             >
+                              <TrashIcon size={12} />
                               Remove
                             </button>
                           </Show>
@@ -412,12 +435,17 @@ export function InvestigationInspector(props: Props) {
                           </Show>
                           <span class="investigation-source-actions">
                             <Show when={source.url || props.onOpenSource}>
-                              <button onClick={() => void openSource(source)}>
+                              <button class="btn-with-icon" onClick={() => void openSource(source)}>
+                                <ExternalLinkIcon size={12} />
                                 {source.url ? 'Open source' : 'Open'}
                               </button>
                             </Show>
                             <Show when={!source.url}>
-                              <button onClick={() => void openSource(source, true)}>
+                              <button
+                                class="btn-with-icon"
+                                onClick={() => void openSource(source, true)}
+                              >
+                                <CopyIcon size={12} />
                                 Copy location
                               </button>
                             </Show>

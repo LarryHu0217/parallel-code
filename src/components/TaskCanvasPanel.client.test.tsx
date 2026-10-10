@@ -1,7 +1,7 @@
 import { render } from 'solid-js/web';
 import { createSignal } from 'solid-js';
 import { createStore } from 'solid-js/store';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EditorView } from '@codemirror/view';
 import { undo } from '@codemirror/commands';
 import { IPC } from '../../electron/ipc/channels';
@@ -74,6 +74,12 @@ beforeEach(() => {
       },
     },
   });
+});
+
+// The panel lazy-loads the document editor; transform it up front so the
+// first test's polling budget is not spent compiling CodeMirror.
+beforeAll(async () => {
+  await import('./TaskCanvasDocument');
 });
 
 afterEach(() => {

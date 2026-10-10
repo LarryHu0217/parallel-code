@@ -16,7 +16,7 @@ import { getTaskAttentionState } from '../store/taskStatus';
 import { theme } from '../lib/theme';
 import { sf } from '../lib/fontScale';
 import { Dialog } from './Dialog';
-import { CloseIcon } from './icons';
+import { CloseIcon, StopIcon, SyncIcon } from './icons';
 
 interface SubTaskStripProps {
   coordinatorTaskId: string;
@@ -112,6 +112,7 @@ function MCPLogModal(props: { onClose: () => void }) {
       <div style={{ 'font-size': sf(11), color: theme.fgSubtle }}>
         Showing last 200 entries. Refresh to reload.
         <button
+          class="btn-with-icon"
           style={{
             'margin-left': '8px',
             background: 'none',
@@ -130,6 +131,7 @@ function MCPLogModal(props: { onClose: () => void }) {
             });
           }}
         >
+          <SyncIcon size={12} />
           Refresh
         </button>
       </div>
@@ -280,7 +282,7 @@ export function SubTaskStrip(props: SubTaskStripProps) {
                 </button>
                 <Show when={task.agentIds.some((id) => store.agents[id]?.status === 'running')}>
                   <button
-                    class="delegation-button"
+                    class="delegation-button btn-with-icon"
                     title={`Stop ${task.name}; keep its worktree`}
                     onClick={() => {
                       void Promise.all(
@@ -288,6 +290,7 @@ export function SubTaskStrip(props: SubTaskStripProps) {
                       ).catch((error: unknown) => showNotification(String(error)));
                     }}
                   >
+                    <StopIcon size={12} />
                     Stop
                   </button>
                 </Show>

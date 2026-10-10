@@ -1,6 +1,6 @@
 import { render } from 'solid-js/web';
 import { onCleanup, onMount } from 'solid-js';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { setStore, store } from '../store/core';
 import { addAgentToTask } from '../store/agents';
 import { clearAgentActivity } from '../store/taskStatus';
@@ -37,6 +37,11 @@ vi.mock('../lib/ipc', () => ({
 vi.mock('../lib/shell', () => ({ openInEditor: vi.fn(), revealItemInDir: vi.fn() }));
 
 const disposers: Array<() => void> = [];
+
+// TilingLayout lazy-loads the document panel; transform it before the tests poll for it.
+beforeAll(async () => {
+  await import('./DocumentWorkspacePanel');
+});
 
 afterEach(() => {
   while (disposers.length > 0) disposers.pop()?.();
@@ -82,8 +87,7 @@ async function open(): Promise<HTMLElement> {
   const host = document.createElement('div');
   document.body.append(host);
   disposers.push(render(() => <TilingLayout />, host));
-  await Promise.resolve();
-  expect(host.querySelector('.terminal-stub')).not.toBeNull();
+  await vi.waitFor(() => expect(host.querySelector('.terminal-stub')).not.toBeNull());
   expect(store.activeTaskId).toBe(documentAgentTaskId('docs'));
   return host;
 }

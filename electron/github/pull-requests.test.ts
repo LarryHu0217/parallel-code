@@ -21,6 +21,8 @@ import { execFile } from 'child_process';
 import {
   actionsJobId,
   getFailedChecks,
+  getPullRequestDetails,
+  getReviewFeedback,
   mergePullRequest,
   parseFailedChecks,
   parseMergeMethods,
@@ -130,7 +132,7 @@ describe('parseFailedChecks', () => {
 });
 
 describe('actionsJobId', () => {
-  const ref = { owner: 'O', repo: 'r' };
+  const ref = { host: 'github.com', owner: 'O', repo: 'r' };
   it('extracts job ids from same-repo Actions URLs only', () => {
     expect(actionsJobId('https://github.com/o/r/actions/runs/1/job/42', ref)).toBe('42');
     expect(actionsJobId('https://github.com/other/r/actions/runs/1/job/42', ref)).toBeNull();
@@ -224,5 +226,40 @@ describe('parseReviewFeedback', () => {
       threads: [],
       truncated: false,
     });
+  });
+});
+
+describe('enterprise PR actions', () => {
+  const url = 'https://code.acme.test/o/r/pull/7';
+  it('routes repository metadata and review feedback to the PR host', async () => {
+    const calls = stubGh(() => '{}');
+    await getPullRequestDetails(url);
+    await getReviewFeedback(url);
+    expect(calls).toContainEqual(expect.arrayContaining(['repo', 'view', 'code.acme.test/o/r']));
+    expect(calls).toContainEqual(
+      expect.arrayContaining(['api', 'graphql', '--hostname', 'code.acme.test']),
+    );
+  });
+
+  it('fetches enterprise job logs and excludes jobs on another host', async () => {
+    const calls = stubGh((args) =>
+      args[0] === 'pr'
+        ? JSON.stringify({
+            statusCheckRollup: ['code.acme.test', 'github.com'].map((host) => ({
+              name: host,
+              conclusion: 'FAILURE',
+              detailsUrl: `https://${host}/o/r/actions/runs/1/job/11`,
+            })),
+          })
+        : 'failure',
+    );
+    const checks = await getFailedChecks(url);
+    expect(checks.map((check) => check.logTail)).toEqual(['failure', null]);
+    expect(calls[1]).toEqual([
+      'api',
+      'repos/o/r/actions/jobs/11/logs',
+      '--hostname',
+      'code.acme.test',
+    ]);
   });
 });

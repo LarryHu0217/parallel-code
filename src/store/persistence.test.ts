@@ -1779,6 +1779,28 @@ describe('code Q&A model persistence', () => {
     setAskCodeProvider('claude');
     expect(store.askCodeModel).toBe('sonnet');
   });
+
+  it('keeps model task naming off unless it was explicitly enabled', async () => {
+    mockInvoke.mockResolvedValueOnce(stateJson({ modelTaskNames: 'yes' }));
+    await loadState();
+    expect(store.modelTaskNames).toBe(false);
+
+    mockInvoke.mockResolvedValueOnce(stateJson({ modelTaskNames: true }));
+    await loadState();
+    expect(store.modelTaskNames).toBe(true);
+    expect((await lastSaved()).modelTaskNames).toBe(true);
+  });
+
+  it('keeps a chosen naming model and falls back to Haiku for an unknown one', async () => {
+    mockInvoke.mockResolvedValueOnce(stateJson({ taskNameModel: 'luna' }));
+    await loadState();
+    expect(store.taskNameModel).toBe('luna');
+    expect((await lastSaved()).taskNameModel).toBe('luna');
+
+    mockInvoke.mockResolvedValueOnce(stateJson({ taskNameModel: 'gpt-4' }));
+    await loadState();
+    expect(store.taskNameModel).toBe('haiku');
+  });
 });
 
 describe('active task repair', () => {
@@ -1874,6 +1896,38 @@ describe('document terminal persistence', () => {
     await saveState();
     const saved = mockInvoke.mock.calls.findLast(([channel]) => channel === IPC.SaveAppState);
     expect(JSON.parse(saved?.[1].json).tasks[id]).toMatchObject(task);
+  });
+});
+
+describe('GitHub page agent persistence', () => {
+  it('restores a code project’s GitHub agent in its checkout, outside the task list', async () => {
+    const id = 'gh-agent-code';
+    const task = {
+      ...persistedTask(agentDef()),
+      id,
+      projectId: 'code',
+      worktreePath: '/old/code',
+      gitIsolation: 'none',
+      agentIds: [id],
+    };
+    mockInvoke.mockResolvedValueOnce(
+      basePayload({
+        projects: [{ id: 'code', name: 'Code', path: '/new/code', color: '' }],
+        tasks: { [id]: task },
+        taskOrder: [],
+      }),
+    );
+
+    await loadState();
+
+    expect(store.tasks[id]?.worktreePath).toBe('/new/code');
+    expect(store.agents[id]?.resumed).toBe(true);
+    expect(store.taskOrder).toEqual([]);
+
+    mockInvoke.mockResolvedValue(undefined);
+    await saveState();
+    const saved = mockInvoke.mock.calls.findLast(([channel]) => channel === IPC.SaveAppState);
+    expect(JSON.parse(saved?.[1].json).tasks[id]).toMatchObject({ id, projectId: 'code' });
   });
 });
 
@@ -2029,6 +2083,25 @@ it('round-trips canvas task links for active and collapsed tasks without revivin
   const call = mockInvoke.mock.calls.find(([channel]) => channel === IPC.SaveAppState);
   const saved = JSON.parse(call?.[1].json);
   for (const id of ['task-1', 'task-2']) expect(saved.tasks[id].canvasTaskLinks).toEqual(links);
+});
+
+it('does not register delegation authority for hidden agent tasks', async () => {
+  const hidden = { ...persistedTask(agentDef()), id: 'gh-agent-project-1' };
+  const normal = { ...persistedTask(agentDef()), id: 'normal-authority' };
+  mockInvoke.mockResolvedValueOnce(
+    JSON.stringify({
+      projects: [{ id: 'project-1', name: 'Repo', path: '/repo', color: '' }],
+      taskOrder: [hidden.id, normal.id],
+      collapsedTaskOrder: [],
+      tasks: { [hidden.id]: hidden, [normal.id]: normal },
+    }),
+  );
+  await loadState();
+  const registered = mockInvoke.mock.calls
+    .filter(([channel, args]) => channel === IPC.DelegationRequest && args?.action === 'register')
+    .map(([, args]) => args.task.taskId);
+  expect(registered).not.toContain(hidden.id);
+  expect(registered).toContain(normal.id);
 });
 
 it('restores parent authority before its child and round-trips delegation policy', async () => {

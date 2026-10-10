@@ -3,7 +3,7 @@ import { theme, sectionLabelStyle } from '../lib/theme';
 import { sf } from '../lib/fontScale';
 import type { CanvasSelection } from '../lib/live-markdown';
 import { IconButton } from './IconButton';
-import { CloseIcon } from './icons';
+import { CloseIcon, CommentIcon } from './icons';
 import { TaskCanvasEditor } from './TaskCanvasEditor';
 import type { CanvasEditorApi, CanvasWrite } from './TaskCanvasEditor';
 
@@ -142,7 +142,7 @@ export function TaskCanvasBody(props: TaskCanvasBodyProps) {
                 />
                 <button
                   type="submit"
-                  class="btn-secondary"
+                  class="btn-secondary btn-with-icon"
                   disabled={!props.canSend || sending()}
                   title={
                     props.canSend
@@ -163,6 +163,7 @@ export function TaskCanvasBody(props: TaskCanvasBodyProps) {
                     'white-space': 'nowrap',
                   }}
                 >
+                  <CommentIcon size={12} />
                   Ask agent
                 </button>
               </div>

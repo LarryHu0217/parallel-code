@@ -27,6 +27,7 @@ import { ModelRows, type ChoiceSlot, type ModelSlot } from './ModelRows';
 import { buildInteractivePrompt } from './interactive-prompt';
 import { sendToDocumentAgent } from './agent-task';
 import { ActionIcon } from './BlockActions';
+import { SendIcon, SparkleIcon } from '../components/icons';
 
 interface RunComposerProps {
   /** The picked passage; null means the whole document. */
@@ -531,6 +532,7 @@ export function RunComposer(props: RunComposerProps) {
                 title={installed().length === 0 ? 'No agent is installed.' : undefined}
                 onClick={() => void send()}
               >
+                <SendIcon size={12} />
                 Send to agent
               </button>
             }
@@ -541,6 +543,7 @@ export function RunComposer(props: RunComposerProps) {
               disabled={!canRun()}
               onClick={() => void run()}
             >
+              <SparkleIcon size={12} />
               {documentStore.dispatching ? 'Starting…' : 'Generate proposals'}
             </button>
           </Show>

@@ -12,6 +12,7 @@ import { invoke } from '../lib/ipc';
 import { warn as logWarn } from '../lib/log';
 import { store, setStore } from './core';
 import { isLandedTaskState } from './landing';
+import { isHiddenAgentTaskId } from '../documents/task-id';
 import type { AgentDef } from '../ipc/types';
 import type { PersistedTask, Project, Task } from './types';
 
@@ -143,7 +144,8 @@ export function startDelegationStateHydration(): () => void {
     createEffect(() => {
       const tasks = new Map(
         Object.entries(store.tasks).filter(
-          ([, task]) =>
+          ([id, task]) =>
+            !isHiddenAgentTaskId(id) &&
             store.projects.find((project) => project.id === task.projectId)?.kind !== 'document',
         ),
       );

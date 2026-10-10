@@ -1,6 +1,7 @@
 import { For, Show, createMemo, createSignal } from 'solid-js';
 import type { ChatDiff } from '../../../electron/shared/agent-chat-types';
 import { parseDiff } from './diff-lines';
+import { DiffIcon } from '../icons';
 
 /** Enough to judge a change at a glance; the rest is one click away. */
 const PREVIEW_LINES = 40;
@@ -39,7 +40,10 @@ export function DiffView(props: {
         </button>
         <DiffStat added={props.diff.added} removed={props.diff.removed} />
         <Show when={props.applied && props.onReview}>
-          <button onClick={() => props.onReview?.(props.diff.path)}>Review diff</button>
+          <button class="btn-with-icon" onClick={() => props.onReview?.(props.diff.path)}>
+            <DiffIcon size={12} />
+            Review diff
+          </button>
         </Show>
       </div>
       <pre class="chat-diff-body" data-numbered={numbered()}>

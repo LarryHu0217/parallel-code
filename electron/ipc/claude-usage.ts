@@ -4,7 +4,7 @@ import path from 'path';
 import crypto from 'crypto';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import type { UsageResult, UsageWindow } from './shared-types.js';
+import type { CreditUsage, UsageResult, UsageWindow } from './shared-types.js';
 import { warn as logWarn, errMessage } from '../log.js';
 import { clampPercent, finite, parseResetsAt, requestUsage } from './usage-shared.js';
 
@@ -36,6 +36,83 @@ interface UsageWindowJson {
   resets_at?: unknown;
 }
 
+interface RawSpendMinor {
+  amount_minor?: unknown;
+  currency?: unknown;
+  exponent?: unknown;
+}
+
+interface RawSpend {
+  used?: RawSpendMinor | null;
+  limit?: RawSpendMinor | null;
+  percent?: unknown;
+  enabled?: unknown;
+}
+
+interface RawExtraUsage {
+  is_enabled?: unknown;
+  monthly_limit?: unknown;
+  used_credits?: unknown;
+  utilization?: unknown;
+  currency?: unknown;
+  decimal_places?: unknown;
+}
+
+export function parseCreditUsage(body: unknown): CreditUsage | null {
+  if (typeof body !== 'object' || body === null) return null;
+  const raw = body as { extra_usage?: unknown; spend?: unknown };
+
+  if (typeof raw.extra_usage === 'object' && raw.extra_usage !== null) {
+    const eu = raw.extra_usage as RawExtraUsage;
+    const isEnabled = eu.is_enabled === true;
+    const decimals = typeof eu.decimal_places === 'number' ? eu.decimal_places : 2;
+    const divisor = 10 ** decimals;
+    const rawUsed = finite(eu.used_credits);
+    const rawLimit = finite(eu.monthly_limit);
+    const used = rawUsed !== null ? rawUsed / divisor : null;
+    const limit = rawLimit !== null ? rawLimit / divisor : null;
+    const currency = typeof eu.currency === 'string' && eu.currency ? eu.currency : 'USD';
+    const usedPercent = finite(eu.utilization);
+
+    if (used !== null && (isEnabled || used > 0)) {
+      const calcPercent = limit !== null && limit > 0 ? clampPercent((used / limit) * 100) : null;
+      return {
+        used,
+        limit,
+        currency,
+        usedPercent: usedPercent !== null ? clampPercent(usedPercent) : calcPercent,
+      };
+    }
+  }
+
+  if (typeof raw.spend === 'object' && raw.spend !== null) {
+    const sp = raw.spend as RawSpend;
+    const enabled = sp.enabled === true;
+    const usedMinor = finite(sp.used?.amount_minor);
+    const exp = typeof sp.used?.exponent === 'number' ? sp.used.exponent : 2;
+    const divisor = 10 ** exp;
+    const used = usedMinor !== null ? usedMinor / divisor : null;
+    const limitMinor = finite(sp.limit?.amount_minor);
+    const limitExp = typeof sp.limit?.exponent === 'number' ? sp.limit.exponent : exp;
+    const limit = limitMinor !== null ? limitMinor / 10 ** limitExp : null;
+    const currency =
+      typeof sp.used?.currency === 'string' && sp.used.currency ? sp.used.currency : 'USD';
+    const percent = finite(sp.percent);
+
+    if (used !== null && (enabled || used > 0)) {
+      const calcPercent = limit !== null && limit > 0 ? clampPercent((used / limit) * 100) : null;
+      return {
+        used,
+        limit,
+        currency,
+        usedPercent: percent !== null ? clampPercent(percent) : calcPercent,
+      };
+    }
+  }
+
+  return null;
+}
+
 function parseWindow(value: unknown): UsageWindow | null {
   if (typeof value !== 'object' || value === null) return null;
   const raw = value as UsageWindowJson;
@@ -50,8 +127,15 @@ export function parseClaudeUsageResponse(body: unknown, now = Date.now()): Usage
   const raw = body as { five_hour?: unknown; seven_day?: unknown };
   const fiveHour = parseWindow(raw.five_hour);
   const sevenDay = parseWindow(raw.seven_day);
-  if (!fiveHour && !sevenDay) return null;
-  return { status: 'ok', fiveHour, sevenDay, fetchedAt: now };
+  const creditUsage = parseCreditUsage(body);
+  if (!fiveHour && !sevenDay && !creditUsage) return null;
+  return {
+    status: 'ok',
+    fiveHour,
+    sevenDay,
+    ...(creditUsage ? { creditUsage } : {}),
+    fetchedAt: now,
+  };
 }
 
 /** Extracts the OAuth access token from a Claude credentials JSON document. */

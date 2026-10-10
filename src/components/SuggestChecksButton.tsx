@@ -14,6 +14,7 @@ import { invoke } from '../lib/ipc';
 import { errMessage } from '../lib/log';
 import { theme } from '../lib/theme';
 import { store } from '../store/core';
+import { SparkleIcon } from './icons';
 
 interface SuggestChecksButtonProps {
   projectRoot: string;
@@ -72,6 +73,7 @@ export function SuggestChecksButton(props: SuggestChecksButtonProps) {
   return (
     <div style={{ display: 'grid', gap: '4px', 'justify-items': 'start' }}>
       <button
+        class="btn-with-icon"
         type="button"
         disabled={running()}
         onClick={() => void suggest()}
@@ -86,6 +88,7 @@ export function SuggestChecksButton(props: SuggestChecksButtonProps) {
           'font-size': '12px',
         }}
       >
+        <SparkleIcon size={12} />
         {running() ? 'Suggesting…' : 'Suggest with AI'}
       </button>
       <Show when={status()}>

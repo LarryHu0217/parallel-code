@@ -107,6 +107,30 @@ describe('countReadableTextLines', () => {
     await expect(countReadableTextLines(file)).resolves.toBe(2);
   });
 
+  it('counts a last line without a trailing newline and an empty file as zero', async () => {
+    const dir = tempDir();
+    fs.writeFileSync(path.join(dir, 'open.txt'), 'one\ntwo', 'utf8');
+    fs.writeFileSync(path.join(dir, 'empty.txt'), '', 'utf8');
+
+    await expect(countReadableTextLines(path.join(dir, 'open.txt'))).resolves.toBe(2);
+    await expect(countReadableTextLines(path.join(dir, 'empty.txt'))).resolves.toBe(0);
+  });
+
+  it('recounts a file after it changes', async () => {
+    const file = path.join(tempDir(), 'grows.txt');
+    fs.writeFileSync(file, 'one\n', 'utf8');
+    await expect(countReadableTextLines(file)).resolves.toBe(1);
+
+    fs.appendFileSync(file, 'two\nthree\n', 'utf8');
+    await expect(countReadableTextLines(file)).resolves.toBe(3);
+
+    // Same size, different content: only the timestamps tell them apart.
+    fs.writeFileSync(file, 'a\nb\nc\nd\ne\nf\ngh', 'utf8');
+    const later = new Date(Date.now() + 5_000);
+    fs.utimesSync(file, later, later);
+    await expect(countReadableTextLines(file)).resolves.toBe(7);
+  });
+
   it('returns zero for unreadable files', async () => {
     await expect(countReadableTextLines(path.join(tempDir(), 'missing.txt'))).resolves.toBe(0);
   });

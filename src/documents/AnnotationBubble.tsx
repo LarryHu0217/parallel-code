@@ -14,6 +14,7 @@ import {
 import { documentAgentSupport } from '../../electron/documents/shared';
 import type { AgentDef } from '../ipc/types';
 import type { DocumentAnnotation } from './types';
+import { CheckIcon, CommentIcon, PlusIcon } from '../components/icons';
 
 /**
  * A follow-up continues an answered question as a new question on the same
@@ -49,6 +50,7 @@ function FollowUp(props: { annotation: DocumentAnnotation; agent: AgentDef }) {
             title={`Ask ${props.agent.name} a follow-up question; it sees this exchange`}
             onClick={() => setOpen(true)}
           >
+            <CommentIcon size={12} />
             Ask follow-up
           </button>
         </div>
@@ -81,6 +83,7 @@ function FollowUp(props: { annotation: DocumentAnnotation; agent: AgentDef }) {
             disabled={!text().trim() || asking()}
             onClick={() => void ask()}
           >
+            <CommentIcon size={12} />
             {asking() ? 'Asking…' : `Ask ${props.agent.name}`}
           </button>
           <button
@@ -215,6 +218,7 @@ export function AnnotationBubble(props: AnnotationBubbleProps) {
             title="Resolve (r)"
             onClick={() => void setDocumentAnnotationResolved(props.annotation.id, true)}
           >
+            <CheckIcon size={12} />
             Resolve
           </button>
           <button
@@ -223,6 +227,7 @@ export function AnnotationBubble(props: AnnotationBubbleProps) {
             title="Send this to an agent as a task on the passage"
             onClick={() => props.onMakeTask(props.annotation)}
           >
+            <PlusIcon size={12} />
             Make task
           </button>
           <button
@@ -305,6 +310,7 @@ export function AnnotationBubble(props: AnnotationBubbleProps) {
                       title={`${props.annotation.answer ? 'Ask again' : 'Ask'} ${agent.name}`}
                       onClick={() => void askDocumentAnnotation(props.annotation.id, agent)}
                     >
+                      <CommentIcon size={12} />
                       {props.annotation.answer ? 'Ask again' : 'Ask'}
                       {askAgents().length > 1 || agent.id !== defaultAgent()?.id
                         ? ` · ${agent.name}`

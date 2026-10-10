@@ -12,7 +12,7 @@ import { invoke } from '../lib/ipc';
 import { IPC } from '../../electron/ipc/channels';
 import { warn as logWarn } from '../lib/log';
 import { parseGitHubUrl } from '../lib/github-url';
-import { isDocumentAgentTaskId } from '../documents/task-id';
+import { isHiddenAgentTaskId } from '../documents/task-id';
 import { store, setStore } from './core';
 import { showNotification } from './notification';
 import {
@@ -85,7 +85,7 @@ function isEnabled(): boolean {
  *  hidden agent task, and not on its way out. Plain terminals aren't tasks. */
 function isTrackableTask(taskId: string): boolean {
   const task = store.tasks[taskId];
-  return !!task && !isDocumentAgentTaskId(taskId) && !task.closingStatus && !task.collapsed;
+  return !!task && !isHiddenAgentTaskId(taskId) && !task.closingStatus && !task.collapsed;
 }
 
 // ---------------------------------------------------------------------------
@@ -289,7 +289,7 @@ export function onTaskRenamed(taskId: string): void {
 async function refreshLinkedTitles(): Promise<void> {
   const byTaskId = new Map<string, string>();
   for (const task of Object.values(store.tasks)) {
-    if (task?.superProductivity && !task.closingStatus && !isDocumentAgentTaskId(task.id)) {
+    if (task?.superProductivity && !task.closingStatus && !isHiddenAgentTaskId(task.id)) {
       byTaskId.set(task.superProductivity.taskId, task.id);
     }
   }

@@ -3,6 +3,7 @@ import { resolve } from 'path';
 import { describe, expect, it } from 'vitest';
 
 const css = readFileSync(resolve(__dirname, './documents.css'), 'utf8');
+const appCss = readFileSync(resolve(__dirname, '../styles.css'), 'utf8');
 
 /** The declarations of one top-level rule, by its exact selector. */
 function rule(selector: string): string {
@@ -77,5 +78,17 @@ describe('workspace frame', () => {
     expect(ws).not.toMatch(/inset:/);
     expect(ws).toMatch(/border-radius:\s*var\(--radius-lg\)/);
     expect(ws).toMatch(/border:\s*1px solid var\(--border\)/);
+  });
+});
+
+/* documents.css loads only with the lazy workspace panel. Without this rule the
+   task strip's wrapper grows to its full content width, so <main> scrolls
+   instead of the strip and focus mode renders off-screen. */
+describe('task workspace styles', () => {
+  it('keeps the task workspace rule in the eagerly loaded app stylesheet', () => {
+    const start = appCss.indexOf('\n.task-workspace {');
+    expect(start, 'no .task-workspace rule in styles.css').toBeGreaterThanOrEqual(0);
+    expect(appCss.slice(start, appCss.indexOf('}', start))).toMatch(/min-width:\s*0/);
+    expect(css).not.toContain('.task-workspace');
   });
 });

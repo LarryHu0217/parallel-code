@@ -23,6 +23,7 @@ import {
 } from '../store/delegation';
 import type { Task } from '../store/types';
 import { getCoordinatorChildren } from '../store/sidebar-order';
+import { CheckIcon, CloseIcon, CommentIcon, CopyIcon, PlayIcon, StopIcon, SyncIcon } from './icons';
 
 export function DelegationPanel(props: {
   task: Task;
@@ -159,6 +160,7 @@ export function DelegationPanel(props: {
               </div>
               <p>{message.reason}</p>
               <button
+                class="btn-with-icon"
                 disabled={busy()}
                 onClick={() =>
                   void act(() =>
@@ -169,6 +171,7 @@ export function DelegationPanel(props: {
                   )
                 }
               >
+                <CloseIcon size={12} />
                 Dismiss failure
               </button>
             </div>
@@ -200,6 +203,7 @@ export function DelegationPanel(props: {
                 when={props.task.delegationPaused || state()?.paused}
                 fallback={
                   <button
+                    class="btn-with-icon"
                     disabled={busy()}
                     onClick={() =>
                       // eslint-disable-next-line solid/reactivity -- act invokes this callback immediately within the click handler.
@@ -208,12 +212,14 @@ export function DelegationPanel(props: {
                       )
                     }
                   >
+                    <StopIcon size={12} />
                     Stop all subtasks
                   </button>
                 }
               >
                 <span>Subtask launches paused; worktrees are preserved.</span>
                 <button
+                  class="btn-with-icon"
                   disabled={busy()}
                   onClick={() =>
                     // eslint-disable-next-line solid/reactivity -- act invokes this callback immediately within the click handler.
@@ -222,6 +228,7 @@ export function DelegationPanel(props: {
                     )
                   }
                 >
+                  <PlayIcon size={12} />
                   Resume subtask launches
                 </button>
               </Show>
@@ -237,6 +244,7 @@ export function DelegationPanel(props: {
                 : `Failed — ${attempt.error ?? 'Unknown startup error'}`}
               <Show when={attempt.status === 'failed'}>
                 <button
+                  class="btn-with-icon"
                   disabled={busy()}
                   onClick={() =>
                     // eslint-disable-next-line solid/reactivity -- act invokes this callback immediately within the click handler.
@@ -249,6 +257,7 @@ export function DelegationPanel(props: {
                     )
                   }
                 >
+                  <CloseIcon size={12} />
                   Dismiss attempt
                 </button>
               </Show>
@@ -264,6 +273,7 @@ export function DelegationPanel(props: {
               {props.task.stagedNotification?.text}
             </pre>
             <button
+              class="btn-with-icon"
               disabled={busy()}
               onClick={() =>
                 // eslint-disable-next-line solid/reactivity -- act invokes this callback immediately within the click handler.
@@ -278,6 +288,7 @@ export function DelegationPanel(props: {
                 })
               }
             >
+              <CheckIcon size={12} />
               Mark read
             </button>
             <small> Marks these updates as read without merging changes.</small>
@@ -328,16 +339,27 @@ export function DelegationPanel(props: {
                     </Show>
                     <Show when={props.canUseComposer?.(message)}>
                       <button
+                        class="btn-with-icon"
                         disabled={busy()}
                         onClick={() =>
                           // eslint-disable-next-line solid/reactivity -- act invokes the callback synchronously in this click handler.
                           void act(() => useComposer(message))
                         }
                       >
+                        <CommentIcon size={12} />
                         Use in composer
                       </button>
                     </Show>
-                    <button disabled={busy()} onClick={() => void act(() => copyMessage(message))}>
+                    <button
+                      class="btn-with-icon"
+                      disabled={busy()}
+                      onClick={() => void act(() => copyMessage(message))}
+                    >
+                      {copied() === message.deliveryId ? (
+                        <CheckIcon size={12} />
+                      ) : (
+                        <CopyIcon size={12} />
+                      )}
                       {copied() === message.deliveryId ? 'Copied' : 'Copy text'}
                     </button>
                     <button
@@ -387,9 +409,11 @@ export function DelegationPanel(props: {
                   }
                 >
                   <button
+                    class="btn-with-icon"
                     disabled={busy()}
                     onClick={() => void act(() => restartForTools(agent.id))}
                   >
+                    <SyncIcon size={12} />
                     Restart and resume {agent.def.name} to enable delegation tools
                   </button>
                 </Show>

@@ -1,5 +1,6 @@
 import { For, Show, createMemo, createSignal, onMount } from 'solid-js';
 import type { ChatItem } from '../../../electron/shared/agent-chat-types';
+import { SearchIcon } from '../icons';
 
 const speakers = { user: 'You', tool: 'Activity', assistant: 'Assistant' };
 
@@ -71,7 +72,8 @@ export function TranscriptSearch(props: {
       }}
     >
       <Show when={!props.floating}>
-        <button aria-expanded={open()} onClick={() => setOpen(!open())}>
+        <button class="btn-with-icon" aria-expanded={open()} onClick={() => setOpen(!open())}>
+          <SearchIcon size={12} />
           Search conversation
         </button>
       </Show>

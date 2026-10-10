@@ -188,3 +188,138 @@ it('adds a task created from a phone without taking focus from the active task',
   expect(store.activeTaskId).toBe('task');
   expect(store.activeAgentId).toBe('agent');
 });
+
+/** Replies to the close request once the handler has finished. */
+async function closeRequest(force: boolean) {
+  listeners.get(IPC.Remote_CloseTaskRequest)?.({ reqId: 'req', taskId: 'task', force });
+  await vi.waitFor(() =>
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith(IPC.Remote_RendererReply, expect.anything()),
+  );
+  const reply = vi.mocked(invoke).mock.calls.find(([c]) => c === IPC.Remote_RendererReply);
+  return reply?.[1] as { ok: boolean; data?: unknown; error?: string };
+}
+
+it('refuses to close a task with unsaved work unless forced', async () => {
+  vi.mocked(invoke).mockImplementation(async (channel: string) =>
+    channel === IPC.GetWorktreeStatus
+      ? { has_uncommitted_changes: true, has_committed_changes: false }
+      : undefined,
+  );
+
+  const reply = await closeRequest(false);
+
+  expect(reply).toMatchObject({
+    ok: true,
+    data: {
+      closed: false,
+      warnings: ['There are uncommitted changes that will be permanently lost.'],
+    },
+  });
+  expect(vi.mocked(invoke)).not.toHaveBeenCalledWith(IPC.DeleteTask, expect.anything());
+  expect(store.tasks.task.closingStatus).toBeUndefined();
+});
+
+it('closes a clean task without forcing', async () => {
+  vi.mocked(invoke).mockImplementation(async (channel: string) =>
+    channel === IPC.GetWorktreeStatus
+      ? { has_uncommitted_changes: false, has_committed_changes: false }
+      : undefined,
+  );
+
+  const reply = await closeRequest(false);
+
+  expect(reply).toMatchObject({ ok: true, data: { closed: true } });
+  expect(vi.mocked(invoke)).toHaveBeenCalledWith(IPC.DeleteTask, expect.anything());
+});
+
+it('force-closes without checking the worktree', async () => {
+  const reply = await closeRequest(true);
+
+  expect(reply).toMatchObject({ ok: true, data: { closed: true } });
+  expect(vi.mocked(invoke)).not.toHaveBeenCalledWith(IPC.GetWorktreeStatus, expect.anything());
+  expect(vi.mocked(invoke)).toHaveBeenCalledWith(IPC.DeleteTask, expect.anything());
+});
+
+it('reports an unknown task instead of closing', async () => {
+  listeners.get(IPC.Remote_CloseTaskRequest)?.({ reqId: 'req', taskId: 'missing', force: true });
+  await vi.waitFor(() =>
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith(
+      IPC.Remote_RendererReply,
+      expect.objectContaining({ ok: false, error: 'Task not found' }),
+    ),
+  );
+});
+
+it('answers a phone diff request with the task diff against its base', async () => {
+  setStore('tasks', 'task', 'baseBranch', 'main');
+  vi.mocked(invoke).mockImplementation(async (channel: string) =>
+    channel === IPC.GetAllFileDiffs ? 'diff --git a/x b/x' : undefined,
+  );
+
+  listeners.get(IPC.Remote_GetDiffRequest)?.({ reqId: 'req', taskId: 'task' });
+
+  await vi.waitFor(() =>
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith(
+      IPC.Remote_RendererReply,
+      expect.objectContaining({
+        ok: true,
+        data: { diff: 'diff --git a/x b/x', truncated: false },
+      }),
+    ),
+  );
+  expect(vi.mocked(invoke)).toHaveBeenCalledWith(IPC.GetAllFileDiffs, {
+    worktreePath: '/tmp/task',
+    baseBranch: 'main',
+  });
+});
+
+it.each([
+  [undefined, true],
+  [false, false],
+])(
+  'reports merge readiness with a headline and the branch close rule (deleteBranchOnClose=%s)',
+  async (deleteBranchOnClose, expected) => {
+    setStore('projects', [
+      {
+        id: 'project',
+        name: 'Project',
+        path: '/tmp/project',
+        color: '',
+        ...(deleteBranchOnClose === undefined ? {} : { deleteBranchOnClose }),
+      },
+    ]);
+    vi.mocked(invoke).mockImplementation(async (channel: string) => {
+      if (channel === IPC.CheckMergeStatus)
+        return { main_ahead_count: 0, conflicting_files: [], base_branch: 'main' };
+      if (channel === IPC.GetWorktreeStatus)
+        return {
+          has_committed_changes: true,
+          has_uncommitted_changes: false,
+          current_branch: 'task/test',
+          base_branch: 'main',
+        };
+      return undefined;
+    });
+
+    listeners.get(IPC.Remote_GetMergeReadinessRequest)?.({ reqId: 'req', taskId: 'task' });
+    await vi.waitFor(() =>
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith(IPC.Remote_RendererReply, expect.anything()),
+    );
+    const reply = vi
+      .mocked(invoke)
+      .mock.calls.find(([c]) => c === IPC.Remote_RendererReply)?.[1] as {
+      ok: boolean;
+      data: {
+        readiness: { overall: string; checks: Array<{ label: string }> };
+        canMerge: boolean;
+        deleteBranchOnClose: boolean;
+      };
+    };
+
+    expect(reply.ok).toBe(true);
+    expect(['ready', 'attention']).toContain(reply.data.readiness.overall);
+    expect(reply.data.canMerge).toBe(true);
+    expect(reply.data.readiness.checks.map((c) => c.label)).toContain('Evidence');
+    expect(reply.data.deleteBranchOnClose).toBe(expected);
+  },
+);

@@ -281,6 +281,15 @@ export const launchShowcaseApp = async (
       app: started,
       page,
       close: async () => {
+        // Headless GTK cannot show the running-terminals confirmation dialog.
+        // Stop this isolated showcase's terminals before requesting a normal quit.
+        await page.evaluate(() =>
+          (
+            window as unknown as {
+              electron: { ipcRenderer: { invoke: (channel: string) => Promise<unknown> } };
+            }
+          ).electron.ipcRenderer.invoke('kill_all_agents'),
+        );
         await started.close();
         removeDir();
       },

@@ -6,6 +6,7 @@ import {
   type AskCodeProvider,
 } from '../../electron/shared/ask-code-models';
 import { codexModels, loadCodexModels } from '../lib/codex-models';
+import { TASK_NAME_MODELS, type TaskNameModelId } from '../../electron/shared/task-name-model';
 import { CustomThemeDialog } from './CustomThemeDialog';
 import {
   getAvailableTerminalFonts,
@@ -24,6 +25,8 @@ import {
   setAutoTrustFolders,
   setShowPlans,
   setShowPromptInput,
+  setModelTaskNames,
+  setTaskNameModel,
   setShowSidebarTips,
   setShowSidebarProgress,
   setSidebarNeedsInputFirst,
@@ -54,6 +57,7 @@ import {
 import { CustomAgentEditor } from './CustomAgentEditor';
 import { AgentEnvFileEditor } from './AgentEnvFileEditor';
 import { SuperProductivitySettings } from './SuperProductivitySettings';
+import { CopyIcon, PencilIcon, PlusIcon, SyncIcon } from './icons';
 import { mod } from '../lib/platform';
 import { DEFAULT_COORDINATOR_CONCURRENT_TASKS } from '../lib/coordinator-limits';
 import { DEFAULT_DOCKER_IMAGE, PROJECT_DOCKERFILE_RELATIVE_PATH } from '../lib/docker';
@@ -166,8 +170,9 @@ export function PresetThemeCard(props: {
           opacity: '0',
           transition: 'opacity 0.15s',
         }}
-        class="preset-clone-btn"
+        class="preset-clone-btn btn-with-icon"
       >
+        <CopyIcon size={12} />
         Clone
       </button>
     </div>
@@ -211,8 +216,9 @@ function CustomThemeCard(props: {
           opacity: '0',
           transition: 'opacity 0.15s',
         }}
-        class="preset-clone-btn"
+        class="preset-clone-btn btn-with-icon"
       >
+        <PencilIcon size={12} />
         Edit
       </button>
     </div>
@@ -486,6 +492,48 @@ export function SettingsDialog(props: SettingsDialogProps) {
               onChange={setShowPlans}
               description="Show a Review Plan button in Notes when a plan file is available"
             />
+            <SettingsCheckboxRow
+              label="Name tasks with a model"
+              checked={store.modelTaskNames}
+              onChange={setModelTaskNames}
+              description="Ask a cheap model for a short title when a task is named from its prompt; sends the prompt to that model's provider. The branch keeps its prompt-based name"
+            />
+            <Show when={store.modelTaskNames}>
+              <label
+                style={{
+                  display: 'flex',
+                  'align-items': 'center',
+                  gap: '10px',
+                  padding: '8px 12px',
+                  'border-radius': 'var(--radius-md)',
+                  background: theme.bgInput,
+                  border: `1px solid ${theme.border}`,
+                }}
+              >
+                <span style={{ 'font-size': '13px', color: theme.fg, 'white-space': 'nowrap' }}>
+                  Naming model
+                </span>
+                <select
+                  value={store.taskNameModel}
+                  onChange={(e) => setTaskNameModel(e.currentTarget.value as TaskNameModelId)}
+                  style={{
+                    flex: '1',
+                    background: theme.taskPanelBg,
+                    border: `1px solid ${theme.border}`,
+                    'border-radius': 'var(--radius-sm)',
+                    padding: '6px 10px',
+                    color: theme.fg,
+                    'font-size': '13px',
+                    outline: 'none',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <For each={Object.entries(TASK_NAME_MODELS)}>
+                    {([id, choice]) => <option value={id}>{choice.label}</option>}
+                  </For>
+                </select>
+              </label>
+            </Show>
             <SettingsCheckboxRow
               label="Show ownership badges on canvases"
               checked={store.canvasOwnershipBadges}
@@ -976,10 +1024,12 @@ export function SettingsDialog(props: SettingsDialogProps) {
                 <Show when={canCheckForUpdates()}>
                   <button
                     type="button"
+                    class="btn-with-icon"
                     disabled={updateStatus().phase === 'checking'}
                     onClick={() => void checkForUpdates()}
                     style={updateSecondaryButtonStyle(updateStatus().phase === 'checking')}
                   >
+                    <SyncIcon size={14} />
                     {updateStatus().phase === 'checking' ? 'Checking…' : 'Check for updates'}
                   </button>
                 </Show>
@@ -1105,6 +1155,7 @@ export function SettingsDialog(props: SettingsDialogProps) {
             <div style={{ ...sectionLabelStyle, 'font-weight': '600' }}>Themes</div>
             <button
               type="button"
+              class="btn-with-icon"
               onClick={() => {
                 setCloneCss(undefined);
                 setEditingThemeId(null);
@@ -1121,7 +1172,8 @@ export function SettingsDialog(props: SettingsDialogProps) {
                 'border-radius': 'var(--radius-sm)',
               }}
             >
-              + Create New
+              <PlusIcon size={12} />
+              Create New
             </button>
           </div>
 

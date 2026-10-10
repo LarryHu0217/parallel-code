@@ -3,10 +3,12 @@ import { Portal } from 'solid-js/web';
 import { store, refreshUsage, USAGE_PROVIDERS } from '../store/store';
 import { theme } from '../lib/theme';
 import { sf } from '../lib/fontScale';
-import type { UsageProvider, UsageWindow } from '../ipc/types';
+import type { CreditUsage, UsageProvider, UsageWindow } from '../ipc/types';
 import type { UsageState } from '../store/types';
+import { ResourcesPanel } from './ResourcesPanel';
 import {
   USAGE_WARN_PERCENT,
+  formatCurrency,
   formatFetchedAt,
   formatReset,
   hasUsageSnapshot,
@@ -56,6 +58,56 @@ function UsageMeter(props: { label: string; window: UsageWindow; width?: number 
       </span>
       <Show when={reset()}>
         <span style={{ color: theme.fgSubtle }}>{reset()}</span>
+      </Show>
+    </span>
+  );
+}
+
+function CreditMeter(props: { credit: CreditUsage; width?: number }) {
+  const usedText = () => formatCurrency(props.credit.used, props.credit.currency);
+  const limitText = () =>
+    props.credit.limit !== null ? formatCurrency(props.credit.limit, props.credit.currency) : null;
+  const percent = () => (props.credit.limit !== null ? props.credit.usedPercent : null);
+  // Not a truthy check: 0% used with a limit set still draws an empty meter.
+  const hasPercent = () => percent() !== null;
+  const pct = () => percent() ?? 0;
+  const warn = () => (props.credit.usedPercent ?? 0) >= USAGE_WARN_PERCENT;
+  const color = () => (warn() ? theme.warning : theme.accent);
+
+  return (
+    <span style={{ display: 'inline-flex', 'align-items': 'center', gap: '6px' }}>
+      <span style={{ color: theme.fgSubtle }}>Credits</span>
+      <Show when={hasPercent()}>
+        <span
+          role="progressbar"
+          aria-label="Credit usage"
+          aria-valuenow={Math.round(pct())}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          style={{
+            width: `${props.width ?? 80}px`,
+            height: '5px',
+            'border-radius': 'var(--radius-xs)',
+            background: theme.bgInput,
+            border: `1px solid ${theme.border}`,
+            overflow: 'hidden',
+          }}
+        >
+          <span
+            style={{
+              display: 'block',
+              height: '100%',
+              width: `${Math.min(100, Math.max(0, pct()))}%`,
+              background: color(),
+            }}
+          />
+        </span>
+      </Show>
+      <span style={{ color: warn() ? theme.warning : theme.fg, 'font-weight': '500' }}>
+        {limitText() ? `${usedText()} / ${limitText()}` : `${usedText()} used`}
+      </span>
+      <Show when={hasPercent()}>
+        <span style={{ color: theme.fgSubtle }}>({Math.round(pct())}%)</span>
       </Show>
     </span>
   );
@@ -115,6 +167,7 @@ function UsagePopover(props: {
         <Show when={props.usage.sevenDay}>
           {(w) => <UsageMeter label="7d" window={w()} width={120} />}
         </Show>
+        <Show when={props.usage.creditUsage}>{(c) => <CreditMeter credit={c()} />}</Show>
         <div
           style={{
             color: props.usage.status === 'error' ? theme.warning : theme.fgSubtle,
@@ -175,6 +228,8 @@ function ProviderUsage(props: { provider: UsageProvider }) {
           {PROVIDER_LABELS[props.provider]}
         </span>
         <Show when={headline()}>{(h) => <UsageMeter label={h().label} window={h().window} />}</Show>
+        {/* Pay-per-use logins have no rate-limit windows; their spend is the headline. */}
+        <Show when={!headline() && usage().creditUsage}>{(c) => <CreditMeter credit={c()} />}</Show>
         <Show when={!hasUsageSnapshot(usage())}>
           <span>usage unavailable · {usage().error}</span>
         </Show>
@@ -188,34 +243,32 @@ function ProviderUsage(props: { provider: UsageProvider }) {
 
 /**
  * Bottom bar with the rate-limit windows of every agent subscription the app
- * can read (Claude Code, Codex). Hidden until the first successful read, and
- * permanently when no agent has a subscription login (API-key users).
+ * can read (Claude Code, Codex) and the resources panel on the right. A
+ * provider's entry stays hidden until its first successful read, and
+ * permanently when it has no subscription login (API-key users).
  */
 export function UsageStatusBar() {
-  const visible = createMemo(() => USAGE_PROVIDERS.some((p) => usageVisible(store.usage[p])));
-
   return (
-    <Show when={visible()}>
-      <div
-        style={{
-          height: '24px',
-          'min-height': '24px',
-          display: 'flex',
-          'align-items': 'center',
-          gap: '28px',
-          padding: '0 10px',
-          'border-top': `1px solid ${theme.border}`,
-          'font-family': "'JetBrains Mono', monospace",
-          'font-size': sf(11),
-          color: theme.fgMuted,
-          'white-space': 'nowrap',
-          overflow: 'hidden',
-          'user-select': 'none',
-          'flex-shrink': '0',
-        }}
-      >
-        <For each={USAGE_PROVIDERS}>{(provider) => <ProviderUsage provider={provider} />}</For>
-      </div>
-    </Show>
+    <div
+      style={{
+        height: '24px',
+        'min-height': '24px',
+        display: 'flex',
+        'align-items': 'center',
+        gap: '28px',
+        padding: '0 10px',
+        'border-top': `1px solid ${theme.border}`,
+        'font-family': "'JetBrains Mono', monospace",
+        'font-size': sf(11),
+        color: theme.fgMuted,
+        'white-space': 'nowrap',
+        overflow: 'hidden',
+        'user-select': 'none',
+        'flex-shrink': '0',
+      }}
+    >
+      <For each={USAGE_PROVIDERS}>{(provider) => <ProviderUsage provider={provider} />}</For>
+      <ResourcesPanel />
+    </div>
   );
 }

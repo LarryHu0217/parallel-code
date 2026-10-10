@@ -3,6 +3,7 @@ import { sendPrompt, store } from '../store/store';
 import { bannerStyle, theme } from '../lib/theme';
 import type { Task } from '../store/types';
 import type { MergeState } from './merge-state';
+import { GitBranchIcon, GitMergeIcon, SparkleIcon } from './icons';
 
 const buttonStyle = (primary: boolean, disabled = false) => ({
   padding: '5px 12px',
@@ -85,15 +86,18 @@ export function MergeConflictBanner(props: { task: Task; state: MergeState; onDo
               }}
             >
               <button
+                class="btn-with-icon"
                 type="button"
                 disabled={blocked()}
                 onClick={() => void props.state.syncWithBase('rebase')}
                 title={blockedTitle('rebase') ?? `Replay this branch's commits on top of ${base()}`}
                 style={buttonStyle(!props.state.hasConflicts(), blocked())}
               >
+                <GitBranchIcon size={12} />
                 {props.state.syncing() === 'rebase' ? 'Rebasing…' : `Rebase onto ${base()}`}
               </button>
               <button
+                class="btn-with-icon"
                 type="button"
                 disabled={blocked()}
                 onClick={() => void props.state.syncWithBase('merge')}
@@ -103,15 +107,18 @@ export function MergeConflictBanner(props: { task: Task; state: MergeState; onDo
                 }
                 style={buttonStyle(false, blocked())}
               >
+                <GitMergeIcon size={12} />
                 {props.state.syncing() === 'merge' ? 'Merging…' : `Merge ${base()} into branch`}
               </button>
               <Show when={agentRunning()}>
                 <button
+                  class="btn-with-icon"
                   type="button"
                   onClick={askAgent}
                   title="Close the dialog and ask the agent to rebase"
                   style={buttonStyle(props.state.hasConflicts())}
                 >
+                  <SparkleIcon size={12} />
                   Rebase with AI
                 </button>
               </Show>

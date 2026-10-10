@@ -1,5 +1,6 @@
 import { For, Show, batch, createEffect, createSignal, onCleanup } from 'solid-js';
 import { validateChatImages, type ChatImage } from '../../../electron/shared/agent-chat-types';
+import { CheckIcon } from '../icons';
 
 export async function readChatImages(files: File[]): Promise<ChatImage[]> {
   if (files.length > 4 || files.reduce((size, file) => size + file.size, 0) > 6 * 1024 * 1024)
@@ -99,7 +100,10 @@ export function ChatContext(props: {
               </small>
             </Show>
           </Show>
-          <button onClick={() => props.onClose()}>Done</button>
+          <button class="btn-with-icon" onClick={() => props.onClose()}>
+            <CheckIcon size={12} />
+            Done
+          </button>
         </div>
       </Show>
       <div class="chat-context-chips">

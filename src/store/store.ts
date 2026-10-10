@@ -156,6 +156,8 @@ export {
   setAutoTrustFolders,
   setShowPlans,
   setShowPromptInput,
+  setModelTaskNames,
+  setTaskNameModel,
   setShowSidebarTips,
   setShowSidebarProgress,
   setSidebarNeedsInputFirst,

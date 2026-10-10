@@ -23,6 +23,7 @@ import { openFileInEditor, revealItemInDir } from '../lib/shell';
 import { openCanvasDocument } from '../store/canvas';
 import { isMarkdownPath } from '../lib/canvas-tabs';
 import { ChatView, type ChatActions, type ChatProps } from './chat/ChatView';
+import { SyncIcon } from './icons';
 import './AgentChatView.css';
 
 export function AgentChatView(props: {
@@ -310,7 +311,8 @@ export function AgentChatView(props: {
         <div role="alert" class="codex-chat-error">
           {error() || state()?.error || 'Disconnected.'}
           <Show when={error() || state()?.status === 'closed'}>
-            <button disabled={connecting()} onClick={() => void connect()}>
+            <button class="btn-with-icon" disabled={connecting()} onClick={() => void connect()}>
+              <SyncIcon size={12} />
               Reconnect
             </button>
             <p>If sign-in is needed, use {agentName()}’s login flow in Terminal, then reconnect.</p>

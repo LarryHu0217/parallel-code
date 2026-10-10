@@ -3,6 +3,7 @@ import type { DocumentCandidateRecord, DocumentRunRecord } from './types';
 import { refineDocumentCandidate } from './store';
 import { errMessage } from '../lib/log';
 import { registerCompareForm } from './workspace-ui';
+import { SparkleIcon } from '../components/icons';
 
 export function CandidateRefinement(props: {
   run: DocumentRunRecord;
@@ -62,6 +63,7 @@ export function CandidateRefinement(props: {
         onClick={() => setOpen(!open())}
         disabled={starting()}
       >
+        <SparkleIcon size={12} />
         Refine this candidate
       </button>
       <Show when={open()}>
@@ -89,6 +91,7 @@ export function CandidateRefinement(props: {
             disabled={!feedback().trim() || starting()}
             onClick={() => void refine()}
           >
+            <SparkleIcon size={12} />
             {starting() ? 'Starting…' : 'Generate revision'}
           </button>
         </div>

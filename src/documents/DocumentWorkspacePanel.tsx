@@ -65,7 +65,7 @@ import { DocumentIcon } from './DocumentIcon';
 import { ActionIcon } from './BlockActions';
 import { Dialog } from '../components/Dialog';
 import { openInEditor, revealItemInDir } from '../lib/shell';
-import { CloseIcon } from '../components/icons';
+import { CloseIcon, PencilIcon, UndoIcon } from '../components/icons';
 import { setDocumentFullWidth, toggleTaskFocusMode } from '../store/ui';
 import { isTerminalPaneOnScreen } from '../lib/terminalPaneVisibility';
 import { errMessage } from '../lib/log';
@@ -377,6 +377,7 @@ function DocumentPane(props: { project: Project }) {
             class="docws-btn docws-btn-sm"
             onClick={() => editBlock(editableBlock())}
           >
+            <PencilIcon size={12} />
             Edit block
           </button>
         </Show>
@@ -388,6 +389,7 @@ function DocumentPane(props: { project: Project }) {
               class="docws-btn docws-btn-sm"
               onClick={() => void undoDeleteDocumentAnnotation()}
             >
+              <UndoIcon size={12} />
               Undo
             </button>
           </span>
@@ -815,6 +817,7 @@ export function DocumentWorkspacePanel() {
     },
     {
       id: 'rail',
+      resizeLabel: 'Resize side rail',
       get minSize() {
         return wide() ? 320 : 120;
       },

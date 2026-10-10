@@ -23,6 +23,7 @@ import {
   handoffClaudeTerminal,
 } from './pty.js';
 import { loadEnvFile } from './env-file.js';
+import { getResourceSnapshot } from './resources.js';
 import { editorGotoArgs, spawnDetached, validateEditorCommand } from './open-file.js';
 import { appendGitInfoExcludeBlock } from './git-exclude.js';
 import {
@@ -71,7 +72,13 @@ import { loadEslintQualityFindings } from './eslint-quality-findings.js';
 import { buildVerifyEnv, validateVerifyCommand, verificationRunner } from './verify.js';
 import { scanEvidence } from './evidence-scan.js';
 import { startRemoteServer, getMCPLogs, type RemoteProject } from '../remote/server.js';
-import type { RemoteAttentionState, RemoteAgent } from '../remote/protocol.js';
+import type {
+  RemoteAttentionState,
+  RemoteCloseResult,
+  RemoteMergeReadiness,
+  RemoteTaskContext,
+  RemoteTaskDiff,
+} from '../remote/protocol.js';
 import { atomicWriteFileSync } from '../mcp/atomic.js';
 import { getUserDataDir } from '../user-data-dir.js';
 import {
@@ -82,6 +89,7 @@ import {
 import type { MindMapDocument, MindMapUpdate } from '../shared/mindmap.js';
 import type { CanvasView } from '../shared/canvas-view.js';
 import type { AgentTourPayload } from '../shared/agent-tour.js';
+import type { GitHubCustomList } from '../shared/github-list.js';
 import type { EvidenceSubmission } from '../shared/evidence.js';
 import {
   buildMcpLaunchArgs,
@@ -641,10 +649,7 @@ export function registerAllHandlers(win: BrowserWindow): void {
   // the same richer status as the desktop. The renderer owns this computation
   // (it depends on reactive terminal/git/steps state), so main just caches it.
   const taskAttention = new Map<string, RemoteAttentionState>();
-  const taskContext = new Map<
-    string,
-    Pick<RemoteAgent, 'projectName' | 'projectColor' | 'agentName' | 'lastLine'>
-  >();
+  const taskContext = new Map<string, RemoteTaskContext>();
 
   // --- MCP coordinator (lazy — only loaded when coordinator mode is enabled) ---
   let coordinatorHandlersRegistered = false;
@@ -1774,6 +1779,8 @@ export function registerAllHandlers(win: BrowserWindow): void {
       callRenderer<{ ok: boolean }>(IPC.MCP_OpenCanvasRequest, { taskId, view }).then(() => {}),
     publishTour: (taskId: string, payload: AgentTourPayload) =>
       callRenderer<{ ok: boolean }>(IPC.MCP_PublishTourRequest, { taskId, payload }),
+    publishGitHubList: (taskId: string, list: GitHubCustomList) =>
+      callRenderer<{ ok: boolean }>(IPC.MCP_PublishGitHubListRequest, { taskId, list }),
     submitEvidence: (taskId: string, payload: EvidenceSubmission) =>
       callRenderer<unknown>(IPC.MCP_SubmitEvidenceRequest, { taskId, payload }),
     getEvidence: (taskId: string) => callRenderer<unknown>(IPC.MCP_GetEvidenceRequest, { taskId }),
@@ -1784,8 +1791,23 @@ export function registerAllHandlers(win: BrowserWindow): void {
       callRenderer<{ notes: string }>(IPC.Remote_GetNotesRequest, { taskId }).then((r) => r.notes),
     setTaskNotes: (taskId: string, notes: string) =>
       callRenderer<{ ok: boolean }>(IPC.Remote_SetNotesRequest, { taskId, notes }).then(() => {}),
+    closeTaskFromMobile: (taskId: string, force: boolean) =>
+      callRenderer<RemoteCloseResult>(IPC.Remote_CloseTaskRequest, { taskId, force }),
+    getTaskDiff: (taskId: string) =>
+      callRenderer<RemoteTaskDiff>(IPC.Remote_GetDiffRequest, { taskId }),
+    getMergeReadiness: (taskId: string) =>
+      callRenderer<RemoteMergeReadiness>(IPC.Remote_GetMergeReadinessRequest, { taskId }),
+    mergeTaskFromMobile: (req: { taskId: string; squash: boolean; cleanup: boolean }) =>
+      callRenderer<{ ok: boolean }>(IPC.Remote_MergeTaskRequest, req).then(() => {}),
     getTaskAttention: (taskId: string): RemoteAttentionState => taskAttention.get(taskId) ?? 'idle',
     getTaskContext: (taskId: string) => taskContext.get(taskId),
+    getCollapsedTaskIds: (): string[] => {
+      const result: string[] = [];
+      for (const [taskId, ctx] of taskContext.entries()) {
+        if (ctx.collapsed) result.push(taskId);
+      }
+      return result;
+    },
   };
 
   const remoteServerOptions = (): Omit<
@@ -1829,7 +1851,14 @@ export function registerAllHandlers(win: BrowserWindow): void {
         statuses?: Record<string, string>;
         contexts?: Record<
           string,
-          { projectName?: unknown; projectColor?: unknown; agentName?: unknown; lastLine?: unknown }
+          {
+            projectName?: unknown;
+            projectColor?: unknown;
+            agentName?: unknown;
+            lastLine?: unknown;
+            taskName?: unknown;
+            collapsed?: unknown;
+          }
         >;
       },
     ) => {
@@ -1840,7 +1869,12 @@ export function registerAllHandlers(win: BrowserWindow): void {
       if (args.contexts && typeof args.contexts === 'object') {
         for (const [taskId, context] of Object.entries(args.contexts)) {
           if (!context || typeof context !== 'object') continue;
+          const taskName =
+            typeof context.taskName === 'string' ? context.taskName.slice(0, 200) : undefined;
+          if (taskName) taskNames.set(taskId, taskName);
           taskContext.set(taskId, {
+            taskName,
+            collapsed: Boolean(context.collapsed),
             projectName:
               typeof context.projectName === 'string' ? context.projectName.slice(0, 200) : '',
             projectColor:
@@ -2329,6 +2363,7 @@ export function registerAllHandlers(win: BrowserWindow): void {
 
   ipcMain.handle(IPC.GetClaudeUsage, () => fetchClaudeUsage());
   ipcMain.handle(IPC.GetCodexUsage, () => fetchCodexUsage());
+  ipcMain.handle(IPC.GetResourceUsage, () => getResourceSnapshot());
 
   // --- Forward window events to renderer ---
   win.on('focus', () => {

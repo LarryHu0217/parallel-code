@@ -127,6 +127,14 @@ describe('change tours', () => {
     expect(prompt).toContain('Omit it when nothing useful remains to ask');
   });
 
+  it('requests a compact tour for simple changes without padding by file or review phase', () => {
+    const [prompt] = buildChangeTourPrompts('Task', diff);
+    expect(prompt).toContain('For simple changes, use 1-2 cards total, usually a single stop');
+    expect(prompt).toContain('Omit gist and verify for simple changes');
+    expect(prompt).toContain('Group related changes across files, including their tests');
+    expect(prompt).not.toContain('Aim for 4-6');
+  });
+
   describe('gist and verify cards', () => {
     const gist = { title: 'The file returns new', explanation: 'It returned old.' };
     const verify = {
@@ -136,6 +144,12 @@ describe('change tours', () => {
     };
     const response = (extra: Record<string, unknown>) =>
       JSON.stringify({ stops: [stop], ...extra });
+
+    it('accepts a single-card whole-diff tour without gist or verify', () => {
+      const stops = parseChangeTour(response({}), files, true);
+      expect(stops).toEqual([{ ...stop, label: 'STOP 1' }]);
+      expect(stops.map(stopToCard)).toHaveLength(1);
+    });
 
     it('wraps the stops in the gist and the verify card for a whole-diff tour', () => {
       expect(parseChangeTour(response({ gist, verify }), files, true)).toEqual([
@@ -184,7 +198,7 @@ describe('change tours', () => {
       ]);
     });
 
-    it('asks for both only when one request covers the whole diff', () => {
+    it('offers optional gist and verify only when one request covers the whole diff', () => {
       expect(buildChangeTourPrompts('Task', diff)[0]).toContain('verify closes the tour');
       const large = `diff --git a/big.ts b/big.ts\n@@ -1 +1 @@\n-${'x'.repeat(CHANGE_TOUR_PROMPT_LIMIT)}\n+y\n`;
       for (const prompt of buildChangeTourPrompts('Task', large))
@@ -240,7 +254,7 @@ describe('change tours', () => {
     const [prompt] = buildChangeTourPrompts('Task', diff);
     expect(prompt).toContain(JSON.stringify(diff));
     expect(prompt).toContain('never claim they passed');
-    expect(prompt).toContain('4-6 concise stops for the whole change');
+    expect(prompt).toContain('Scale the tour to the number of distinct ideas');
     expect(buildChangeTourPrompts('Task', diff)).toHaveLength(1);
     expect(() => buildChangeTourPrompts('Task', '')).toThrow('no code changes');
   });
@@ -266,7 +280,7 @@ describe('change tours', () => {
     const prompts = buildChangeTourPrompts('Task', raw);
     expect(prompts).toHaveLength(1);
     expect(prompts[0]).toContain(JSON.stringify(raw));
-    expect(prompts[0]).toContain('4-6 concise stops for the whole change');
+    expect(prompts[0]).toContain('Scale the tour to the number of distinct ideas');
   });
 
   it('splits many files into bounded requests without omitting later files', () => {

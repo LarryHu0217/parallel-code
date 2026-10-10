@@ -18,6 +18,7 @@ import {
 } from '../store/store';
 import type { Task } from '../store/types';
 import { evidenceButtonStyle } from './EvidenceDetails';
+import { PlayIcon, SyncIcon } from './icons';
 
 interface EvidenceCheckListProps {
   task: Task;
@@ -195,6 +196,7 @@ function CheckRow(props: EvidenceCheckListProps & { check: ProjectCheck }) {
       >
         <Show when={isVerify() || props.pkg}>
           <button
+            class="btn-with-icon"
             type="button"
             style={smallButton}
             disabled={!isVerify() && props.busy}
@@ -205,6 +207,7 @@ function CheckRow(props: EvidenceCheckListProps & { check: ProjectCheck }) {
                 : `Run ${props.check.command} in the task worktree`
             }
           >
+            {latest() ? <SyncIcon size={12} /> : <PlayIcon size={12} />}
             {latest() ? 'Re-run' : 'Run'}
           </button>
         </Show>

@@ -1,4 +1,5 @@
 import { createCanvasTaskControls } from './canvasTaskControls';
+import { PlayIcon, PlusIcon, SendIcon } from './icons';
 import { createEffect, createMemo, createSignal, on, onCleanup, Show, untrack } from 'solid-js';
 import { ReasoningGraph } from '../investigation/ReasoningGraph';
 import { createReasoningFeed } from '../investigation/live-feed';
@@ -529,10 +530,12 @@ export function TaskReasoningGraphHost(props: Props) {
         actions={
           <Show when={live.snapshot() && !newMap() && !queued()}>
             <button
+              class="btn-with-icon"
               title="Archive this report and start an empty map"
               disabled={sending()}
               onClick={() => setNewMap(true)}
             >
+              <PlusIcon size={12} />
               New map…
             </button>
           </Show>
@@ -553,10 +556,12 @@ export function TaskReasoningGraphHost(props: Props) {
               <Show when={live.snapshot() && !connected() && !newMap()}>
                 <Show when={!queued()}>
                   <button
+                    class="btn-with-icon"
                     disabled={sending() || !canStart()}
                     title={connectionBlocker() || 'Continue the current report with the agent'}
                     onClick={start}
                   >
+                    <PlayIcon size={12} />
                     {sending() ? 'Starting…' : 'Resume live map'}
                   </button>
                 </Show>
@@ -567,10 +572,12 @@ export function TaskReasoningGraphHost(props: Props) {
               </Show>
               <Show when={changesToSend()}>
                 <button
+                  class="btn-with-icon"
                   disabled={!!requestBlocker()}
                   title={requestBlocker() || 'Ask the agent to review your saved edits'}
                   onClick={() => void sendManualChanges()}
                 >
+                  <SendIcon size={12} />
                   Send manual changes to agent
                 </button>
               </Show>

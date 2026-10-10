@@ -1,5 +1,6 @@
 import { createUniqueId, For, Show } from 'solid-js';
 import { reasoningProfiles, type ReasoningProfile } from '../investigation/profiles';
+import { PlayIcon, PlusIcon } from './icons';
 
 interface Props {
   /** `new` archives an existing report; `empty` starts the task's first map. */
@@ -61,10 +62,11 @@ export function ReasoningSetup(props: Props) {
       <div class="reasoning-setup-actions">
         <Show when={!props.queued}>
           <button
-            class="investigation-primary"
+            class="investigation-primary btn-with-icon"
             disabled={props.sending || !props.canStart}
             onClick={() => props.onStart()}
           >
+            {props.mode === 'new' ? <PlusIcon size={12} /> : <PlayIcon size={12} />}
             {props.sending ? 'Starting…' : props.mode === 'new' ? 'New map…' : 'Start live map'}
           </button>
         </Show>

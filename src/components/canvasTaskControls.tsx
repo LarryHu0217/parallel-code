@@ -3,6 +3,7 @@ import type { MapData } from '../graph/model';
 import type { NodeAction } from '../graph/NodeContextMenu';
 import { canvasTaskPrompt, type CanvasTaskSource } from '../lib/canvas-task-links';
 import { store, setStore } from '../store/core';
+import { isHiddenAgentTaskId } from '../documents/task-id';
 import {
   canvasTaskLink,
   canvasTaskPending,
@@ -69,7 +70,10 @@ export function createCanvasTaskControls(context: Accessor<Omit<CanvasTaskSource
     const disabled = !owner || !!owner.closingStatus || canvasTaskPending(ref);
     const candidates = Object.values(store.tasks).filter(
       (task) =>
-        task.id !== ref.taskId && task.projectId === owner?.projectId && !task.closingStatus,
+        task.id !== ref.taskId &&
+        task.projectId === owner?.projectId &&
+        !task.closingStatus &&
+        !isHiddenAgentTaskId(task.id),
     );
     return [
       {

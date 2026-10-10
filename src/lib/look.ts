@@ -1,4 +1,5 @@
 export type LookPreset =
+  | 'parallel-code'
   | 'noir'
   | 'obsidian'
   | 'obsidian-light'
@@ -25,6 +26,12 @@ export interface LookPresetOption {
 }
 
 export const LOOK_PRESETS: LookPresetOption[] = [
+  {
+    id: 'parallel-code',
+    label: 'Parallel Code',
+    description: 'Website-inspired blue-black surfaces, soft cyan accents, and pale text',
+    tone: 'dark',
+  },
   {
     id: 'noir',
     label: 'Noir',

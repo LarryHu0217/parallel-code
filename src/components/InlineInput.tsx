@@ -2,6 +2,7 @@ import { createSignal, onCleanup, onMount } from 'solid-js';
 import { theme } from '../lib/theme';
 import { sf } from '../lib/fontScale';
 import type { DiffInteractionMode } from './review-types';
+import { CommentIcon } from './icons';
 
 interface InlineInputProps {
   onSubmit: (text: string, mode: DiffInteractionMode) => void;
@@ -122,6 +123,7 @@ export function InlineInput(props: InlineInputProps) {
 
       {/* Submit button */}
       <button
+        class="btn-with-icon"
         onClick={submit}
         disabled={!text().trim()}
         style={{
@@ -135,6 +137,7 @@ export function InlineInput(props: InlineInputProps) {
           'font-weight': '600',
         }}
       >
+        <CommentIcon size={12} />
         {mode() === 'review' ? 'Comment' : 'Ask'}
       </button>
 

@@ -4,6 +4,8 @@ import { render } from 'solid-js/web';
 import { ConnectPhoneModal } from './ConnectPhoneModal';
 import { setStore } from '../store/core';
 import { generatePairingPin, stopRemoteAccess, startRemoteAccess } from '../store/remote';
+import { invoke } from '../lib/ipc';
+import { IPC } from '../../electron/ipc/channels';
 
 vi.mock('../store/core', async () => {
   const { createStore } = await import('solid-js/store');
@@ -17,6 +19,7 @@ vi.mock('../store/remote', () => ({
   setAutoStartRemoteAccess: vi.fn(),
   generatePairingPin: vi.fn(),
 }));
+vi.mock('../lib/ipc', () => ({ invoke: vi.fn(async () => undefined) }));
 vi.mock('qrcode', () => ({ default: { toDataURL: vi.fn(async () => 'data:image/png;base64,') } }));
 
 let dispose: () => void;
@@ -136,5 +139,18 @@ describe('automatic phone pairing setup', () => {
     await vi.advanceTimersByTimeAsync(2000);
     expect(generatePairingPin).toHaveBeenCalledOnce();
     expect(document.body.textContent).not.toContain('654321');
+  });
+});
+
+it('opens the Android app guide in the browser', async () => {
+  mount();
+  await vi.advanceTimersByTimeAsync(0);
+  const link = [...document.querySelectorAll('a')].find(
+    (a) => a.textContent === 'Parallel Code app',
+  );
+  if (!link) throw new Error('Missing Android app link');
+  link.click();
+  expect(invoke).toHaveBeenCalledWith(IPC.ShellOpenExternal, {
+    url: 'https://github.com/johannesjo/parallel-code#android-app',
   });
 });

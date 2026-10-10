@@ -2,6 +2,7 @@ import { For, Show, createSignal } from 'solid-js';
 import { store, addCustomAgent, removeCustomAgent } from '../store/store';
 import { theme } from '../lib/theme';
 import type { AgentDef } from '../ipc/types';
+import { PlusIcon } from './icons';
 
 export function CustomAgentEditor() {
   const [showForm, setShowForm] = createSignal(false);
@@ -94,6 +95,7 @@ export function CustomAgentEditor() {
 
       <Show when={!showForm()}>
         <button
+          class="btn-with-icon"
           type="button"
           onClick={() => setShowForm(true)}
           style={{
@@ -106,7 +108,8 @@ export function CustomAgentEditor() {
             'font-size': '13px',
           }}
         >
-          + Add custom agent
+          <PlusIcon size={14} />
+          Add custom agent
         </button>
       </Show>
 
@@ -167,6 +170,7 @@ export function CustomAgentEditor() {
               Cancel
             </button>
             <button
+              class="btn-with-icon"
               type="button"
               onClick={handleAdd}
               style={{
@@ -180,6 +184,7 @@ export function CustomAgentEditor() {
                 opacity: name().trim() && command().trim() ? 1 : 0.5,
               }}
             >
+              <PlusIcon size={14} />
               Add Agent
             </button>
           </div>

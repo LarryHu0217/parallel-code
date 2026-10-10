@@ -35,7 +35,7 @@ export async function getPullRequestDetails(prUrl: string): Promise<PullRequestD
     runGhJson([
       'repo',
       'view',
-      `${ref.owner}/${ref.repo}`,
+      `${ref.host}/${ref.owner}/${ref.repo}`,
       '--json',
       'squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed,viewerDefaultMergeMethod',
     ]),
@@ -113,7 +113,12 @@ async function withLogTail(
   ref: PrRef,
   jobId: string,
 ): Promise<PrFailedCheck> {
-  const args = ['api', `repos/${ref.owner}/${ref.repo}/actions/jobs/${jobId}/logs`];
+  const args = [
+    'api',
+    `repos/${ref.owner}/${ref.repo}/actions/jobs/${jobId}/logs`,
+    '--hostname',
+    ref.host,
+  ];
   try {
     const log = await runGh(args).catch((err: unknown) => {
       // Newer gh refuses colored output unless asked; older gh lacks the flag,
@@ -153,9 +158,25 @@ export function parseFailedChecks(rollup: unknown): PrFailedCheck[] {
 }
 
 /** Job id from an Actions details URL of the PR's own repository. */
-export function actionsJobId(url: string, ref: { owner: string; repo: string }): string | null {
-  const match = /^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/actions\/runs\/\d+\/job\/(\d+)/.exec(
-    url,
+export function actionsJobId(
+  url: string,
+  ref: Pick<PrRef, 'host' | 'owner' | 'repo'>,
+): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (
+    parsed.protocol !== 'https:' ||
+    parsed.host !== ref.host ||
+    parsed.username ||
+    parsed.password
+  )
+    return null;
+  const match = /^\/([\w.-]+)\/([\w.-]+)\/actions\/runs\/\d+\/job\/(\d+)(?:\/|$)/.exec(
+    parsed.pathname,
   );
   if (!match) return null;
   const sameRepo =
@@ -190,6 +211,8 @@ export async function getReviewFeedback(prUrl: string): Promise<PrReviewFeedback
   const raw = await runGhJson([
     'api',
     'graphql',
+    '--hostname',
+    ref.host,
     '-f',
     `query=${REVIEW_QUERY}`,
     '-f',

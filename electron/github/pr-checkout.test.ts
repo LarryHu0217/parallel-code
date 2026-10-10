@@ -74,6 +74,29 @@ describe('resolvePrCheckout', () => {
     expect(calls).toContainEqual(['git', 'fetch', '--no-tags', 'upstream', 'refs/pull/5/head']);
   });
 
+  it('selects the enterprise remote instead of the same repo on github.com', async () => {
+    const remotes = [
+      'origin\thttps://github.com/o/r.git (fetch)',
+      'enterprise\tgit@code.acme.test:o/r.git (fetch)',
+    ].join('\n');
+    const calls = stub({ ...openPr, url: 'https://code.acme.test/o/r/pull/5' }, 'abc', remotes);
+    expect((await resolvePrCheckout('/repo', 5)).remote).toBe('enterprise');
+    expect(calls).toContainEqual(['git', 'fetch', '--no-tags', 'enterprise', 'refs/pull/5/head']);
+  });
+
+  it.each([
+    'https://code.acme.test:8443/o/r.git',
+    'git@CODE.Acme.TEST:o/r.git',
+    'ssh://git@CODE.Acme.TEST:2222/o/r.git',
+  ])('matches a custom-port enterprise PR to %s', async (remoteUrl) => {
+    const remotes = [
+      'origin\thttps://code.acme.test/o/r.git (fetch)',
+      `upstream\t${remoteUrl} (fetch)`,
+    ].join('\n');
+    stub({ ...openPr, url: 'https://code.acme.test:8443/o/r/pull/5' }, 'abc', remotes);
+    expect((await resolvePrCheckout('/repo', 5)).remote).toBe('upstream');
+  });
+
   it('refuses a fetched commit that is not the PR head', async () => {
     stub(openPr, 'other');
     await expect(resolvePrCheckout('/repo', 5)).rejects.toThrow(/does not match/);
@@ -92,7 +115,7 @@ describe('resolvePrCheckout', () => {
 });
 
 describe('pickRepoRemotes', () => {
-  const ref = { owner: 'O', repo: 'r' };
+  const ref = { host: 'github.com', owner: 'O', repo: 'r' };
 
   it('matches https, scp-style and ssh URLs case-insensitively', () => {
     const out = [

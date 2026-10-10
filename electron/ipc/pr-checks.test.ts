@@ -172,11 +172,13 @@ describe('rollupBucket', () => {
 describe('isPrUrl', () => {
   it('accepts PR URLs', () => {
     expect(isPrUrl('https://github.com/acme/app/pull/42')).toBe(true);
+    expect(isPrUrl('https://code.acme.test/acme/app/pull/42')).toBe(true);
+    expect(isPrUrl('http://code.acme.test/acme/app/pull/42')).toBe(false);
     expect(isPrUrl('https://www.github.com/acme/app/pull/1')).toBe(true);
   });
-  it('rejects issues, discussions, and non-github', () => {
+  it('rejects issues, discussions, and malformed PR URLs', () => {
     expect(isPrUrl('https://github.com/acme/app/issues/42')).toBe(false);
-    expect(isPrUrl('https://gitlab.com/acme/app/pull/42')).toBe(false);
+    expect(isPrUrl('https://gitlab.com/acme/app/-/merge_requests/42')).toBe(false);
     expect(isPrUrl('not a url')).toBe(false);
     expect(isPrUrl('https://github.com/acme/app')).toBe(false);
     expect(isPrUrl('https://github.com/acme/app/pull/abc')).toBe(false);
@@ -305,13 +307,13 @@ describe('detectPrUrlForBranch', () => {
     expect(commands).toEqual(['git', 'git', 'gh']);
   });
 
-  it('finds an open PR for a branch', async () => {
+  it.each(['github.com', 'code.acme.test'])('finds an open PR for a branch on %s', async (host) => {
     const calls = stubGh((_args, cb) => {
       cb(
         null,
         JSON.stringify([
           {
-            url: 'https://github.com/a/b/pull/11',
+            url: `https://${host}/a/b/pull/11`,
             headRefName: 'task/my-branch',
           },
         ]),
@@ -319,7 +321,7 @@ describe('detectPrUrlForBranch', () => {
       );
     });
     await expect(detectPrUrlForBranch('/repo/worktree', 'task/my-branch')).resolves.toBe(
-      'https://github.com/a/b/pull/11',
+      `https://${host}/a/b/pull/11`,
     );
     expect(calls).toHaveLength(1);
     expect(calls[0]).toEqual([

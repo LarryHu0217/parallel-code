@@ -8,6 +8,7 @@ import { createImportedTask, getProjectPath, loadAgents, store } from '../store/
 import { theme } from '../lib/theme';
 import type { Project } from '../store/types';
 import type { AgentDef, ImportableWorktree } from '../ipc/types';
+import { DownloadIcon } from './icons';
 
 interface ImportWorktreesDialogProps {
   open: boolean;
@@ -331,6 +332,7 @@ export function ImportWorktreesDialog(props: ImportWorktreesDialogProps) {
             Cancel
           </button>
           <button
+            class="btn-with-icon"
             type="button"
             disabled={!canImport()}
             onClick={() => void handleImport()}
@@ -346,6 +348,7 @@ export function ImportWorktreesDialog(props: ImportWorktreesDialogProps) {
               opacity: canImport() ? '1' : '0.4',
             }}
           >
+            <DownloadIcon size={14} />
             {importing() ? 'Importing...' : 'Import Selected'}
           </button>
         </div>

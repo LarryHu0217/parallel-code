@@ -4,7 +4,7 @@ import { sf } from '../lib/fontScale';
 import { canvasTabKey } from '../lib/canvas-tabs';
 import type { CanvasTab, CanvasTabKind } from '../store/types';
 import { IconButton } from './IconButton';
-import { CloseIcon, ExpandIcon, ExternalLinkIcon, PlusIcon } from './icons';
+import { CloseIcon, ExpandIcon, ExternalLinkIcon, PlusIcon, ScreenNormalIcon } from './icons';
 import { UnderstandButton, tourButtonStyle } from './understanding/UnderstandButton';
 import type { UnderstandingTourController } from '../lib/create-understanding-tour';
 
@@ -151,6 +151,7 @@ export function CanvasTabStrip(props: CanvasTabStripProps) {
       <div style={{ position: 'relative', display: 'flex', 'align-items': 'center', gap: '2px' }}>
         <Show when={props.fullscreen}>
           <button
+            class="btn-with-icon"
             type="button"
             onClick={() => props.onExitFullscreen()}
             title="Exit fullscreen"
@@ -165,6 +166,7 @@ export function CanvasTabStrip(props: CanvasTabStripProps) {
               'font-size': sf(11),
             }}
           >
+            <ScreenNormalIcon size={12} />
             Exit fullscreen
           </button>
         </Show>

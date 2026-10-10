@@ -1,6 +1,8 @@
 import headless from '@xterm/headless';
+import serializeAddon from '@xterm/addon-serialize';
 
 const { Terminal } = headless;
+const { SerializeAddon } = serializeAddon;
 
 /**
  * Lines kept above the viewport. Widening a terminal unwraps lines and pulls
@@ -8,7 +10,14 @@ const { Terminal } = headless;
  * about a screen's worth to agree with the renderer's xterm. Far below the
  * renderer's 10k because one mirror runs per PTY in the main process.
  */
-const SCROLLBACK_LINES = 200;
+export const MIRROR_SCROLLBACK_LINES = 200;
+
+/**
+ * Lines kept while Remote Access is on. Phones are sent this history when they
+ * open a terminal, so it matches the renderer's scrollback (TERMINAL_SCROLL_OPTIONS).
+ * A phone may open any agent, so the history must exist before it subscribes.
+ */
+export const REMOTE_SCROLLBACK_LINES = 10_000;
 
 // A cursor position report: CSI row;col R, or the DEC form CSI ? row;col R.
 // eslint-disable-next-line no-control-regex
@@ -26,7 +35,14 @@ export interface TerminalQueryResponder {
   feedDisplayOnly(data: string): void;
   /** Current visible screen and input mode; null until queued output has been parsed. */
   snapshot(): { text: string; bracketedPaste: boolean } | null;
+  /**
+   * The screen and history as ANSI text that redraws them, once everything fed
+   * so far is parsed. Null once disposed.
+   */
+  serialize(): Promise<string | null>;
   resize(cols: number, rows: number): void;
+  /** Change how many lines are kept above the viewport; lowering it drops the oldest. */
+  setScrollback(lines: number): void;
   dispose(): void;
 }
 
@@ -42,12 +58,15 @@ export function createTerminalQueryResponder(opts: {
   cols: number;
   rows: number;
   reply: (data: string) => void;
+  scrollback?: number;
 }): TerminalQueryResponder {
   const term = new Terminal({
     cols: Math.max(1, opts.cols),
     rows: Math.max(1, opts.rows),
-    scrollback: SCROLLBACK_LINES,
+    scrollback: opts.scrollback ?? MIRROR_SCROLLBACK_LINES,
   });
+  const serializer = new SerializeAddon();
+  term.loadAddon(serializer);
   let muted = 0;
   let disposed = false;
   let pendingWrites = 0;
@@ -84,8 +103,18 @@ export function createTerminalQueryResponder(opts: {
       }
       return { text: lines.join('\n'), bracketedPaste: term.modes.bracketedPasteMode };
     },
+    serialize() {
+      if (disposed) return Promise.resolve(null);
+      // Writes are parsed in order, so this callback runs after all earlier feeds.
+      return new Promise((resolve) => {
+        term.write('', () => resolve(disposed ? null : serializer.serialize()));
+      });
+    },
     resize(cols, rows) {
       if (!disposed && cols > 0 && rows > 0) term.resize(cols, rows);
+    },
+    setScrollback(lines) {
+      if (!disposed) term.options.scrollback = lines;
     },
     dispose() {
       if (disposed) return;

@@ -9,6 +9,7 @@ import type { Composer as ComposerState } from './composer-state';
 import { ModelPicker, PermissionPicker } from './ModelPicker';
 import { Progress } from './Progress';
 import { RequestCard, type RespondToRequest } from './RequestCard';
+import { PencilIcon, SendIcon, SyncIcon } from '../icons';
 
 export interface ChatHistoryEntry {
   title: string;
@@ -53,11 +54,13 @@ function Queue(props: ComposerProps) {
           <div>
             <span>{entry.text}</span>
             <button
+              class="btn-with-icon"
               disabled={c.sending()}
               onClick={() => {
                 if (c.editQueued(entry)) props.focus();
               }}
             >
+              <PencilIcon size={12} />
               Edit
             </button>
             <button
@@ -72,9 +75,11 @@ function Queue(props: ComposerProps) {
       </For>
       <Show when={paused()}>
         <button
+          class="btn-with-icon"
           disabled={c.sending() || props.disabled || props.state.status !== 'ready'}
           onClick={() => c.retryQueue()}
         >
+          <SyncIcon size={12} />
           Retry queued message
         </button>
       </Show>
@@ -196,10 +201,11 @@ export function Composer(props: ComposerProps) {
         </Show>
         <Show when={working() && hasContent()}>
           <button
-            class="chat-interrupt"
+            class="chat-interrupt btn-with-icon"
             disabled={busy() || props.disabled}
             onClick={() => void c.stop(true)}
           >
+            <SendIcon size={12} />
             Interrupt and send now
           </button>
         </Show>

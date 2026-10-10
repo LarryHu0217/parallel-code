@@ -10,6 +10,7 @@ import { AgentTerminal } from './AgentTerminal';
 import { RunsRail } from './RunsRail';
 import { FileTreePanel } from './FileTreePanel';
 import { RejectRunButton } from './RejectRunConfirm';
+import { DiffIcon } from '../components/icons';
 
 interface RightPanelProps {
   project: Project;
@@ -34,6 +35,7 @@ function DecisionStrip() {
                   class="docws-btn docws-btn-sm docws-btn-primary"
                   onClick={() => openDocumentCompare(run.id)}
                 >
+                  <DiffIcon size={12} />
                   {proposals() > 1 ? `Compare ${proposals()}` : 'Review'}
                 </button>
                 <RejectRunButton run={run} label="Reject" />

@@ -7,14 +7,6 @@
   --docws-floating-z: 1100;
 }
 
-.task-workspace {
-  position: relative;
-  display: flex;
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-}
-
 .docws-workspace {
   position: relative;
   height: 100%;
@@ -409,31 +401,6 @@
 
 .docws-agent-tab.is-hidden {
   display: none;
-}
-
-.docws-agent-pane {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.docws-agent-term {
-  flex: 1;
-  min-height: 0;
-  position: relative;
-  background: var(--task-panel-bg);
-}
-
-.docws-agent-prompt {
-  flex: none;
-  display: flex;
-  flex-direction: column;
-}
-
-.docws-agent-prompt > .prompt-input-panel {
-  /* Match the regular task composer; session notices take their own space. */
-  flex: 0 0 72px;
 }
 
 .docws-decisions {

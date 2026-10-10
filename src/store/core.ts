@@ -2,11 +2,13 @@ import { createStore } from 'solid-js/store';
 import { DEFAULT_TERMINAL_FONT } from '../lib/fonts';
 import { getLocalDateKey } from '../lib/date';
 import { defaultPresetForTone } from '../lib/look';
+import { DEFAULT_TASK_NAME_MODEL } from '../../electron/shared/task-name-model';
 import type { AppStore, UsageState } from './types';
 
 const EMPTY_USAGE: UsageState = {
   fiveHour: null,
   sevenDay: null,
+  creditUsage: null,
   fetchedAt: null,
   status: 'idle',
   error: null,
@@ -60,6 +62,8 @@ export const [store, setStore] = createStore<AppStore>({
   windowState: null,
   autoTrustFolders: false,
   showPlans: true,
+  modelTaskNames: false,
+  taskNameModel: DEFAULT_TASK_NAME_MODEL,
   showSidebarTips: true,
   showSidebarProgress: true,
   sidebarNeedsInputFirst: true,
@@ -85,6 +89,7 @@ export const [store, setStore] = createStore<AppStore>({
     connectedClients: 0,
   },
   autoStartRemoteAccess: false,
+  githubIssuesProjectId: null,
   showArena: false,
   keybindingPreset: 'default',
   keybindingOverridesByPreset: {},

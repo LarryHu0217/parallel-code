@@ -16,6 +16,8 @@ export interface RemoteTransportOptions {
   /** A running agent or delegated task still needs the wide bind. */
   wideBindInUse: () => boolean;
   rememberedDevicesPath: () => string;
+  /** Phones can (true) or can no longer (false) reach the server; MCP-only loopback does not count. */
+  onPhoneAccessChange?: (enabled: boolean) => void;
 }
 
 export interface RemoteAccessInfo {
@@ -240,11 +242,29 @@ export function createRemoteTransport(opts: RemoteTransportOptions): RemoteTrans
     return { stopped: true };
   }
 
+  let phoneAccess = false;
+  function syncPhoneAccess(): void {
+    const next = server !== null && requestedManually;
+    if (next === phoneAccess) return;
+    phoneAccess = next;
+    opts.onPhoneAccessChange?.(next);
+  }
+  /** Report phone access after every public transition, including failed ones. */
+  function tracked<A extends unknown[], R>(fn: (...args: A) => Promise<R>) {
+    return async (...args: A): Promise<R> => {
+      try {
+        return await fn(...args);
+      } finally {
+        syncPhoneAccess();
+      }
+    };
+  }
+
   return {
     current: () => server,
-    ensureForMcp,
-    stopIfIdle,
-    startRemoteAccess,
-    stopRemoteAccess,
+    ensureForMcp: tracked(ensureForMcp),
+    stopIfIdle: tracked(stopIfIdle),
+    startRemoteAccess: tracked(startRemoteAccess),
+    stopRemoteAccess: tracked(stopRemoteAccess),
   };
 }

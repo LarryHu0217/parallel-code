@@ -1,6 +1,7 @@
 import { For, Match, Show, Switch, createEffect, createMemo, on } from 'solid-js';
 import type { ChatItem } from '../../../electron/shared/agent-chat-types';
 import { DiffStat, DiffView } from './DiffView';
+import { DiffIcon } from '../icons';
 
 const activityLabels = {
   running: 'Running',
@@ -71,7 +72,10 @@ function ActivityRow(props: ActivityActions & { item: ChatItem }) {
                       {path}
                     </button>
                     <Show when={activity()?.type === 'files' && props.onReview}>
-                      <button onClick={() => props.onReview?.(path)}>Review diff</button>
+                      <button class="btn-with-icon" onClick={() => props.onReview?.(path)}>
+                        <DiffIcon size={12} />
+                        Review diff
+                      </button>
                     </Show>
                   </div>
                 )}
@@ -190,7 +194,8 @@ export function ActivityGroup(props: ActivityActions & { items: ChatItem[] }) {
         </For>
       </details>
       <Show when={summary().changed > 0 && props.onReview}>
-        <button class="chat-review" onClick={() => props.onReview?.()}>
+        <button class="chat-review btn-with-icon" onClick={() => props.onReview?.()}>
+          <DiffIcon size={12} />
           Review changes ↗
         </button>
       </Show>

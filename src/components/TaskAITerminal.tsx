@@ -36,7 +36,15 @@ import { setStore } from '../store/core';
 import { saveState } from '../store/persistence';
 import { Dialog } from './Dialog';
 import { ConfirmDialog } from './ConfirmDialog';
-import { CheckIcon, CloseIcon, CommentIcon, CopyIcon, TerminalIcon } from './icons';
+import {
+  CheckIcon,
+  CloseIcon,
+  CommentIcon,
+  CopyIcon,
+  PlayIcon,
+  SyncIcon,
+  TerminalIcon,
+} from './icons';
 import { theme } from '../lib/theme';
 import { sf } from '../lib/fontScale';
 import { invoke } from '../lib/ipc';
@@ -835,6 +843,7 @@ function AgentTerminalPane(props: {
                 <AgentRestartMenu agentId={a().id} agentDefId={a().def.id} />
                 <Show when={a().def.resume_args?.length}>
                   <button
+                    class="btn-with-icon"
                     onClick={(e) => {
                       e.stopPropagation();
                       restartAgent(a().id, true);
@@ -849,6 +858,7 @@ function AgentTerminalPane(props: {
                       'font-size': sf(11),
                     }}
                   >
+                    <PlayIcon size={12} />
                     Resume
                   </button>
                 </Show>
@@ -1144,6 +1154,7 @@ function AgentRestartMenu(props: { agentId: string; agentDefId: string }) {
   return (
     <span style={{ position: 'relative', display: 'inline-flex' }} ref={(el) => (menuRef = el)}>
       <button
+        class="btn-with-icon"
         onClick={(e) => {
           e.stopPropagation();
           restartAgent(props.agentId, false);
@@ -1159,6 +1170,7 @@ function AgentRestartMenu(props: { agentId: string; agentDefId: string }) {
           'font-size': sf(11),
         }}
       >
+        <SyncIcon size={12} />
         Restart
       </button>
       <button

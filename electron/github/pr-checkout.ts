@@ -78,19 +78,34 @@ async function remoteForRepo(projectRoot: string, ref: PrRef): Promise<string> {
   return matches.includes('origin') ? 'origin' : (matches[0] ?? 'origin');
 }
 
-/** Names of remotes in `git remote -v` output whose URL is the github.com repo `ref`. */
-export function pickRepoRemotes(remoteV: string, ref: Pick<PrRef, 'owner' | 'repo'>): string[] {
+/** Names of remotes in `git remote -v` output whose URL is the host and repo of `ref`. */
+export function pickRepoRemotes(
+  remoteV: string,
+  ref: Pick<PrRef, 'host' | 'owner' | 'repo'>,
+): string[] {
   const want = `${ref.owner}/${ref.repo}`.toLowerCase();
+  const webUrl = new URL(`https://${ref.host}`);
   const names = new Set<string>();
   for (const line of remoteV.split('\n')) {
     const [name, url] = line.split(/\s+/);
-    // https://github.com/o/r(.git), git@github.com:o/r(.git), ssh://git@github.com(:22)/o/r(.git)
-    const m =
-      /^(?:[a-z+]+:\/\/)?(?:[^@/]+@)?github\.com(?::\d+)?[/:]([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/i.exec(
-        url ?? '',
-      );
+    if (!url) continue;
+    let remoteUrl: URL;
+    try {
+      // Convert scp-style git@host:owner/repo into an SSH URL.
+      remoteUrl = new URL(url.includes('://') ? url : url.replace(/^([^/]+):/, 'ssh://$1/'));
+    } catch {
+      continue;
+    }
+    // SSH ports belong to the Git transport, not the enterprise web server.
+    const sameHost = ['http:', 'https:'].includes(remoteUrl.protocol)
+      ? remoteUrl.host === webUrl.host
+      : remoteUrl.hostname.toLowerCase() === webUrl.hostname;
+    const repo = remoteUrl.pathname
+      .replace(/^\//, '')
+      .replace(/(?:\.git)?\/?$/, '')
+      .toLowerCase();
     // A leading dash would turn the remote name into a `git fetch` option.
-    if (name && !name.startsWith('-') && m?.[1].toLowerCase() === want) names.add(name);
+    if (name && !name.startsWith('-') && sameHost && repo === want) names.add(name);
   }
   return [...names];
 }

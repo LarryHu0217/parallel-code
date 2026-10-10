@@ -10,6 +10,7 @@ import type { DocumentHistoryEntry } from './types';
 import { DocumentViewer } from './DocumentViewer';
 import { SourceDiff } from './SourceDiff';
 import { createRenderedBlocks } from './use-blocks';
+import { UndoIcon } from '../components/icons';
 
 function project() {
   return documentStore.projectId ? getProject(documentStore.projectId) : undefined;
@@ -107,6 +108,7 @@ function EntryDetail(props: {
             class="docws-btn docws-btn-sm docws-btn-danger"
             onClick={() => void revert()}
           >
+            <UndoIcon size={12} />
             Revert this commit
           </button>
         </div>

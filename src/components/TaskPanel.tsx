@@ -1,12 +1,12 @@
 import { DelegationReviewDialog } from './DelegationReviewDialog';
 import { DelegationPanel } from './DelegationPanel';
 import { canUsePeerComposer, usePeerComposer } from '../store/delegation';
-import { TaskMindMap } from './TaskMindMap';
 import {
   Show,
   createSignal,
   createEffect,
   createMemo,
+  lazy,
   on,
   onMount,
   onCleanup,
@@ -64,7 +64,6 @@ import { theme } from '../lib/theme';
 import { isMac } from '../lib/platform';
 import type { Task } from '../store/types';
 import type { CommitInfo } from '../ipc/types';
-import { TaskReasoningGraphHost } from './TaskReasoningGraphHost';
 import type { TranscriptMarks } from '../investigation/transcript';
 import { isLandedTaskState } from '../store/landing';
 import { shouldPollTaskCommits } from './task-commit-polling';
@@ -80,6 +79,12 @@ import {
 import { parseAgentTour } from '../lib/understanding-tour';
 import { UnderstandingTourDialog } from './UnderstandingTourDialog';
 import { getTaskDiffBaseBranch } from '../lib/load-task-diff';
+
+// Lazy: d3 and the graph editors only load once a task opens one of these tabs.
+const TaskMindMap = lazy(() => import('./TaskMindMap').then((m) => ({ default: m.TaskMindMap })));
+const TaskReasoningGraphHost = lazy(() =>
+  import('./TaskReasoningGraphHost').then((m) => ({ default: m.TaskReasoningGraphHost })),
+);
 
 interface TaskPanelProps {
   task: Task;
@@ -719,6 +724,7 @@ export function TaskPanel(props: TaskPanelProps) {
 
   const stepsSectionChild: PanelChild = {
     id: 'steps-section',
+    resizeLabel: 'Resize steps panel',
     minSize: 28,
     maxAutoSize: STEPS_PANEL_AUTO_MAX,
     content: () => stepsSectionEl,
@@ -729,6 +735,7 @@ export function TaskPanel(props: TaskPanelProps) {
   // size and leave a visible band of empty space above the AI terminal.
   const shellSectionChild: PanelChild = {
     id: 'shell-section',
+    resizeLabel: 'Resize shell panel',
     minSize: 35,
     noPin: () => props.task.shellAgentIds.length === 0,
     content: () => shellSectionEl,
@@ -742,6 +749,7 @@ export function TaskPanel(props: TaskPanelProps) {
 
   const promptInputChild: PanelChild = {
     id: 'prompt',
+    resizeLabel: 'Resize prompt input',
     minSize: 54,
     content: () => promptInputEl,
   };
@@ -751,6 +759,7 @@ export function TaskPanel(props: TaskPanelProps) {
   // In the split-right vertical tree, both are content-sized and shell absorbs.
   const notesChild: PanelChild = {
     id: 'notes',
+    resizeLabel: 'Resize notes panel',
     minSize: 100,
     maxAutoSize: NOTES_PANEL_AUTO_MAX,
     content: () => notesBodyEl,
@@ -758,6 +767,7 @@ export function TaskPanel(props: TaskPanelProps) {
 
   const changedFilesChild: PanelChild = {
     id: 'changed-files',
+    resizeLabel: 'Resize changed files panel',
     minSize: 100,
     maxAutoSize: CHANGED_FILES_PANEL_AUTO_MAX,
     content: () => changedFilesEl,
@@ -871,6 +881,7 @@ export function TaskPanel(props: TaskPanelProps) {
               },
               {
                 id: 'right-col',
+                resizeLabel: 'Resize side panel',
                 minSize: 360,
                 defaultSize: 420,
                 content: () => (
@@ -903,6 +914,7 @@ export function TaskPanel(props: TaskPanelProps) {
   };
   const canvasChild: PanelChild = {
     id: 'canvas',
+    resizeLabel: 'Resize canvas panel',
     minSize: CANVAS_MIN_WIDTH,
     defaultSize: CANVAS_DEFAULT_WIDTH,
     absorberWeight: 2,
@@ -1119,6 +1131,10 @@ export function TaskPanel(props: TaskPanelProps) {
           onDelegationReview={() => {
             setFinishAction(null);
             setShowDelegationReview(true);
+          }}
+          onOpenPullRequest={(url) => {
+            setFinishAction(null);
+            setOpenPrUrl(url);
           }}
           onPushStart={() => {
             setPushing(true);

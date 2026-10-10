@@ -49,6 +49,14 @@ describe('autosave snapshot includes new-task-default fields', () => {
     setStore('canvasOwnershipBadges', true);
   });
 
+  it('modelTaskNames changes the snapshot', () => {
+    setStore('modelTaskNames', false);
+    const before = persistedSnapshot();
+    setStore('modelTaskNames', true);
+    expect(persistedSnapshot()).not.toBe(before);
+    setStore('modelTaskNames', false);
+  });
+
   it('defaultPropagateSkipPermissions changes the snapshot', () => {
     setStore('defaultPropagateSkipPermissions', false);
     const before = persistedSnapshot();

@@ -1,5 +1,5 @@
 import { batch } from 'solid-js';
-import { documentAgentTaskId } from '../documents/task-id';
+import { documentAgentTaskId, isGitHubAgentTaskId } from '../documents/task-id';
 import { store, setStore } from './core';
 import {
   getTaskFocusedPanel,
@@ -37,11 +37,14 @@ export function openPanelOrder(): string[] {
 }
 
 export function setActiveTask(id: string): void {
+  // Its panel lives on the GitHub page, which an active task would close.
+  if (isGitHubAgentTaskId(id)) return;
   const task = store.tasks[id];
   const terminal = store.terminals[id];
   const isDocument =
     store.activeDocumentProjectId && id === documentAgentTaskId(store.activeDocumentProjectId);
   if (!task && !terminal && !isDocument) return;
+  setStore('githubIssuesProjectId', null);
   setStore('newTaskPanelFocused', false);
   setStore('placeholderFocused', false);
   let activeAgentId: string | null = null;
@@ -117,6 +120,7 @@ export function toggleNewTaskPanel(show?: boolean): void {
     return;
   }
   if (shouldShow) {
+    setStore('githubIssuesProjectId', null);
     setStore('sidebarFocused', false);
     setStore('placeholderFocused', false);
   } else {

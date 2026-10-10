@@ -22,7 +22,7 @@ import { SegmentedButtons } from './SegmentedButtons';
 import { SuggestChecksButton } from './SuggestChecksButton';
 import { keepCheckIds } from '../lib/check-suggestion';
 import { ImportWorktreesDialog } from './ImportWorktreesDialog';
-import { CloseIcon } from './icons';
+import { CloseIcon, DownloadIcon, FolderIcon, LinkIcon, PlusIcon, TrashIcon } from './icons';
 import { RemoveProjectConfirm } from './RemoveProjectConfirm';
 import { updateProjectCoordination } from '../store/projects';
 import { isDocumentProject } from '../store/projects';
@@ -243,6 +243,7 @@ export function EditProjectDialog(props: EditProjectDialogProps) {
               </div>
               <Show when={!isDocument()}>
                 <button
+                  class="btn-with-icon"
                   type="button"
                   onClick={() => setShowImportDialog(true)}
                   style={{
@@ -256,10 +257,12 @@ export function EditProjectDialog(props: EditProjectDialogProps) {
                     'flex-shrink': '0',
                   }}
                 >
+                  <DownloadIcon size={12} />
                   Import Worktrees
                 </button>
               </Show>
               <button
+                class="btn-with-icon"
                 type="button"
                 onClick={() => relinkProject(project().id)}
                 style={{
@@ -273,6 +276,7 @@ export function EditProjectDialog(props: EditProjectDialogProps) {
                   'flex-shrink': '0',
                 }}
               >
+                <FolderIcon size={12} />
                 Change
               </button>
             </div>
@@ -293,6 +297,7 @@ export function EditProjectDialog(props: EditProjectDialogProps) {
               >
                 <span style={{ flex: '1' }}>This folder no longer exists.</span>
                 <button
+                  class="btn-with-icon"
                   type="button"
                   onClick={async () => {
                     const ok = await relinkProject(project().id);
@@ -309,9 +314,11 @@ export function EditProjectDialog(props: EditProjectDialogProps) {
                     'flex-shrink': '0',
                   }}
                 >
+                  <LinkIcon size={14} />
                   Re-link
                 </button>
                 <button
+                  class="btn-with-icon"
                   type="button"
                   onClick={() => setConfirmRemove(true)}
                   style={{
@@ -325,6 +332,7 @@ export function EditProjectDialog(props: EditProjectDialogProps) {
                     'flex-shrink': '0',
                   }}
                 >
+                  <TrashIcon size={14} />
                   Remove
                 </button>
               </div>
@@ -703,6 +711,7 @@ export function EditProjectDialog(props: EditProjectDialogProps) {
                     }}
                   />
                   <button
+                    class="btn-with-icon"
                     type="button"
                     onClick={addBookmark}
                     disabled={!newCommand().trim()}
@@ -717,6 +726,7 @@ export function EditProjectDialog(props: EditProjectDialogProps) {
                       'flex-shrink': '0',
                     }}
                   >
+                    <PlusIcon size={14} />
                     Add
                   </button>
                 </div>

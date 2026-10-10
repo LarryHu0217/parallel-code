@@ -12,6 +12,7 @@ import {
 } from './store';
 import type { DocumentRunRecord } from './types';
 import { registerCompareForm } from './workspace-ui';
+import { SparkleIcon } from '../components/icons';
 
 const DEFAULT_GUIDANCE =
   'Combine the strongest parts of each candidate into one version. Keep the document’s voice, ' +
@@ -148,6 +149,7 @@ export function MergeWithAgent(props: {
           title={chosen().length < 2 ? 'Pick at least two proposals' : undefined}
           onClick={() => void merge()}
         >
+          <SparkleIcon size={12} />
           {starting() ? 'Starting…' : 'Generate merged version'}
         </button>
         <button type="button" class="docws-btn docws-btn-sm" onClick={() => props.onClose()}>

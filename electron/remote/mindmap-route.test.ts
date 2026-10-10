@@ -23,6 +23,7 @@ vi.mock('../ipc/pty.js', () => ({
   resizeAgent: vi.fn(),
   killAgent: vi.fn(),
   subscribeToAgent: vi.fn(),
+  subscribeToAgentRendered: vi.fn(() => null),
   unsubscribeFromAgent: vi.fn(),
   getAgentScrollback: vi.fn(() => null),
   getActiveAgentIds: vi.fn(() => []),
@@ -66,6 +67,7 @@ const updateReasoning = vi.fn(async (taskId: string, update: ReasoningUpdate) =>
 });
 const openCanvas = vi.fn(async (_taskId: string, _view: 'mindmap' | 'reasoning') => {});
 const publishTour = vi.fn(async (_taskId: string, _payload: AgentTourPayload) => ({ ok: true }));
+const publishGitHubList = vi.fn(async (_taskId: string, _list: unknown) => ({ ok: true }));
 const submitEvidence = vi.fn(async (_taskId: string, _submission: unknown) => ({
   status: 'building',
 }));
@@ -100,6 +102,7 @@ beforeEach(async () => {
     updateReasoning,
     openCanvas,
     publishTour,
+    publishGitHubList,
     submitEvidence,
     getEvidence,
   });
@@ -215,6 +218,30 @@ it('publishes a tour for the owning task only and validates the payload', async 
   expect(huge.status).toBe(413);
   expect((await fetch(endpoint, { headers })).status).toBe(405);
   expect(publishTour).toHaveBeenCalledTimes(1);
+});
+
+it('publishes a GitHub list for the owning task only and validates it', async () => {
+  const item = { url: 'https://github.com/o/r/issues/2', title: 'Two', reason: 'Data loss' };
+  const list = { name: 'This week', groups: [{ name: 'Sync', items: [item] }] };
+  await expect(client.publishGitHubList('task-1', list)).resolves.toEqual({
+    ok: true,
+    name: 'This week',
+  });
+  expect(publishGitHubList).toHaveBeenCalledWith('task-1', list);
+  await expect(client.publishGitHubList('task-2', list)).rejects.toThrow('403');
+  const endpoint = `http://127.0.0.1:${server.port}/api/github-lists/task-1`;
+  const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+  const foreign = await fetch(endpoint, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      ...list,
+      groups: [{ name: 'Sync', items: [{ ...item, url: 'https://evil.test/o/r/issues/2' }] }],
+    }),
+  });
+  expect(foreign.status).toBe(400);
+  expect((await fetch(endpoint, { headers })).status).toBe(405);
+  expect(publishGitHubList).toHaveBeenCalledTimes(1);
 });
 
 it('accepts evidence for the owning task only and rejects app-owned fields', async () => {

@@ -166,6 +166,18 @@ Phone access uses port `8777` in development (`npm run dev`) and `7777` in the i
 
 </details>
 
+## Android app
+
+The phone UI works in any mobile browser. On Android, the native app adds agent notifications that need no HTTPS setup, a home-screen widget, and voice input.
+
+1. On your phone, open the [Android releases](https://github.com/johannesjo/parallel-code/releases?q=android-v&expanded=true) and download the newest `parallel-code-phone-*.apk`.
+2. Open the downloaded file. Android asks you to allow installs from your browser the first time.
+3. In the app, scan the QR code from **Connect Phone** or paste its link, then enter the desktop PIN to enable replies.
+
+The app is not in the Play Store yet. It checks GitHub for a newer release once a day and offers the download; you can turn that off under **Settings → About**. [Obtainium](https://github.com/ImranR98/Obtainium) can also install and update it: add `https://github.com/johannesjo/parallel-code` and filter release titles by `Android`.
+
+Its notifications come from your computer over the same connection as the app, so the phone has to be able to reach your computer, on the same Wi-Fi or through Tailscale. Turning them on keeps a quiet notification visible while the app watches in the background.
+
 ## Phone notifications
 
 Paired phones can receive a notification when a running task changes to **Needs input**, including while the phone is locked or the phone app is closed. Tap the notification to open that task. Parallel Code must remain running on your computer with phone access enabled, and both devices need internet access for push delivery.

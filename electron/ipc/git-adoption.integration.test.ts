@@ -69,6 +69,39 @@ describe('branch adoption against real git', () => {
     const status = await getWorktreeStatus(worktreePath);
     expect(status.current_branch).toBeNull();
     expect(status.base_branch).toBe('main');
+    expect(status.head_sha).toBe(run(worktreePath, ['rev-parse', 'HEAD']).trim());
+  });
+
+  it('getWorktreeStatus reports a clean worktree with its HEAD sha', async () => {
+    const { worktreePath } = makeRepo('clean');
+
+    const status = await getWorktreeStatus(worktreePath);
+    expect(status).toEqual({
+      has_committed_changes: false,
+      has_uncommitted_changes: false,
+      current_branch: TASK_BRANCH,
+      base_branch: 'main',
+      head_sha: run(worktreePath, ['rev-parse', 'HEAD']).trim(),
+    });
+  });
+
+  it('getWorktreeStatus counts an untracked file as uncommitted', async () => {
+    const { worktreePath } = makeRepo('untracked');
+    fs.writeFileSync(path.join(worktreePath, 'new.txt'), 'new\n');
+
+    const status = await getWorktreeStatus(worktreePath);
+    expect(status.has_uncommitted_changes).toBe(true);
+    expect(status.has_committed_changes).toBe(false);
+  });
+
+  it('getWorktreeStatus reports an unborn branch with no HEAD sha', async () => {
+    const root = fs.mkdtempSync(path.join(base, 'unborn-'));
+    run(root, ['init', '-b', 'main']);
+
+    const status = await getWorktreeStatus(root);
+    expect(status.current_branch).toBe('main');
+    expect(status.head_sha).toBeNull();
+    expect(status.has_committed_changes).toBe(false);
   });
 
   it('getWorktreeStatus does not rewrite the index an agent may be locking', async () => {

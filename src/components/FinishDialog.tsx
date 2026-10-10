@@ -1,4 +1,4 @@
-import { Show, createEffect, createSignal, on } from 'solid-js';
+import { For, Show, createEffect, createSignal, on } from 'solid-js';
 import type { ChangeTourController } from '../lib/create-change-tour';
 import type { Task } from '../store/types';
 import type { ChangedFile } from '../ipc/types';
@@ -11,8 +11,10 @@ import { MergeBlockers, MergeChanges, MergeOptions } from './MergeSection';
 import { PushSection } from './PushSection';
 import { createMergeState } from './merge-state';
 import { createPushRun } from './push-run';
-import { getProject } from '../store/store';
+import { parseGitHubUrl } from '../lib/github-url';
+import { getPrChecks, getProject } from '../store/store';
 import { theme } from '../lib/theme';
+import { SyncIcon, UploadIcon } from './icons';
 
 export type FinishAction = 'merge' | 'push';
 
@@ -27,6 +29,7 @@ interface FinishDialogProps {
   onRegenerateTour: () => void;
   /** Child tasks under review merge through the delegation review instead. */
   onDelegationReview: () => void;
+  onOpenPullRequest: (url: string) => void;
   onPushStart: () => void;
   onPushDone: (success: boolean) => void;
   onDiffFileClick: (file: ChangedFile) => void;
@@ -45,7 +48,7 @@ const pushButtonStyle = {
   'font-size': '14px',
 };
 
-const SHOWN_ELSEWHERE = new Set(['Merge safety', 'Verify command', 'Evidence']);
+const SHOWN_ELSEWHERE = new Set(['Merge safety', 'Verify command', 'Evidence', 'PR checks']);
 
 /**
  * One place to wrap up a task. Reads top to bottom: what blocks the merge,
@@ -69,6 +72,12 @@ export function FinishDialog(props: FinishDialogProps) {
     onStart: () => props.onPushStart(),
     onDone: (success) => props.onPushDone(success),
   });
+  const prUrl = () =>
+    [props.task.prUrl, props.task.githubUrl].find((url) => {
+      const parsed = url ? parseGitHubUrl(url) : null;
+      return parsed?.type === 'pull' && !!parsed.number;
+    });
+  const pr = () => getPrChecks(props.task.id);
   const viaReview = () => props.task.integrationPolicy === 'review';
 
   // Tracks only `open`: reset reads `pushing`, and re-running when a push ends
@@ -143,6 +152,7 @@ export function FinishDialog(props: FinishDialogProps) {
                     onClick={() => props.onRegenerateTour()}
                     title="Discard this tour and generate a new one"
                   >
+                    <SyncIcon size={12} />
                     Regenerate
                   </button>
                 </Show>
@@ -166,6 +176,67 @@ export function FinishDialog(props: FinishDialogProps) {
                 </EvidencePanel>
               </div>
             </details>
+            <section
+              aria-label="GitHub PR and CI"
+              style={{ margin: '20px 0', 'font-size': '13px' }}
+            >
+              <h3 style={{ margin: '0 0 8px', 'font-size': '13px', color: theme.fg }}>
+                GitHub PR and CI
+              </h3>
+              <Show when={prUrl()} fallback={<p>No pull request detected for this task.</p>}>
+                {(url) => (
+                  <>
+                    <button
+                      type="button"
+                      class="btn-secondary"
+                      disabled={push.pushing() || merge.merging()}
+                      onClick={() => props.onOpenPullRequest(url())}
+                      title="View pull request, fix CI, address reviews, or merge on GitHub"
+                    >
+                      PR #{parseGitHubUrl(url())?.number} · Details and actions…
+                    </button>
+                    <Show when={pr()?.merged}>
+                      <p>Merged on GitHub</p>
+                    </Show>
+                    <Show when={pr()?.isDraft && !pr()?.merged}>
+                      <p>Draft pull request</p>
+                    </Show>
+                    <Show when={pr()?.reviewDecision}>
+                      {(decision) => <p>Review: {decision().toLowerCase().replace(/_/g, ' ')}</p>}
+                    </Show>
+                    <Show when={pr()?.mergeable === 'CONFLICTING' && !pr()?.merged}>
+                      <p style={{ color: theme.warning }}>PR has conflicts with its base branch.</p>
+                    </Show>
+                    <MergeReadinessPanel
+                      checks={merge
+                        .mergeReadiness()
+                        .checks.filter((check) => check.label === 'PR checks')}
+                    />
+                    <Show when={pr()?.checks.length}>
+                      <ul
+                        aria-label="GitHub CI checks"
+                        style={{
+                          'max-height': '140px',
+                          'overflow-y': 'auto',
+                          'padding-left': '20px',
+                        }}
+                      >
+                        <For each={pr()?.checks}>
+                          {(check) => (
+                            <li>
+                              {check.name}: {check.bucket}
+                            </li>
+                          )}
+                        </For>
+                      </ul>
+                    </Show>
+                    <p style={{ color: theme.fgSubtle }}>
+                      CI reflects the PR on GitHub, not unpushed local changes.
+                    </p>
+                  </>
+                )}
+              </Show>
+            </section>
             <Show when={!viaReview()}>
               <MergeOptions task={props.task} state={merge} />
             </Show>
@@ -179,7 +250,7 @@ export function FinishDialog(props: FinishDialogProps) {
         extraActions={
           <button
             type="button"
-            class="btn-secondary"
+            class="btn-secondary btn-with-icon"
             disabled={push.pushing() || merge.merging()}
             onClick={() => void push.start()}
             title={`Push ${props.task.branchName} to origin; the task stays open`}
@@ -189,6 +260,7 @@ export function FinishDialog(props: FinishDialogProps) {
               opacity: merge.merging() ? '0.5' : '1',
             }}
           >
+            <UploadIcon size={14} />
             {push.pushing() ? 'Pushing…' : 'Push branch'}
           </button>
         }

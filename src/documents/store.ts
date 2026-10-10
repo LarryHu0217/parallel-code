@@ -212,6 +212,7 @@ function startWatcher(projectId: string, projectRoot: string, documentPath: stri
 export async function openDocumentWorkspace(projectId: string): Promise<void> {
   const project = getProject(projectId);
   if (!project?.documentPath || !store.documentWorkspacesEnabled) return;
+  setStore('githubIssuesProjectId', null);
   if (docStore.projectId === projectId) {
     setActiveTask(documentAgentTaskId(projectId));
     return;

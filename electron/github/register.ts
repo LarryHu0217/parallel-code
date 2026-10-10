@@ -1,12 +1,21 @@
 /**
  * IPC for GitHub issues and pull requests. Every channel validates its
- * arguments; PR URLs must be canonical github.com URLs before reaching `gh`.
+ * arguments; PR URLs must be HTTPS pull request URLs before reaching `gh`.
  */
 import { ipcMain } from 'electron';
 import { IPC } from '../ipc/channels.js';
 import { assertInt, assertOptionalString, assertString, validatePath } from '../ipc/validate.js';
-import type { PrMergeMethod } from '../ipc/shared-types.js';
+import type { GitHubIssueChange, PrMergeMethod } from '../ipc/shared-types.js';
+import { TRIAGE_KINDS, TRIAGE_SORTS } from '../shared/github-triage.js';
+import type { TriageKind, TriageSort } from '../shared/github-triage.js';
 import { parsePrRef } from './gh.js';
+import {
+  browseGitHubIssues,
+  readGitHubIssue,
+  readGitHubIssueActivity,
+  resolveGitHubRepository,
+  updateGitHubIssue,
+} from './issues.js';
 import { getGitHubIssue, listGitHubWorkItems } from './work-items.js';
 import {
   getFailedChecks,
@@ -33,6 +42,78 @@ function positiveIntArg(value: unknown, label: string): number {
 }
 
 export function registerGitHubHandlers(): void {
+  ipcMain.handle(IPC.ResolveGitHubRepository, (_e, args: IpcArgs) => {
+    validatePath(args.projectRoot, 'projectRoot');
+    return resolveGitHubRepository(args.projectRoot as string);
+  });
+  ipcMain.handle(IPC.BrowseGitHubIssues, (_e, args: IpcArgs) => {
+    validatePath(args.projectRoot, 'projectRoot');
+    for (const key of ['search', 'label', 'assignee', 'author'] as const) {
+      assertString(args[key], key);
+      if ((args[key] as string).length > MAX_SEARCH_LENGTH) throw new Error(`${key} is too long`);
+    }
+    if (
+      typeof args.kind !== 'string' ||
+      !Object.prototype.hasOwnProperty.call(TRIAGE_KINDS, args.kind)
+    )
+      throw new Error('Invalid work item type');
+    if (
+      typeof args.sort !== 'string' ||
+      !Object.prototype.hasOwnProperty.call(TRIAGE_SORTS, args.sort)
+    )
+      throw new Error('Invalid work item sort');
+    const state = args.state;
+    if (state !== 'open' && state !== 'closed' && state !== 'all')
+      throw new Error('Invalid issue state');
+    const page = positiveIntArg(args.page, 'page');
+    if (page > 40) throw new Error('Narrow the search to see more issues');
+    return browseGitHubIssues(args.projectRoot as string, {
+      kind: args.kind as TriageKind,
+      sort: args.sort as TriageSort,
+      author: args.author as string,
+      search: args.search as string,
+      label: args.label as string,
+      assignee: args.assignee as string,
+      state,
+      page,
+    });
+  });
+  ipcMain.handle(IPC.ReadGitHubIssue, (_e, args: IpcArgs) => {
+    assertString(args.url, 'url');
+    return readGitHubIssue(args.url);
+  });
+  ipcMain.handle(IPC.ReadGitHubIssueActivity, (_e, args: IpcArgs) => {
+    assertString(args.url, 'url');
+    return readGitHubIssueActivity(args.url, positiveIntArg(args.page, 'page'));
+  });
+  ipcMain.handle(IPC.UpdateGitHubIssue, (_e, args: IpcArgs) => {
+    assertString(args.url, 'url');
+    let change: GitHubIssueChange;
+    if (args.field === 'state') {
+      if (args.value !== 'open' && args.value !== 'closed') throw new Error('Invalid issue state');
+      if (args.value === 'closed' && args.reason !== 'completed' && args.reason !== 'not_planned') {
+        throw new Error('Choose a close reason');
+      }
+      change = {
+        field: 'state',
+        value: args.value,
+        reason: args.reason === 'not_planned' ? 'not_planned' : 'completed',
+      };
+    } else if (args.field === 'labels' || args.field === 'assignees') {
+      if (
+        !Array.isArray(args.values) ||
+        args.values.length > 100 ||
+        !args.values.every(
+          (v): v is string => typeof v === 'string' && v.trim().length > 0 && v.length <= 100,
+        )
+      ) {
+        throw new Error('Invalid issue metadata');
+      }
+      change = { field: args.field, values: [...new Set(args.values)] };
+    } else throw new Error('Invalid issue change');
+    return updateGitHubIssue(args.url, change);
+  });
+
   ipcMain.handle(IPC.ListGitHubWorkItems, (_e, args: IpcArgs) => {
     validatePath(args.projectRoot, 'projectRoot');
     assertOptionalString(args.search, 'search');

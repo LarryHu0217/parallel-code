@@ -315,3 +315,158 @@ it('checks out a picked PR while keeping the text the user typed', async () => {
   );
   expect(vi.mocked(invoke).mock.calls.some(([channel]) => channel === IPC.CreateTask)).toBe(false);
 });
+
+it('preserves the browser issue link when the user rewrites the task prompt', async () => {
+  dispose();
+  const issueUrl = 'https://github.com/owner/repo/issues/42';
+  setStore('newTaskPrefillPrompt', {
+    projectId: 'project',
+    name: '#42 Fix save',
+    prompt: `Resolve issue\n${issueUrl}`,
+    githubUrl: issueUrl,
+  });
+  const originalInvoke = vi.mocked(invoke).getMockImplementation();
+  vi.mocked(invoke).mockImplementation((channel, args) => {
+    if (channel === IPC.CreateTask)
+      return Promise.resolve({
+        id: 'issue-task',
+        branch_name: 'fix-save',
+        worktree_path: '/project/.worktrees/fix-save',
+      });
+    return Promise.resolve(originalInvoke?.(channel, args));
+  });
+  dispose = render(() => <NewTaskPanel open={true} onClose={vi.fn()} />, host);
+  const submit = host.querySelector<HTMLButtonElement>('button[type="submit"]');
+  await vi.waitFor(() => expect(submit?.disabled).toBe(false));
+  const prompt = host.querySelector('textarea');
+  if (!prompt) throw new Error('Missing prompt editor');
+  prompt.value = 'My customized plan without a URL';
+  prompt.dispatchEvent(new Event('input', { bubbles: true }));
+  expect(host.textContent).not.toContain('From GitHub…');
+  host
+    .querySelector('form')
+    ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  await vi.waitFor(() => expect(store.tasks['issue-task']).toBeDefined());
+  expect(store.tasks['issue-task'].githubUrl).toBe(issueUrl);
+  expect(store.tasks['issue-task'].initialPrompt).toBe('My customized plan without a URL');
+});
+
+it('opens a browser PR review on the PR branch', async () => {
+  dispose();
+  const pr = {
+    kind: 'pr' as const,
+    number: 7,
+    url: 'https://github.com/o/r/pull/7',
+    title: 'Fix save',
+    author: 'dev',
+    labels: [],
+    updatedAt: '',
+    baseRefName: 'main',
+    isCrossRepository: false,
+  };
+  setStore('newTaskPrefillPrompt', {
+    projectId: 'project',
+    name: '#7 Fix save',
+    prompt: 'Review this PR',
+    githubUrl: pr.url,
+    githubPr: pr,
+  });
+  const originalInvoke = vi.mocked(invoke).getMockImplementation();
+  vi.mocked(invoke).mockImplementation((channel, args) => {
+    if (channel === IPC.CreatePrTask)
+      return Promise.resolve({
+        id: 'browser-pr',
+        branch_name: 'fix-save',
+        worktree_path: '/project/.worktrees/fix-save',
+        pr_url: pr.url,
+        base_branch: 'main',
+      });
+    return Promise.resolve(originalInvoke?.(channel, args));
+  });
+  dispose = render(() => <NewTaskPanel open={true} onClose={vi.fn()} />, host);
+  const submit = host.querySelector<HTMLButtonElement>('button[type="submit"]');
+  await vi.waitFor(() => expect(submit?.disabled).toBe(false));
+  expect(host.textContent).toContain('Checks out PR #7');
+  host
+    .querySelector('form')
+    ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  await vi.waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith(
+      IPC.CreatePrTask,
+      expect.objectContaining({ prNumber: 7, projectRoot: '/project' }),
+    ),
+  );
+});
+
+it('checks out a browser PR in a worktree even when the project defaults to direct mode', async () => {
+  dispose();
+  setStore('projects', 0, 'defaultGitIsolation', 'direct');
+  const pr = {
+    kind: 'pr' as const,
+    number: 7,
+    url: 'https://github.com/o/r/pull/7',
+    title: 'Fix save',
+    author: 'dev',
+    labels: [],
+    updatedAt: '',
+    baseRefName: 'main',
+    isCrossRepository: false,
+  };
+  setStore('newTaskPrefillPrompt', {
+    projectId: 'project',
+    name: '#7 Fix save',
+    prompt: 'Review this PR',
+    githubUrl: pr.url,
+    githubPr: pr,
+  });
+  const originalInvoke = vi.mocked(invoke).getMockImplementation();
+  vi.mocked(invoke).mockImplementation((channel, args) => {
+    if (channel === IPC.CreatePrTask)
+      return Promise.resolve({
+        id: 'direct-default-pr',
+        branch_name: 'fix-save',
+        worktree_path: '/project/.worktrees/fix-save',
+        pr_url: pr.url,
+        base_branch: 'main',
+      });
+    return Promise.resolve(originalInvoke?.(channel, args));
+  });
+  dispose = render(() => <NewTaskPanel open={true} onClose={vi.fn()} />, host);
+  const submit = host.querySelector<HTMLButtonElement>('button[type="submit"]');
+  await vi.waitFor(() => expect(submit?.disabled).toBe(false));
+  host
+    .querySelector('form')
+    ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  await vi.waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith(IPC.CreatePrTask, expect.objectContaining({ prNumber: 7 })),
+  );
+  expect(invoke).not.toHaveBeenCalledWith(IPC.CheckoutBranch, expect.anything());
+});
+
+it('does not attach a batch triage task to the first URL in its prompt', async () => {
+  dispose();
+  setStore('newTaskPrefillPrompt', {
+    projectId: 'project',
+    name: 'Triage 2 GitHub items',
+    prompt: 'Triage https://github.com/o/r/issues/1 and https://github.com/o/r/issues/2',
+    githubUrl: null,
+  });
+  const originalInvoke = vi.mocked(invoke).getMockImplementation();
+  vi.mocked(invoke).mockImplementation((channel, args) => {
+    if (channel === IPC.CreateTask)
+      return Promise.resolve({
+        id: 'batch-triage',
+        branch_name: 'triage',
+        worktree_path: '/project/.worktrees/triage',
+      });
+    return Promise.resolve(originalInvoke?.(channel, args));
+  });
+  dispose = render(() => <NewTaskPanel open={true} onClose={vi.fn()} />, host);
+  const submit = host.querySelector<HTMLButtonElement>('button[type="submit"]');
+  await vi.waitFor(() => expect(submit?.disabled).toBe(false));
+  host
+    .querySelector('form')
+    ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  await vi.waitFor(() => expect(store.tasks['batch-triage']).toBeDefined());
+  expect(store.tasks['batch-triage'].githubUrl).toBeUndefined();
+});

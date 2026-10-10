@@ -6,6 +6,7 @@ import {
   For,
   on,
   onCleanup,
+  onMount,
   type JSX,
 } from 'solid-js';
 import { getPanelUserSize, setPanelUserSize, deletePanelUserSize } from '../store/store';
@@ -34,6 +35,11 @@ export interface PanelChild {
    *  Ignored on non-absorbers. Use a smaller value to give an absorber less
    *  space than its siblings, e.g. 0.5 so the AI terminal gets ~2/3. */
   absorberWeight?: number;
+  /** Accessible name for the keyboard-resizable separator that controls this
+   *  child. A handle takes the label of its fixed (non-absorber) neighbour, the
+   *  side the arrow keys resize, so label the pinnable pane, e.g. 'Resize
+   *  agent pane'. Ignored on absorbers and on drag-only handles. */
+  resizeLabel?: string;
 }
 
 interface ResizablePanelProps {
@@ -51,8 +57,25 @@ interface ResizablePanelProps {
   style?: JSX.CSSProperties;
 }
 
+const KEYBOARD_STEP = 24;
+
+const roundOrUndefined = (n: number | undefined) => (n === undefined ? undefined : Math.round(n));
+
 export function ResizablePanel(props: ResizablePanelProps) {
   const [draggingIdx, setDraggingIdx] = createSignal<number | null>(null);
+  // Bumped when sizes may have changed so aria values re-read the layout.
+  const [measureTick, setMeasureTick] = createSignal(0);
+  const refreshMeasures = () => setMeasureTick((n) => n + 1);
+  // Nothing is measurable until the tree is attached; re-read then and whenever
+  // the container resizes (window resize or an ancestor layout change).
+  let rootEl: HTMLDivElement | undefined;
+  onMount(() => {
+    refreshMeasures();
+    if (typeof ResizeObserver === 'undefined' || !rootEl) return;
+    const observer = new ResizeObserver(refreshMeasures);
+    observer.observe(rootEl);
+    onCleanup(() => observer.disconnect());
+  });
   const [dragOverride, setDragOverride] = createSignal<Record<string, number>>({});
   /** Stable per-ID refs so drag measurement survives dynamic children changes. */
   const wrapperRefs = new Map<string, HTMLDivElement>();
@@ -274,6 +297,7 @@ export function ResizablePanel(props: ResizablePanelProps) {
       window.removeEventListener('blur', cancel);
       cancelDrag = undefined;
       setDraggingIdx(null);
+      queueMicrotask(refreshMeasures);
     };
     const cancel = () => {
       cleanup();
@@ -319,6 +343,64 @@ export function ResizablePanel(props: ResizablePanelProps) {
     deletePanelUserSize([`${props.persistKey}:${left.id}`, `${props.persistKey}:${right.id}`]);
   }
 
+  /** The fixed-size side a keyboard can resize: one pinnable child beside the sole
+   *  absorber. Other layouts stay drag-only rather than guess how to share space. */
+  function keyboardTarget(handleIdx: number) {
+    const left = props.children[handleIdx];
+    const right = props.children[handleIdx + 1];
+    if (!left || !right || !props.persistKey || absorberSet().size !== 1) return null;
+    if (left.noPin?.() === true || right.noPin?.() === true) return null;
+    if (isAbsorber(left.id) === isAbsorber(right.id)) return null;
+    const fixedIsLeft = !isAbsorber(left.id);
+    return fixedIsLeft
+      ? { fixed: left, absorber: right, sign: 1 }
+      : { fixed: right, absorber: left, sign: -1 };
+  }
+
+  /** Measured size and limits of the keyboard-controlled pane, or null when
+   *  nothing meaningful can be measured (the handle then isn't focusable).
+   *  `max` never drops below `current`: an absorber already under its minimum
+   *  must not make a grow key shrink the pane. */
+  function keyboardRange(handleIdx: number) {
+    measureTick();
+    const target = keyboardTarget(handleIdx);
+    if (!target) return null;
+    const current = measureWrapper(target.fixed.id);
+    if (!(current > 0)) return null;
+    const room = measureWrapper(target.absorber.id) - (target.absorber.minSize ?? 0);
+    return { target, current, min: target.fixed.minSize ?? 0, max: current + Math.max(0, room) };
+  }
+
+  function keyboardSize(key: string, range: { current: number; min: number; max: number }) {
+    if (key === 'Home') return range.min;
+    if (key === 'End') return range.max;
+    return undefined;
+  }
+
+  function nudge(handleIdx: number, e: KeyboardEvent) {
+    const range = keyboardRange(handleIdx);
+    if (!range) return;
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      unpin(handleIdx);
+      queueMicrotask(refreshMeasures);
+      return;
+    }
+    const toward = isHorizontal() ? 'ArrowRight' : 'ArrowDown';
+    const away = isHorizontal() ? 'ArrowLeft' : 'ArrowUp';
+    const { fixed, sign } = range.target;
+    let wanted = keyboardSize(e.key, range);
+    if (e.key === toward || e.key === away) {
+      wanted = range.current + (e.key === toward ? sign : -sign) * KEYBOARD_STEP;
+    }
+    if (wanted === undefined) return;
+    e.preventDefault();
+    const size = Math.min(range.max, Math.max(range.min, wanted));
+    const key = keyFor(fixed.id);
+    if (key && size > 0) setPanelUserSize(key, Math.round(size));
+    queueMicrotask(refreshMeasures);
+  }
+
   /** Hide handles where the drag can't produce a visible change: when one
    *  side is noPin and the SOLE absorber is a separate child on the other
    *  side, neither side can grow or shrink, so a visible handle would be a
@@ -340,6 +422,7 @@ export function ResizablePanel(props: ResizablePanelProps) {
 
   return (
     <div
+      ref={rootEl}
       class={props.class}
       style={{
         display: 'flex',
@@ -352,27 +435,40 @@ export function ResizablePanel(props: ResizablePanelProps) {
       }}
     >
       <For each={props.children}>
-        {(child, i) => (
-          <>
-            <div
-              class="rp-cell"
-              ref={(el) => {
-                wrapperRefs.set(child.id, el);
-                onCleanup(() => wrapperRefs.delete(child.id));
-              }}
-              style={childStyle(child)}
-            >
-              {child.content()}
-            </div>
-            {i() < props.children.length - 1 && !isHandleInert(i()) && (
+        {(child, i) => {
+          // Measuring reads the layout; share one read among this handle's aria attributes.
+          const range = createMemo(() => keyboardRange(i()));
+          return (
+            <>
               <div
-                class={`resize-handle resize-handle-${isHorizontal() ? 'h' : 'v'} ${draggingIdx() === i() ? 'dragging' : ''}`}
-                onMouseDown={(e) => beginDrag(i(), e)}
-                onDblClick={() => unpin(i())}
-              />
-            )}
-          </>
-        )}
+                class="rp-cell"
+                ref={(el) => {
+                  wrapperRefs.set(child.id, el);
+                  onCleanup(() => wrapperRefs.delete(child.id));
+                }}
+                style={childStyle(child)}
+              >
+                {child.content()}
+              </div>
+              {i() < props.children.length - 1 && !isHandleInert(i()) && (
+                <div
+                  class={`resize-handle resize-handle-${isHorizontal() ? 'h' : 'v'} ${draggingIdx() === i() ? 'dragging' : ''}`}
+                  role="separator"
+                  aria-orientation={isHorizontal() ? 'vertical' : 'horizontal'}
+                  aria-label={range()?.target.fixed.resizeLabel}
+                  aria-valuenow={roundOrUndefined(range()?.current)}
+                  aria-valuemin={roundOrUndefined(range()?.min)}
+                  aria-valuemax={roundOrUndefined(range()?.max)}
+                  tabIndex={range() ? 0 : undefined}
+                  onFocus={refreshMeasures}
+                  onKeyDown={(e) => nudge(i(), e)}
+                  onMouseDown={(e) => beginDrag(i(), e)}
+                  onDblClick={() => unpin(i())}
+                />
+              )}
+            </>
+          );
+        }}
       </For>
     </div>
   );

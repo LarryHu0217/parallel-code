@@ -16,6 +16,7 @@ import { CandidateRefinement } from './CandidateRefinement';
 import { MergeWithAgent } from './MergeWithAgent';
 import { IPC } from '../../electron/ipc/channels';
 import { invoke } from '../lib/ipc';
+import { countLabel } from '../lib/plural';
 import {
   diffBlocks,
   type BlockChange,
@@ -44,6 +45,7 @@ import { DocumentViewer } from './DocumentViewer';
 import { SourceDiff } from './SourceDiff';
 import { createRenderedBlocks } from './use-blocks';
 import { renderDocument } from './render-document';
+import { CheckIcon, SparkleIcon } from '../components/icons';
 
 function projectRoot(): string {
   const project = documentStore.projectId ? getProject(documentStore.projectId) : undefined;
@@ -82,10 +84,6 @@ function revealFirst(body: HTMLElement | undefined, selector: string): boolean {
   const offset = target.getBoundingClientRect().top - body.getBoundingClientRect().top;
   body.scrollTop += offset - body.clientHeight / 3;
   return true;
-}
-
-function plural(n: number, noun: string): string {
-  return `${n} ${noun}${n === 1 ? '' : 's'}`;
 }
 
 function reviewBlocks(
@@ -141,7 +139,7 @@ function ChangeNav(props: {
       </button>
       <span>
         {cursor() < 0 ? '' : `${cursor() + 1} of `}
-        {plural(props.hunks.length, 'change')}
+        {countLabel(props.hunks.length, 'change')}
       </span>
       <button
         type="button"
@@ -589,6 +587,7 @@ function CandidateColumn(props: {
             }
             onClick={() => void accept()}
           >
+            <CheckIcon size={12} />
             {accepting()
               ? 'Applying…'
               : declined().size === 0
@@ -773,6 +772,7 @@ export function CompareView(props: { run: DocumentRunRecord; candidateId?: strin
             title="Let an agent read the proposals and draft one merged version"
             onClick={() => setMerging((value) => !value)}
           >
+            <SparkleIcon size={12} />
             Merge with agent
           </button>
         </Show>

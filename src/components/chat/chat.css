@@ -652,6 +652,13 @@
   background: transparent;
   border: 1px solid transparent;
 }
+/* Mirrors .btn-with-icon in src/styles.css, which the phone UI does not load. */
+.chat-ui .btn-with-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
 .chat-ui button:enabled:hover {
   background-color: var(--chat-surface-strong);
   color: var(--fg);

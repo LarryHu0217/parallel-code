@@ -8,6 +8,7 @@ import {
   ListIcon,
   PencilIcon,
   RedoIcon,
+  SyncIcon,
 } from './icons';
 import { TourAskBar } from './understanding/TourAskBar';
 import { TourCard } from './understanding/TourCard';
@@ -224,9 +225,10 @@ export function UnderstandingTourDialog(props: {
             <span>This file changed after the tour was made.</span>
             <button
               type="button"
-              class="understanding-notice-action"
+              class="understanding-notice-action btn-with-icon"
               onClick={() => controller().retry()}
             >
+              <SyncIcon size={12} />
               Regenerate
             </button>
           </div>

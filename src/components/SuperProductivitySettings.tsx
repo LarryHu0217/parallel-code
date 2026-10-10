@@ -8,6 +8,7 @@ import {
 import { theme } from '../lib/theme';
 import { errMessage } from '../lib/log';
 import type { SpConnectionState } from '../../electron/shared/super-productivity';
+import { CloseIcon, PlugIcon, SyncIcon } from './icons';
 
 /** IPC errors arrive as "Error invoking remote method '…': Error: <message>". */
 function readableError(err: unknown): string {
@@ -120,10 +121,11 @@ export function SuperProductivitySettings() {
           />
           <button
             type="submit"
-            class="btn-primary"
+            class="btn-primary btn-with-icon"
             disabled={busy() || !token().trim()}
             style={{ ...buttonStyle(true), opacity: busy() || !token().trim() ? 0.5 : 1 }}
           >
+            <PlugIcon size={14} />
             {spConnection() === 'not_configured' ? 'Connect' : 'Replace token'}
           </button>
         </form>
@@ -132,20 +134,22 @@ export function SuperProductivitySettings() {
         <div style={{ display: 'flex', gap: '8px' }}>
           <button
             type="button"
-            class="btn-secondary"
+            class="btn-secondary btn-with-icon"
             disabled={busy()}
             style={buttonStyle(false)}
             onClick={() => void run(refreshSpConnection)}
           >
+            <SyncIcon size={14} />
             Check again
           </button>
           <button
             type="button"
-            class="btn-secondary"
+            class="btn-secondary btn-with-icon"
             disabled={busy()}
             style={buttonStyle(false)}
             onClick={() => void run(disconnectSuperProductivity)}
           >
+            <CloseIcon size={14} />
             Disconnect
           </button>
         </div>

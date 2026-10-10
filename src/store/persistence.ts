@@ -27,6 +27,7 @@ import { MAX_PROMPT_HISTORY } from '../lib/prompt-history';
 import { normalizeReasoningProfile } from '../investigation/profiles';
 import { restoreReasoningWorkspaces } from '../investigation/editing';
 import { isValidSpId } from '../../electron/shared/super-productivity';
+import { DEFAULT_TASK_NAME_MODEL, isTaskNameModelId } from '../../electron/shared/task-name-model';
 
 /** A map that fails validation is kept aside rather than crashing load or being overwritten
  *  by the next save; the user is told once. */
@@ -65,7 +66,7 @@ import { syncTerminalCounter } from './terminals';
 import { showNotification, NOTIFICATION_ERROR_MS } from './notification';
 import { errMessage, warn as logWarn } from '../lib/log';
 import { canvasTabKey } from '../lib/canvas-tabs';
-import { documentAgentTaskIds } from '../documents/task-id';
+import { hiddenAgentTaskIds, isHiddenAgentTaskId } from '../documents/task-id';
 
 function restoredCodexHandoff(value: unknown): Task['codexChatHandoff'] {
   if (!value || typeof value !== 'object') return;
@@ -376,6 +377,8 @@ export async function saveState(): Promise<void> {
     windowState: store.windowState ? { ...store.windowState } : undefined,
     autoTrustFolders: store.autoTrustFolders,
     showPlans: store.showPlans,
+    modelTaskNames: store.modelTaskNames,
+    taskNameModel: store.taskNameModel,
     showSidebarTips: store.showSidebarTips,
     showSidebarProgress: store.showSidebarProgress,
     sidebarNeedsInputFirst: store.sidebarNeedsInputFirst,
@@ -419,8 +422,8 @@ export async function saveState(): Promise<void> {
     autoStartRemoteAccess: store.autoStartRemoteAccess || undefined,
   };
 
-  const documentTaskIds = documentAgentTaskIds(store.projects);
-  for (const taskId of new Set([...store.taskOrder, ...documentTaskIds])) {
+  const hiddenTaskIds = hiddenAgentTaskIds(store.projects);
+  for (const taskId of new Set([...store.taskOrder, ...hiddenTaskIds])) {
     const task = store.tasks[taskId];
     if (!task) continue;
 
@@ -574,6 +577,8 @@ interface LegacyPersistedState {
   autoTrustFolders?: unknown;
   showPlans?: unknown;
   showSteps?: unknown;
+  modelTaskNames?: unknown;
+  taskNameModel?: unknown;
   showSidebarTips?: unknown;
   showSidebarProgress?: unknown;
   sidebarNeedsInputFirst?: unknown;
@@ -734,7 +739,7 @@ export async function loadState(): Promise<void> {
   );
   for (const task of authorityTasks) {
     const project = projects.find((p) => p.id === task.projectId);
-    if (!project || project.kind === 'document') continue;
+    if (!project || project.kind === 'document' || isHiddenAgentTaskId(task.id)) continue;
     const agent = task.agentDefs?.[0] ?? task.agentDef ?? undefined;
     try {
       await delegationRequest({
@@ -811,6 +816,10 @@ export async function loadState(): Promise<void> {
       s.windowState = parsePersistedWindowState(raw.windowState);
       s.autoTrustFolders = typeof raw.autoTrustFolders === 'boolean' ? raw.autoTrustFolders : false;
       s.showPlans = typeof raw.showPlans === 'boolean' ? raw.showPlans : true;
+      s.modelTaskNames = raw.modelTaskNames === true;
+      s.taskNameModel = isTaskNameModelId(raw.taskNameModel)
+        ? raw.taskNameModel
+        : DEFAULT_TASK_NAME_MODEL;
       s.showSidebarTips = typeof raw.showSidebarTips === 'boolean' ? raw.showSidebarTips : true;
       s.showSidebarProgress =
         typeof raw.showSidebarProgress === 'boolean' ? raw.showSidebarProgress : true;
@@ -961,8 +970,8 @@ export async function loadState(): Promise<void> {
         }
       }
 
-      const documentTaskIds = documentAgentTaskIds(projects);
-      for (const taskId of new Set([...raw.taskOrder, ...documentTaskIds])) {
+      const hiddenTaskIds = hiddenAgentTaskIds(projects);
+      for (const taskId of new Set([...raw.taskOrder, ...hiddenTaskIds])) {
         const pt = raw.tasks[taskId];
         if (!pt) continue;
 
@@ -986,7 +995,7 @@ export async function loadState(): Promise<void> {
                 : undefined,
           projectId: pt.projectId ?? '',
           branchName: pt.branchName,
-          worktreePath: documentTaskIds.includes(taskId)
+          worktreePath: hiddenTaskIds.includes(taskId)
             ? (projects.find((project) => project.id === pt.projectId)?.path ?? pt.worktreePath)
             : pt.worktreePath,
           agentIds,

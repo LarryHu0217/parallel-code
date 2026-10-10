@@ -18,6 +18,7 @@ import {
   setLightTheme,
 } from '../store/store';
 import { osIsDark } from '../lib/os-appearance';
+import { CheckIcon, CopyIcon, TrashIcon } from './icons';
 
 interface CustomThemeDialogProps {
   open: boolean;
@@ -203,6 +204,7 @@ export function CustomThemeDialog(props: CustomThemeDialogProps) {
               {showPrompt() ? 'Hide' : 'Show'} prompt
             </button>
             <button
+              class="btn-with-icon"
               type="button"
               onClick={handleCopyPrompt}
               style={{
@@ -216,6 +218,7 @@ export function CustomThemeDialog(props: CustomThemeDialogProps) {
                 transition: 'background 0.2s, border-color 0.2s',
               }}
             >
+              {copied() ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
               {copied() ? 'Copied!' : 'Copy Prompt'}
             </button>
           </div>
@@ -342,6 +345,7 @@ export function CustomThemeDialog(props: CustomThemeDialogProps) {
         <Show when={props.editId}>
           {(editId) => (
             <button
+              class="btn-with-icon"
               type="button"
               onClick={async () => {
                 try {
@@ -360,6 +364,7 @@ export function CustomThemeDialog(props: CustomThemeDialogProps) {
                 padding: '7px 0',
               }}
             >
+              <TrashIcon size={14} />
               Delete Theme
             </button>
           )}

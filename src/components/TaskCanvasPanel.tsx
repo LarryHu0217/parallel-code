@@ -1,4 +1,13 @@
-import { For, Show, createEffect, createSignal, onCleanup, onMount, type JSX } from 'solid-js';
+import {
+  For,
+  Show,
+  createEffect,
+  createSignal,
+  lazy,
+  onCleanup,
+  onMount,
+  type JSX,
+} from 'solid-js';
 import { Portal } from 'solid-js/web';
 import {
   setTaskFocusedPanel,
@@ -26,8 +35,12 @@ import { TOUR_MIN_DOCUMENT_CHARS } from '../../electron/shared/understanding-lim
 import { ConfirmDialog } from './ConfirmDialog';
 import { CanvasFilePicker } from './CanvasFilePicker';
 import { CanvasTabStrip } from './CanvasTabStrip';
-import { TaskCanvasDocument } from './TaskCanvasDocument';
 import { TaskBrowserPanel } from './TaskBrowserPanel';
+
+// Lazy: CodeMirror only loads once a document tab is opened.
+const TaskCanvasDocument = lazy(() =>
+  import('./TaskCanvasDocument').then((m) => ({ default: m.TaskCanvasDocument })),
+);
 
 type DocumentTab = Extract<CanvasTab, { path: string }>;
 const isDocumentTab = (tab: CanvasTab): tab is DocumentTab => 'path' in tab;

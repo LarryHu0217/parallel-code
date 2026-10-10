@@ -12,6 +12,7 @@ import {
   trackMarkdownWrite,
   writeMarkdownDraft,
 } from './markdown-editing';
+import { SyncIcon } from '../components/icons';
 
 interface MarkdownEditorProps {
   projectRoot: string;
@@ -170,6 +171,7 @@ function MarkdownEditorSession(
               setError('');
             }}
           >
+            <SyncIcon size={12} />
             Reload and discard my draft
           </button>
         </div>

@@ -7,7 +7,15 @@ import { TOUR_KEYS, isTypingTarget } from '../lib/tour-keys';
 import { tourMarkdown } from '../lib/tour-markdown';
 import type { TourRef } from '../lib/understanding-tour';
 import { store } from '../store/store';
-import { CloseIcon, ListIcon, PencilIcon } from './icons';
+import {
+  CheckIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  CloseIcon,
+  ListIcon,
+  PencilIcon,
+  SyncIcon,
+} from './icons';
 import { TourAskBar } from './understanding/TourAskBar';
 import { TourCard } from './understanding/TourCard';
 import { TourCopyButton } from './understanding/TourCopyButton';
@@ -150,7 +158,8 @@ export function ChangeTour(props: {
             <p role="alert" class="understanding-alert">
               {message()}
             </p>
-            <button class="review-control" onClick={() => props.tour.retry()}>
+            <button class="review-control btn-with-icon" onClick={() => props.tour.retry()}>
+              <SyncIcon size={12} />
               Retry
             </button>
           </div>
@@ -216,14 +225,15 @@ export function ChangeTour(props: {
             </div>
             <div class="change-tour-nav">
               <button
-                class="review-control"
+                class="review-control btn-with-icon"
                 disabled={props.tour.step() === 0}
                 onClick={() => props.tour.navigate(props.tour.step() - 1)}
               >
+                <ChevronLeftIcon size={12} />
                 Previous
               </button>
               <button
-                class="review-control change-tour-next"
+                class="review-control change-tour-next btn-with-icon"
                 title="Arrow keys navigate while the tour has focus"
                 onClick={() => {
                   if (isLastStep()) props.onFinish();
@@ -231,6 +241,7 @@ export function ChangeTour(props: {
                 }}
               >
                 {isLastStep() ? 'Finish tour' : 'Next'}
+                {isLastStep() ? <CheckIcon size={12} /> : <ChevronRightIcon size={12} />}
               </button>
             </div>
           </>

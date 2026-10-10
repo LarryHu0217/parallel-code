@@ -1,3 +1,4 @@
+import { GitHubIssuesPage } from './components/GitHubIssuesPage';
 import '@xterm/xterm/css/xterm.css';
 import '@fontsource/inter/400.css';
 import '@fontsource/inter/500.css';
@@ -11,7 +12,15 @@ import '@fontsource/space-grotesk/700.css';
 import '@fontsource/jetbrains-mono/400.css';
 import '@fontsource/jetbrains-mono/500.css';
 import './styles.css';
-import { onMount, onCleanup, createEffect, Show, ErrorBoundary, createSignal } from 'solid-js';
+import {
+  onMount,
+  onCleanup,
+  createEffect,
+  Show,
+  ErrorBoundary,
+  createSignal,
+  lazy,
+} from 'solid-js';
 import { invoke } from './lib/ipc';
 import { IPC } from '../electron/ipc/channels';
 import { appWindow } from './lib/window';
@@ -89,8 +98,8 @@ import { applyAppearanceMode, markCustomThemesReady, loadCustomThemes } from './
 import { isMac } from './lib/platform';
 import { createCtrlWheelZoomHandler } from './lib/wheelZoom';
 import { redrawAllTerminals } from './lib/terminalFitManager';
-import { ArenaOverlay } from './arena/ArenaOverlay';
 import { isDocumentAgentTaskId } from './documents/agent-task';
+import { isHiddenAgentTaskId } from './documents/task-id';
 import {
   closeDocumentWorkspace,
   documentStore,
@@ -111,6 +120,11 @@ import { startAgentHookStatusListener } from './store/agentHookStatus';
 import { applyPlanContent, startCanvasAutoOpen } from './store/canvas';
 import { startEvidenceAutoBuild } from './store/evidence-auto';
 import type { PlanContentMessage } from './store/canvas';
+import { SyncIcon } from './components/icons';
+
+const ArenaOverlay = lazy(() =>
+  import('./arena/ArenaOverlay').then((m) => ({ default: m.ArenaOverlay })),
+);
 
 const MIN_WINDOW_DIMENSION = 100;
 
@@ -673,7 +687,8 @@ function App() {
 
     // A document workspace's hidden agent task can be the active one; it has
     // no worktree to close, merge or push and no panel a shell could show in.
-    const listedTask = (id: string) => store.tasks[id] !== undefined && !isDocumentAgentTaskId(id);
+    const listedTask = (id: string) =>
+      !store.githubIssuesProjectId && store.tasks[id] !== undefined && !isHiddenAgentTaskId(id);
 
     const actionHandlers: Record<string, (e: KeyboardEvent) => void> = {
       'navigateRow:up': () => navigateRow('up'),
@@ -688,6 +703,7 @@ function App() {
         Array.from({ length: 9 }, (_, i) => [`jumpToTask:${i + 1}`, () => jumpToTask(i)]),
       ),
       closeShell: (e) => {
+        if (store.githubIssuesProjectId) return;
         // Auto-repeat would walk through adjacent terminals or canvas tabs.
         if (e.repeat) return;
         const target = resolvePanelCloseTarget(store);
@@ -697,6 +713,7 @@ function App() {
         else triggerAction(`${target.taskId}:close-canvas-active-tab`);
       },
       closeTask: () => {
+        if (store.githubIssuesProjectId) return;
         const id = store.activeTaskId;
         if (!id) return;
         if (store.terminals[id]) {
@@ -721,7 +738,9 @@ function App() {
         const id = store.activeTaskId;
         if (id && listedTask(id)) spawnShellForTask(id);
       },
-      sendPrompt: () => sendActivePrompt(),
+      sendPrompt: () => {
+        if (!store.githubIssuesProjectId) sendActivePrompt();
+      },
       createTerminal: (e) => {
         if (!e.repeat) createTerminal();
       },
@@ -837,6 +856,7 @@ function App() {
             {String(err)}
           </div>
           <button
+            class="btn-with-icon"
             onClick={reset}
             style={{
               background: theme.bgElevated,
@@ -848,6 +868,7 @@ function App() {
               'font-size': '15px',
             }}
           >
+            <SyncIcon size={14} />
             Reload
           </button>
         </div>
@@ -929,9 +950,18 @@ function App() {
           <Show when={store.sidebarVisible}>
             <Sidebar />
           </Show>
-          <div class="task-workspace">
+          {/* Keep terminals mounted while the issue page occupies the workspace. */}
+          <div
+            class="task-workspace"
+            style={{
+              display: store.projects.some((p) => p.id === store.githubIssuesProjectId)
+                ? 'none'
+                : undefined,
+            }}
+          >
             <TilingLayout />
           </div>
+          <GitHubIssuesPage />
         </main>
         <UsageStatusBar />
         <HelpDialog open={store.showHelpDialog} onClose={() => toggleHelpDialog(false)} />

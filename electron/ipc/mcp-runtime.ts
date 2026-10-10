@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { IPC } from './channels.js';
 import type { Notify } from './notify.js';
-import { onPtyEvent } from './pty.js';
+import { onPtyEvent, setRemoteHistory } from './pty.js';
 import { appendGitInfoExcludeBlock } from './git-exclude.js';
 import { loadAppState, saveAppState } from './persistence.js';
 import { getDockerMcpServerDestPath, hostMcpServerPath } from './mcp-paths.js';
@@ -79,6 +79,7 @@ export function createMcpRuntime(opts: McpRuntimeOptions): McpRuntime {
       wideBindAgents.size > 0 ||
       (process.platform !== 'linux' && delegation.requiresWideTransport()),
     rememberedDevicesPath: opts.rememberedDevicesPath,
+    onPhoneAccessChange: setRemoteHistory,
   });
 
   const delegation: DelegationService = new DelegationService({

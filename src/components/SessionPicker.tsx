@@ -4,11 +4,13 @@ import { sf } from '../lib/fontScale';
 import { listResumableSessions, resumeAgentSession } from '../store/sessions';
 import { canResumeSessionId } from '../../electron/shared/session-resume';
 import type { SessionRecord } from '../../electron/shared/session-record';
+import { HistoryIcon } from './icons';
 
 /** Relative age of a session, via the platform formatter rather than a table
- *  of thresholds. Exported for its test. */
-export function relativeTime(epochMs: number, now = Date.now()): string {
-  const format = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
+ *  of thresholds. Exported for its test, which pins `locale` so the wording it
+ *  checks does not depend on the host's default. */
+export function relativeTime(epochMs: number, now = Date.now(), locale?: string): string {
+  const format = new Intl.RelativeTimeFormat(locale, { numeric: 'auto' });
   const seconds = Math.round((epochMs - now) / 1000);
   const units: [Intl.RelativeTimeFormatUnit, number][] = [
     ['day', 86_400],
@@ -67,6 +69,7 @@ export function SessionPicker(props: {
     <Show when={canResumeSessionId(props.command)}>
       <span style={{ position: 'relative', display: 'inline-flex' }} ref={(el) => (rootRef = el)}>
         <button
+          class="btn-with-icon"
           aria-label="Resume a specific session"
           aria-expanded={open()}
           onClick={(e) => {
@@ -83,6 +86,7 @@ export function SessionPicker(props: {
             'font-size': sf(11),
           }}
         >
+          <HistoryIcon size={12} />
           Resume session…
         </button>
         <Show when={open()}>

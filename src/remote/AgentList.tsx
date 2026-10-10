@@ -7,6 +7,8 @@ import { readLocal, writeLocal } from './storage';
 import { ProjectSwatch } from '../components/ProjectSwatch';
 import type { RemoteAgent } from '../../electron/remote/protocol';
 
+const ANDROID_APP_GUIDE = 'https://github.com/johannesjo/parallel-code#android-app';
+
 interface AgentListProps {
   onSelect: (taskId: string) => void;
   onNewTask: () => void;
@@ -75,6 +77,19 @@ export function AgentList(props: AgentListProps) {
       <main class="mobile-scroll">
         <Show when={canControl()}>
           <NotificationSettings />
+        </Show>
+        <Show when={/Android/i.test(navigator.userAgent)}>
+          <details class="mobile-notifications">
+            <summary>Android app</summary>
+            <p>
+              The Android app notifies you in the background without HTTPS and adds a home-screen
+              widget.{' '}
+              <a href={ANDROID_APP_GUIDE} target="_blank" rel="noreferrer">
+                Install it
+              </a>
+              , then scan the same QR code.
+            </p>
+          </details>
         </Show>
         <Show when={agents().length > 0}>
           <div class="mobile-search-field">

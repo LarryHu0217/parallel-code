@@ -3,7 +3,7 @@ import { render } from 'solid-js/web';
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { FinishDialog } from './FinishDialog';
 import { invoke } from '../lib/ipc';
-import { mergeTask, pushTask } from '../store/store';
+import { getPrChecks, mergeTask, pushTask } from '../store/store';
 import { IPC } from '../../electron/ipc/channels';
 import type { ChangeTourController } from '../lib/create-change-tour';
 import type { Task } from '../store/types';
@@ -11,7 +11,7 @@ import type { Task } from '../store/types';
 vi.mock('../store/store', () => ({
   store: { agents: {} },
   getProject: () => undefined,
-  getPrChecks: () => undefined,
+  getPrChecks: vi.fn(() => undefined),
   getVerifyCommand: () => undefined,
   getTaskChecks: () => [],
   buildEvidence: vi.fn(async () => {}),
@@ -131,6 +131,7 @@ afterEach(() => {
   dispose?.();
   document.body.replaceChildren();
   vi.clearAllMocks();
+  vi.mocked(getPrChecks).mockReturnValue(undefined);
 });
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -164,6 +165,7 @@ function tour(stops = 0): ChangeTourController {
 function mount(options: { task?: Task; tour?: ChangeTourController } = {}) {
   const handlers = {
     onClose: vi.fn(),
+    onOpenPullRequest: vi.fn(),
     onPushDone: vi.fn(),
     onDelegationReview: vi.fn(),
     onRegenerateTour: vi.fn(),
@@ -330,5 +332,38 @@ it('preserves unsent diff comments when returning to evidence and reopening a fi
   button('Open evidence finding')?.click();
   expect(document.querySelector('[data-testid="review-comments"]')?.textContent).toBe(
     'Keep this review comment',
+  );
+});
+
+describe('FinishDialog GitHub', () => {
+  it('shows an empty state without linking an issue as a PR', () => {
+    mount({ task: task({ githubUrl: 'https://github.com/o/r/issues/2' }) });
+    expect(document.body.textContent).toContain('No pull request detected');
+    expect(button('PR #2 · Details and actions…')).toBeUndefined();
+  });
+
+  it.each(['prUrl', 'githubUrl'] as const)(
+    'opens a PR from %s with its CI and review status',
+    (field) => {
+      vi.mocked(getPrChecks).mockReturnValue({
+        overall: 'failure',
+        passing: 0,
+        pending: 0,
+        failing: 1,
+        checks: [{ name: 'Unit tests', bucket: 'fail' }],
+        checkedAt: '',
+        isDraft: true,
+        reviewDecision: 'CHANGES_REQUESTED',
+        mergeable: 'CONFLICTING',
+      });
+      const url = 'https://github.com/o/r/pull/42';
+      const handlers = mount({ task: task({ [field]: url }) });
+      expect(document.body.textContent).toContain('Unit tests: fail');
+      expect(document.body.textContent).toContain('Draft pull request');
+      expect(document.body.textContent).toContain('Review: changes requested');
+      expect(document.body.textContent).toContain('PR has conflicts');
+      button('PR #42 · Details and actions…')?.click();
+      expect(handlers.onOpenPullRequest).toHaveBeenCalledWith(url);
+    },
   );
 });

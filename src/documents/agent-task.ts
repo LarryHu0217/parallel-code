@@ -24,7 +24,7 @@ import type { AgentDef } from '../ipc/types';
 import type { Project, Task } from '../store/types';
 import { documentMainAgentId } from './store';
 import { setRailTab } from './workspace-ui';
-import { documentAgentTaskId, isDocumentAgentTaskId } from './task-id';
+import { documentAgentTaskId, githubAgentTaskId, isDocumentAgentTaskId } from './task-id';
 export { documentAgentTaskId, isDocumentAgentTaskId } from './task-id';
 
 function terminalAgentDef(project: Project): AgentDef | undefined {
@@ -35,10 +35,18 @@ function terminalAgentDef(project: Project): AgentDef | undefined {
 
 /** The project's agent task, created on first use. Null while no agent is installed. */
 export function ensureDocumentAgentTask(project: Project): Task | null {
-  const id = documentAgentTaskId(project.id);
+  return ensureHiddenAgentTask(documentAgentTaskId(project.id), project, terminalAgentDef);
+}
+
+/** A hidden task working in the project checkout, created on first use. */
+export function ensureHiddenAgentTask(
+  id: string,
+  project: Project,
+  pickAgent: (project: Project) => AgentDef | undefined,
+): Task | null {
   const existing = store.tasks[id];
   if (existing) return existing;
-  const def = terminalAgentDef(project);
+  const def = pickAgent(project);
   if (!def) return null;
   const agent = createAgentRecord({ id, taskId: id, def, attachExisting: true });
   const task: Task = {
@@ -145,10 +153,16 @@ export function releaseDocumentAgentTask(previousId: string | null): void {
   else setStore({ activeTaskId: null, activeAgentId: null });
 }
 
-/** Ends the project's sessions and forgets the task; for when the project is
- *  removed, since nothing else would ever kill these ptys. */
-export async function disposeDocumentAgentTask(projectId: string): Promise<void> {
-  const task = store.tasks[documentAgentTaskId(projectId)];
+/** Ends the project's hidden sessions and forgets their tasks; for when the
+ *  project is removed, since nothing else would ever kill these ptys. */
+export async function disposeHiddenAgentTasks(projectId: string): Promise<void> {
+  await Promise.all(
+    [documentAgentTaskId(projectId), githubAgentTaskId(projectId)].map(disposeHiddenAgentTask),
+  );
+}
+
+async function disposeHiddenAgentTask(taskId: string): Promise<void> {
+  const task = store.tasks[taskId];
   if (!task) return;
   const agentIds = [...task.agentIds];
   if (store.activeTaskId === task.id) releaseDocumentAgentTask(null);

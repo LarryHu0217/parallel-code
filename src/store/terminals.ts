@@ -28,6 +28,7 @@ export function createTerminal(): void {
   setStore('terminals', id, terminal);
   setStore('taskOrder', store.taskOrder.length, id);
   setStore('focusedPanel', id, 'terminal');
+  setStore('githubIssuesProjectId', null);
   setStore('activeTaskId', id);
   setStore('activeAgentId', null);
   setStore('sidebarFocused', false);

@@ -64,6 +64,7 @@ describe('usage store slice', () => {
     expect(state('codex')).toEqual({
       fiveHour: OK.fiveHour,
       sevenDay: OK.sevenDay,
+      creditUsage: null,
       fetchedAt: 500,
       status: 'ok',
       error: null,
@@ -79,6 +80,7 @@ describe('usage store slice', () => {
     expect(state()).toEqual({
       fiveHour: null,
       sevenDay: null,
+      creditUsage: null,
       fetchedAt: null,
       status: 'unavailable',
       error: 'logged out',

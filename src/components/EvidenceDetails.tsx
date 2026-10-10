@@ -10,6 +10,7 @@ import {
 } from '../store/store';
 import type { Task } from '../store/types';
 import { EvidenceQuestionButton } from './EvidenceQuestionButton';
+import { CheckIcon, CloseIcon, UndoIcon } from './icons';
 
 export const evidenceButtonStyle = {
   padding: '4px 10px',
@@ -75,10 +76,12 @@ function FlagItem(props: {
           <div style={muted}>
             Accepted: {props.accepted}{' '}
             <button
+              class="btn-with-icon"
               type="button"
               style={smallButton}
               onClick={() => reopenEvidenceFlag(props.taskId, props.flag.id)}
             >
+              <UndoIcon size={12} />
               Undo acceptance
             </button>
           </div>
@@ -89,7 +92,13 @@ function FlagItem(props: {
           fallback={
             <Show when={props.flag.category !== 'info'}>
               {' '}
-              <button type="button" style={smallButton} onClick={() => setEditing(true)}>
+              <button
+                class="btn-with-icon"
+                type="button"
+                style={smallButton}
+                onClick={() => setEditing(true)}
+              >
+                <CheckIcon size={12} />
                 Accept…
               </button>
             </Show>
@@ -109,7 +118,13 @@ function FlagItem(props: {
               onInput={(event) => setReason(event.currentTarget.value)}
               style={{ flex: '1', 'font-size': '13px' }}
             />
-            <button type="submit" style={smallButton} disabled={!reason().trim()}>
+            <button
+              class="btn-with-icon"
+              type="submit"
+              style={smallButton}
+              disabled={!reason().trim()}
+            >
+              <CheckIcon size={12} />
               Accept
             </button>
             <button type="button" style={smallButton} onClick={() => setEditing(false)}>
@@ -187,10 +202,12 @@ export function EvidenceDetails(props: EvidenceDetailsProps) {
                     {finding.text}
                     <div style={{ 'margin-top': '6px' }}>
                       <button
+                        class="btn-with-icon"
                         type="button"
                         style={smallButton}
                         onClick={() => dismissEvidenceFinding(props.task.id, finding.id)}
                       >
+                        <CloseIcon size={12} />
                         Dismiss
                       </button>{' '}
                       <EvidenceQuestionButton
@@ -280,10 +297,12 @@ export function EvidenceDetails(props: EvidenceDetailsProps) {
                 <li>
                   AI review · {fileLink(finding.file, finding.line)} {finding.text}{' '}
                   <button
+                    class="btn-with-icon"
                     type="button"
                     style={smallButton}
                     onClick={() => restoreEvidenceFinding(props.task.id, finding.id)}
                   >
+                    <UndoIcon size={12} />
                     Undo dismissal
                   </button>
                 </li>

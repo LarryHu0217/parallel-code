@@ -31,7 +31,7 @@ import { NodeContextMenu, type NodeAction } from '../graph/NodeContextMenu';
 import { nodeActions, type NodeCommands } from './editorActions';
 import { isProtected } from '../graph/ownership';
 import { exportFormats, exportGraphAs, type ExportFormat } from '../graph/graphExport';
-import { PlusIcon, RedoIcon, UndoIcon } from '../components/icons';
+import { DownloadIcon, PlusIcon, RedoIcon, SendIcon, UndoIcon } from '../components/icons';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import './editor.css';
 
@@ -528,7 +528,7 @@ export function MindMapEditor(props: Props) {
             setMenu({ x: bounds.left, y: bounds.bottom + 4 });
           }}
         >
-          Export <span aria-hidden="true">▾</span>
+          <DownloadIcon /> Export <span aria-hidden="true">▾</span>
         </button>
         <span class="mindmap-optional">
           <Show when={props.showOwnership && protectedIds().length}>
@@ -547,7 +547,7 @@ export function MindMapEditor(props: Props) {
               title={props.sendChanges?.blocker ?? 'Tell the agent what you changed by hand.'}
               onClick={() => void sendChanges()}
             >
-              Send changes
+              <SendIcon /> Send changes
             </button>
           </Show>
         </span>

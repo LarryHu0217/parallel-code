@@ -6,12 +6,22 @@ import {
   buildFailedChecksPrompt,
   buildReviewFeedbackPrompt,
   hasReviewFeedback,
+  buildIssuePrompt,
+  buildPrTaskPrompt,
+  buildIssueTriagePrompt,
+  workItemTaskName,
 } from '../lib/github-prompts';
 import { setStore, store } from './core';
 import { setPrefillPrompt, setTaskPromptDraftActive } from './tasks';
+import { toggleNewTaskPanel } from './navigation';
 import { setTaskFocusedPanel } from './focused-panel';
 import type {
   GitHubIssueDetails,
+  GitHubIssueSummary,
+  GitHubIssueQuery,
+  GitHubIssuePage,
+  GitHubIssueActivityPage,
+  GitHubIssueChange,
   GitHubWorkItem,
   PrFailedCheck,
   PrMergeMethod,
@@ -81,4 +91,70 @@ function stagePrompt(taskId: string, text: string): void {
   queueMicrotask(() => {
     if (store.tasks[taskId]) setTaskFocusedPanel(taskId, 'prompt');
   });
+}
+
+/** Browser state is separate from the task composer and survives task handoff. */
+export function openGitHubIssues(projectId: string | null): void {
+  setStore('githubIssuesProjectId', projectId);
+}
+
+/** The project's github.com repository (`owner/name`) as the GitHub CLI resolves it. */
+export function resolveGitHubRepository(projectRoot: string): Promise<string> {
+  return invoke<string>(IPC.ResolveGitHubRepository, { projectRoot });
+}
+
+export function browseGitHubIssues(
+  projectRoot: string,
+  query: GitHubIssueQuery,
+): Promise<GitHubIssuePage> {
+  return invoke(IPC.BrowseGitHubIssues, { projectRoot, ...query });
+}
+
+export function readGitHubIssue(url: string): Promise<GitHubIssueSummary> {
+  return invoke(IPC.ReadGitHubIssue, { url });
+}
+
+export function readGitHubIssueActivity(
+  url: string,
+  page: number,
+): Promise<GitHubIssueActivityPage> {
+  return invoke(IPC.ReadGitHubIssueActivity, { url, page });
+}
+
+export function updateGitHubIssue(
+  url: string,
+  change: GitHubIssueChange,
+): Promise<GitHubIssueSummary> {
+  return invoke(IPC.UpdateGitHubIssue, { url, ...change });
+}
+
+/** Never replace an already open composer or its unsent draft. */
+export function startGitHubIssueTask(projectId: string, issue: GitHubIssueSummary): boolean {
+  if (store.showNewTaskPanel) return false;
+  setStore('newTaskPrefillPrompt', {
+    projectId,
+    name: workItemTaskName(issue),
+    prompt: issue.kind === 'pr' ? buildPrTaskPrompt(issue) : buildIssuePrompt(issue),
+    githubPr: issue.kind === 'pr' ? { ...issue, kind: 'pr' } : undefined,
+    githubUrl: issue.url,
+  });
+  openGitHubIssues(null);
+  toggleNewTaskPanel(true);
+  return true;
+}
+
+/** Most items one triage or agent-list batch may hold. */
+export const GITHUB_BATCH_LIMIT = 25;
+
+export function startGitHubTriageTask(projectId: string, issues: GitHubIssueSummary[]): boolean {
+  if (store.showNewTaskPanel || !issues.length || issues.length > GITHUB_BATCH_LIMIT) return false;
+  setStore('newTaskPrefillPrompt', {
+    projectId,
+    name: `Triage ${issues.length} GitHub items`,
+    prompt: buildIssueTriagePrompt(issues),
+    githubUrl: null,
+  });
+  openGitHubIssues(null);
+  toggleNewTaskPanel(true);
+  return true;
 }

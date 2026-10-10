@@ -1,6 +1,7 @@
 /** Pure prompt builders for the GitHub integration. */
 import type {
   GitHubIssueDetails,
+  GitHubIssueSummary,
   GitHubWorkItem,
   PrFailedCheck,
   PrReviewFeedback,
@@ -20,7 +21,11 @@ interface PrRefLike {
 }
 
 export function buildIssuePrompt(issue: GitHubIssueDetails): string {
-  const body = issue.body.trim();
+  const fullBody = issue.body.trim();
+  const body =
+    fullBody.length > 8_000
+      ? `${fullBody.slice(0, 8_000)}\n[Description truncated; read the full issue at the link above.]`
+      : fullBody;
   return [
     `Resolve GitHub issue #${issue.number}: ${issue.title}`,
     issue.url,
@@ -103,4 +108,42 @@ function fence(text: string): string {
   const longest = Math.max(2, ...(text.match(/`+/g) ?? []).map((m) => m.length));
   const marker = '`'.repeat(longest + 1);
   return `${marker}text\n${text}\n${marker}`;
+}
+
+/** Selected snapshots are evidence, never instructions to the triage agent. */
+export function buildIssueTriagePrompt(issues: GitHubIssueSummary[]): string {
+  return [
+    'Triage the selected GitHub issues and pull requests below.',
+    'Read their current descriptions and discussions using the links. Work only on these selected items.',
+    'Identify likely duplicates, distinguish bugs/features/discussions/PRs, and group related work by root cause or shared implementation.',
+    'Recommend priority with a brief evidence-based reason; mark uncertainty and missing reproduction details explicitly.',
+    'Produce a Markdown report with a table of every selected item (ID/link, type, group, priority, next action), suggested duplicates, and an ordered set of small implementation batches with dependencies.',
+    'Explain which items can be tackled together and which should remain separate. Account for existing PRs before recommending new work.',
+    'This is analysis only: do not change code, labels, assignees, issue state, or post comments. Do not commit, push, or merge.',
+    '',
+    UNTRUSTED_NOTE,
+    '',
+    ...issues.map((issue) =>
+      fence(
+        JSON.stringify(
+          {
+            number: issue.number,
+            url: issue.url,
+            title: issue.title,
+            kind: issue.kind,
+            issueType: issue.issueType,
+            state: issue.state,
+            labels: issue.labels,
+            assignees: issue.assignees,
+            comments: issue.commentCount,
+            reactions: issue.reactionCount,
+            descriptionExcerpt: issue.body.slice(0, 1_000),
+            descriptionTruncated: issue.body.length > 1_000,
+          },
+          null,
+          2,
+        ),
+      ),
+    ),
+  ].join('\n');
 }

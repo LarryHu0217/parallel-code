@@ -354,6 +354,35 @@ describe('Super Productivity sync', () => {
     expect(store.tasks.a.superProductivity?.syncedTitle).toBe('Renamed here');
   });
 
+  it('pushes a rename made while the linked task was still being created', async () => {
+    addTask('a');
+    let finishCreate: () => void = () => undefined;
+    const real = mockInvoke.getMockImplementation();
+    mockInvoke.mockImplementation(async (channel: string, args?: Record<string, unknown>) => {
+      if (channel === IPC.SuperProductivityCreateTask) {
+        await new Promise<void>((resolve) => {
+          finishCreate = resolve;
+        });
+      }
+      return real?.(channel, args);
+    });
+    await focus('a'); // create is in flight, with the old title
+    // A rename lands before the link exists, as a model-chosen task name can.
+    setStore('tasks', 'a', 'name', 'Renamed here');
+    onTaskRenamed('a');
+    finishCreate();
+    await settle();
+    expect(sp.tasks.get('sp-1')?.title).toBe('Task a');
+    // The next title refresh sees only Parallel Code's side changed and sends it.
+    await vi.advanceTimersByTimeAsync(TITLE_REFRESH_MIN_MS);
+    setWindowFocused(false);
+    await vi.advanceTimersByTimeAsync(0);
+    setWindowFocused(true);
+    await settle();
+    expect(sp.tasks.get('sp-1')?.title).toBe('Renamed here');
+    expect(store.tasks.a.name).toBe('Renamed here');
+  });
+
   it('completes the linked task only when an armed removal fires', async () => {
     addTask('a', {
       superProductivity: { taskId: 'sp-a', syncedTitle: 'Task a' },

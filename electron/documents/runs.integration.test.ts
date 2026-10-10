@@ -649,3 +649,50 @@ describe('document workspace lifecycle', () => {
     expect(history.map((h) => h.subject)).not.toContain('Reject proposals');
   });
 });
+
+describe('readDocumentSnapshot git state', () => {
+  function makeRepo(): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-docsnap-'));
+    git(dir, 'init', '-q', '-b', 'main');
+    fs.writeFileSync(path.join(dir, 'spec.md'), '# Spec\n');
+    fs.writeFileSync(path.join(dir, 'README.md'), '# Readme\n');
+    fs.mkdirSync(path.join(dir, '.parallel'));
+    fs.writeFileSync(path.join(dir, '.parallel', 'run.json'), '{}\n');
+    git(dir, 'add', '.');
+    git(dir, 'commit', '-q', '-m', 'initial');
+    return dir;
+  }
+
+  it('counts a tracked edit elsewhere as dirty', async () => {
+    const dir = makeRepo();
+    fs.appendFileSync(path.join(dir, 'README.md'), 'edit\n');
+    const snap = await readDocumentSnapshot(dir, 'spec.md');
+    expect(snap.dirty).toBe(true);
+    expect(snap.branch).toBe('main');
+    expect(snap.headSha).toBe(git(dir, 'rev-parse', 'HEAD').trim());
+  });
+
+  it('ignores untracked files and run records', async () => {
+    const dir = makeRepo();
+    fs.writeFileSync(path.join(dir, 'scratch.txt'), 'scratch\n');
+    fs.appendFileSync(path.join(dir, '.parallel', 'run.json'), 'changed\n');
+    const snap = await readDocumentSnapshot(dir, 'spec.md');
+    expect(snap.dirty).toBe(false);
+  });
+
+  it('reports detached HEAD without a branch', async () => {
+    const dir = makeRepo();
+    git(dir, 'checkout', '-q', '--detach');
+    const snap = await readDocumentSnapshot(dir, 'spec.md');
+    expect(snap.branch).toBeNull();
+    expect(snap.headSha).toBe(git(dir, 'rev-parse', 'HEAD').trim());
+  });
+
+  it('reports an unborn branch with no HEAD sha', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-docsnap-'));
+    git(dir, 'init', '-q', '-b', 'main');
+    fs.writeFileSync(path.join(dir, 'spec.md'), '# Spec\n');
+    const snap = await readDocumentSnapshot(dir, 'spec.md');
+    expect(snap).toMatchObject({ headSha: null, branch: 'main', dirty: false, missing: false });
+  });
+});

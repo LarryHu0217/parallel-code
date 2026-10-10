@@ -12,6 +12,7 @@ import { getPrChecks } from '../store/store';
 import { showNotification } from '../store/notification';
 import type { PrCheckBucket, PrMergeMethod, PullRequestDetails } from '../ipc/types';
 import type { Task } from '../store/types';
+import { CommentIcon, GitHubIcon, GitMergeIcon, ToolsIcon } from './icons';
 
 interface PullRequestDialogProps {
   open: boolean;
@@ -240,30 +241,33 @@ export function PullRequestDialog(props: PullRequestDialogProps) {
         <div style={{ display: 'flex', gap: '8px', 'flex-wrap': 'wrap' }}>
           <button
             type="button"
-            class="btn-secondary"
+            class="btn-secondary btn-with-icon"
             onClick={() => window.open(props.prUrl, '_blank')}
             style={dialogButtonStyle(false)}
           >
+            <GitHubIcon size={14} />
             Open on GitHub
           </button>
           <button
             type="button"
-            class="btn-secondary"
+            class="btn-secondary btn-with-icon"
             disabled={!!busy() || !details()}
             title="Collect failed checks and their log tails into a prompt for the agent"
             onClick={() => void stage('fix-ci')}
             style={dialogButtonStyle(false, !!busy() || !details())}
           >
+            <ToolsIcon size={14} />
             {busy() === 'fix-ci' ? 'Collecting…' : 'Fix CI'}
           </button>
           <button
             type="button"
-            class="btn-secondary"
+            class="btn-secondary btn-with-icon"
             disabled={!!busy() || !details()}
             title="Collect unresolved review comments into a prompt for the agent"
             onClick={() => void stage('review')}
             style={dialogButtonStyle(false, !!busy() || !details())}
           >
+            <CommentIcon size={14} />
             {busy() === 'review' ? 'Collecting…' : 'Address review'}
           </button>
         </div>
@@ -300,11 +304,12 @@ export function PullRequestDialog(props: PullRequestDialogProps) {
                     </select>
                     <button
                       type="button"
-                      class="btn-primary"
+                      class="btn-primary btn-with-icon"
                       disabled={!!busy()}
                       onClick={() => setConfirmingMerge(true)}
                       style={dialogButtonStyle(true, !!busy())}
                     >
+                      <GitMergeIcon size={14} />
                       {busy() === 'merge' ? 'Merging…' : 'Merge on GitHub…'}
                     </button>
                   </div>
@@ -334,10 +339,11 @@ export function PullRequestDialog(props: PullRequestDialogProps) {
                   </button>
                   <button
                     type="button"
-                    class="btn-primary"
+                    class="btn-primary btn-with-icon"
                     onClick={() => void merge()}
                     style={dialogButtonStyle(true)}
                   >
+                    <GitMergeIcon size={14} />
                     Confirm merge
                   </button>
                 </div>

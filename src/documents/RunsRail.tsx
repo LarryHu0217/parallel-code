@@ -11,6 +11,7 @@ import { openCandidateOutput } from './workspace-ui';
 import { RejectRunButton } from './RejectRunConfirm';
 import { formatRelativeAge } from '../lib/relativeAge';
 import type { DocumentCandidateRecord, DocumentRunRecord } from './types';
+import { DiffIcon, EyeIcon } from '../components/icons';
 
 /** Where a run's starting content came from, when not the canonical document. */
 function lineageLabel(run: DocumentRunRecord): string | null {
@@ -104,6 +105,7 @@ function CandidateRow(props: {
           aria-label={`View output for proposal ${props.candidate.label}`}
           onClick={output}
         >
+          <EyeIcon size={12} />
           View output
         </button>
       </Show>
@@ -184,6 +186,7 @@ export function RunsRail() {
                     class="docws-btn docws-btn-sm docws-btn-primary"
                     onClick={() => openDocumentCompare(run.id)}
                   >
+                    <DiffIcon size={12} />
                     {proposals() > 1 ? `Compare ${proposals()}` : 'Review'}
                   </button>
                 </Show>

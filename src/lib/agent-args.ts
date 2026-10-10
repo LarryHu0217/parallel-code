@@ -2,7 +2,7 @@ import type { AgentDef } from '../ipc/types';
 import type { Task } from '../store/types';
 import { resolveSkipPermissionsArgs } from '../../electron/shared/skip-permissions';
 import { newSessionArgs, resumeSessionArgs } from '../../electron/shared/session-resume';
-import { isDocumentAgentTaskId } from '../documents/task-id';
+import { isHiddenAgentTaskId } from '../documents/task-id';
 
 function isCodexCommand(command: string): boolean {
   return command.split('/').pop()?.includes('codex') === true;
@@ -137,8 +137,8 @@ function positionalAgentArgs(
   ) {
     args = ['--resume'];
   }
-  if (resumed && isDocumentAgentTaskId(task.id ?? null)) {
-    // Document terminals share a checkout. "Latest" may belong to another
+  if (resumed && isHiddenAgentTaskId(task.id ?? null)) {
+    // Hidden agents share the project checkout. "Latest" may belong to another
     // terminal: use a picker, without rewriting explicit IDs or custom flags.
     const command = agentDef.command.split('/').pop();
     const resume = args.join(' ');

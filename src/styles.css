@@ -574,6 +574,147 @@ body:has(
   outline-offset: -2px;
 }
 
+/* Parallel Code website palette: parallelcode.app. */
+html[data-look='parallel-code'] {
+  color-scheme: dark;
+  --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-display: 'Sora', var(--font-ui);
+  --bg: #080c10;
+  --bg-elevated: #10161c;
+  --bg-input: #0c1218;
+  --bg-hover: #151e26;
+  --bg-selected: #18343e;
+  --bg-selected-subtle: #11232c;
+  --border: #29343d;
+  --border-subtle: #1e272f;
+  --border-focus: #67d9ed;
+  --fg: #f0f4f7;
+  --fg-muted: #9aa9b6;
+  --fg-subtle: #8193a2;
+  --accent: #67d9ed;
+  --accent-hover: #91e5f3;
+  --accent-text: #080c10;
+  --link: #67d9ed;
+  --success: #98c9ae;
+  --error: #f08f8a;
+  --warning: #dfba83;
+  --review: #c1b0e8;
+  --info: #8fbddd;
+  --diff-add-bg: rgba(152, 201, 174, 0.12);
+  --diff-remove-bg: rgba(240, 143, 138, 0.12);
+  --search-match: #dfba83;
+  --search-match-active: #efa66f;
+  --island-bg: #10161c;
+  --island-border: #29343d;
+  --island-radius: 12px;
+  --task-container-bg: #0c1218;
+  --task-panel-bg: #10161c;
+  --shadow-soft: 0 4px 16px rgba(0, 0, 0, 0.16);
+  --shadow-pop: 0 16px 40px rgba(0, 0, 0, 0.3);
+}
+
+.app-shell[data-look='parallel-code']::before {
+  background: radial-gradient(ellipse at 50% 0%, #16485b33, transparent 60%);
+}
+
+/* Compact UI text, geometric headings, and relaxed prose form three clear levels. */
+html[data-look='parallel-code']
+  :is(.icon-btn, .btn-primary, .btn-secondary, .btn-danger, .input-field, .project-select) {
+  font-family: var(--font-ui);
+}
+
+html[data-look='parallel-code'] :is(.editable-text, .settings-theme-title) {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: -0.025em;
+}
+
+html[data-look='parallel-code'] .task-item-name {
+  letter-spacing: -0.015em;
+}
+
+html[data-look='parallel-code'] .task-item :is(.task-agent-status, .task-current-state-sidebar) {
+  font-family: var(--font-ui);
+  font-variant-numeric: tabular-nums;
+  opacity: 1;
+}
+
+html[data-look='parallel-code'] :is(.prompt-textarea, .task-notes-body textarea) {
+  font-family: var(--font-ui) !important;
+  line-height: 1.6;
+}
+
+html[data-look='parallel-code'] :is(.prompt-textarea, .task-notes-body textarea)::placeholder {
+  color: var(--fg-subtle);
+  opacity: 1;
+}
+
+html[data-look='parallel-code'] :is(.info-bar, .changed-files-list-panel) {
+  font-family: var(--font-ui) !important;
+}
+
+html[data-look='parallel-code'] :is(.info-bar, .changed-files-list-panel, .sidebar-footer) {
+  font-variant-numeric: tabular-nums;
+}
+
+html[data-look='parallel-code'] .settings-theme-desc {
+  line-height: 1.6;
+}
+
+/* Let task names and the focused workspace lead, with quieter utility controls. */
+html[data-look='parallel-code'] .icon-btn:not(.sidebar-create-btn):not(:hover):not(:focus-visible) {
+  border-color: transparent !important;
+}
+
+html[data-look='parallel-code'] .sidebar-create-btn {
+  background: var(--bg-selected-subtle) !important;
+  color: var(--accent) !important;
+  border-color: color-mix(in srgb, var(--accent) 24%, var(--border)) !important;
+}
+
+html[data-look='parallel-code'] .sidebar-create-btn:hover {
+  background: var(--bg-selected) !important;
+  border-color: var(--accent) !important;
+}
+
+html[data-look='parallel-code'] .task-title-actions {
+  background: transparent;
+}
+
+html[data-look='parallel-code']
+  :is(.task-action-group + .task-action-group, .task-branch-info-bar) {
+  border-color: var(--border-subtle);
+}
+
+html[data-look='parallel-code'] .task-column.active {
+  box-shadow: none;
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border)) !important;
+}
+
+html[data-look='parallel-code'] .task-notes-body textarea {
+  padding: 12px 14px !important;
+}
+
+html[data-look='parallel-code'] :is(.prompt-textarea, .input-field, .project-select):focus {
+  border-color: var(--border-focus) !important;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 12%, transparent) !important;
+}
+
+html[data-look='parallel-code'] .settings-theme-card.active {
+  background: var(--bg-selected-subtle);
+  box-shadow: none;
+}
+
+/* Color changes are enough feedback for compact controls; avoid lifting or glowing. */
+html[data-look='parallel-code'] :is(.btn-primary, .btn-danger):hover:not(:disabled) {
+  box-shadow: none;
+}
+
+html[data-look='parallel-code'] :is(.btn-primary, .btn-danger):active:not(:disabled),
+html[data-look='parallel-code'] .prompt-send-btn:hover:not(:disabled) {
+  transform: none;
+}
+
 /* Noir: a quiet frame, softly rounded workspaces, and a single focus accent.
    Keep geometry stable when controls appear so parallel tasks never shift. */
 html[data-look='noir'] {
@@ -2280,6 +2421,17 @@ textarea::placeholder {
   overflow: hidden;
 }
 
+/* Hosts the tiling strip beside the sidebar. Must stay in this eager stylesheet:
+   without min-width: 0 the strip grows to its full content width and <main>
+   scrolls instead of the strip. */
+.task-workspace {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
 .tiling-layout-shell {
   position: relative;
   flex: 1;
@@ -2398,6 +2550,14 @@ html:is(
 
 .tiling-layout-scroll-affordance-attention.tiling-layout-scroll-affordance-right::after {
   border-right-color: color-mix(in srgb, var(--warning) 82%, white 18%);
+}
+
+/* Leading-icon buttons: centres the glyph against the label whatever the button's width. */
+.btn-with-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
 }
 
 .btn-primary {
@@ -3074,6 +3234,11 @@ html:is(
 .resize-handle:hover,
 .resize-handle.dragging {
   background: color-mix(in srgb, var(--accent) 70%, transparent);
+}
+
+.resize-handle:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: -2px;
 }
 
 .resize-handle-h {

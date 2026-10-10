@@ -29,8 +29,21 @@ export function formatFetchedAt(fetchedAt: number, now = Date.now()): string {
   return `${date.toLocaleDateString(undefined, { weekday: 'short' })} ${time}`;
 }
 
+export function formatCurrency(amount: number, currency = 'USD'): string {
+  try {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency,
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(amount);
+  } catch {
+    return `$${amount.toFixed(2)}`;
+  }
+}
+
 export function hasUsageSnapshot(state: UsageState): boolean {
-  return state.fiveHour !== null || state.sevenDay !== null;
+  return state.fiveHour !== null || state.sevenDay !== null || Boolean(state.creditUsage);
 }
 
 /** A provider shows once it has a snapshot, and stays up through refresh errors

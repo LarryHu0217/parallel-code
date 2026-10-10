@@ -6,9 +6,12 @@ import { getToken, getPairedToken } from './auth';
 
 export class ApiError extends Error {
   status: number;
-  constructor(message: string, status: number) {
+  /** Parsed JSON error body, kept for routes that answer with more than a message. */
+  body: unknown;
+  constructor(message: string, status: number, body?: unknown) {
     super(message);
     this.status = status;
+    this.body = body;
   }
 }
 
@@ -26,13 +29,15 @@ async function request<T>(
   });
   if (!res.ok) {
     let msg = `Request failed (${res.status})`;
+    let body: unknown;
     try {
-      const j = (await res.json()) as { error?: string };
-      if (j?.error) msg = j.error;
+      body = await res.json();
+      const error = (body as { error?: unknown } | null)?.error;
+      if (typeof error === 'string' && error) msg = error;
     } catch {
       /* non-JSON error body */
     }
-    throw new ApiError(msg, res.status);
+    throw new ApiError(msg, res.status, body);
   }
   return res.json() as Promise<T>;
 }
@@ -86,6 +91,94 @@ export async function fetchNotes(taskId: string): Promise<string> {
     token,
   });
   return r.notes;
+}
+
+export interface TaskDiff {
+  diff: string;
+  /** True when the diff was cut short for the phone. */
+  truncated: boolean;
+  /** True when the task has no branch of its own, so there is nothing to review. */
+  unsupported?: boolean;
+}
+
+/** Fetch a task's diff for review. Works with the base connection token. */
+export function fetchTaskDiff(taskId: string): Promise<TaskDiff> {
+  const token = getToken();
+  if (!token) throw new ApiError('Not connected', 401);
+  return request<TaskDiff>(`/api/mobile/tasks/${encodeURIComponent(taskId)}/diff`, { token });
+}
+
+export interface ReadinessCheck {
+  label: string;
+  status: 'pass' | 'warning' | 'blocked' | 'checking' | 'neutral';
+  detail: string;
+}
+
+export interface MergeReadiness {
+  readiness: {
+    overall: 'ready' | 'attention' | 'blocked' | 'checking';
+    checks: ReadinessCheck[];
+  };
+  canMerge: boolean;
+  baseBranch: string;
+  branchName: string;
+  /** Whether closing also deletes the branch; absent from older desktops. */
+  deleteBranchOnClose?: boolean;
+}
+
+/** Fetch read-only merge readiness. Works with the base connection token. */
+export function fetchMergeReadiness(taskId: string): Promise<MergeReadiness> {
+  const token = getToken();
+  if (!token) throw new ApiError('Not connected', 401);
+  return request<MergeReadiness>(`/api/mobile/tasks/${encodeURIComponent(taskId)}/readiness`, {
+    token,
+  });
+}
+
+/** Merge a task. Requires a paired token: this runs real git. */
+export function mergeTask(
+  taskId: string,
+  opts: { squash: boolean; cleanup: boolean },
+): Promise<void> {
+  const token = getPairedToken();
+  if (!token) throw new ApiError('Not paired', 401);
+  return request<{ ok: boolean }>(`/api/mobile/tasks/${encodeURIComponent(taskId)}/merge`, {
+    method: 'POST',
+    body: opts,
+    token,
+  }).then(() => {});
+}
+
+/**
+ * Close a task. Requires a paired token: this removes its worktree.
+ *
+ * The desktop refuses when closing would lose work and answers 409 with
+ * warnings, so the caller must decide whether to retry with `force`.
+ * Returns those warnings; an empty array means the task was closed.
+ */
+export async function closeTask(taskId: string, force = false): Promise<{ warnings: string[] }> {
+  const token = getPairedToken();
+  if (!token) throw new ApiError('Not paired', 401);
+  try {
+    await request<{ ok: boolean }>(`/api/mobile/tasks/${encodeURIComponent(taskId)}/close`, {
+      method: 'POST',
+      body: { force },
+      token,
+    });
+    return { warnings: [] };
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 409) return { warnings: closeWarnings(err) };
+    throw err;
+  }
+}
+
+/** The desktop's own list of what closing would lose; the message alone names none of it. */
+function closeWarnings(err: ApiError): string[] {
+  const warnings = (err.body as { warnings?: unknown } | null | undefined)?.warnings;
+  const listed = Array.isArray(warnings)
+    ? warnings.filter((w): w is string => typeof w === 'string' && w.length > 0)
+    : [];
+  return listed.length > 0 ? listed : [err.message];
 }
 
 /** Save the notes for a task. Requires a paired token (it is a write). */

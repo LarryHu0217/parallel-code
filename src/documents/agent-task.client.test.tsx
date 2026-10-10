@@ -7,7 +7,7 @@ import type { AgentDef } from '../ipc/types';
 import type { Project, Task } from '../store/types';
 import {
   activateDocumentAgentTask,
-  disposeDocumentAgentTask,
+  disposeHiddenAgentTasks,
   documentAgentTaskId,
   ensureDocumentAgentTask,
   rearmDocumentAgents,
@@ -257,13 +257,13 @@ describe('active task hand-over', () => {
   });
 });
 
-describe('disposeDocumentAgentTask', () => {
+describe('disposeHiddenAgentTasks', () => {
   it('kills the sessions, forgets the task and gives up the active slot', async () => {
     install('codex');
     activateDocumentAgentTask(project);
     const id = documentAgentTaskId('docs');
 
-    await disposeDocumentAgentTask('docs');
+    await disposeHiddenAgentTasks('docs');
 
     expect(invoke).toHaveBeenCalledWith(IPC.KillAgent, { agentId: id });
     expect(store.tasks[id]).toBeUndefined();
@@ -272,7 +272,7 @@ describe('disposeDocumentAgentTask', () => {
   });
 
   it('does nothing for a project that never had one', async () => {
-    await disposeDocumentAgentTask('docs');
+    await disposeHiddenAgentTasks('docs');
     expect(invoke).not.toHaveBeenCalledWith(IPC.KillAgent, expect.anything());
   });
 });

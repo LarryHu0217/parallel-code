@@ -3,6 +3,7 @@ import type { EvidencePackage } from '../../electron/shared/evidence';
 import { compileEvidenceQuestion, type EvidenceQuestion } from '../lib/evidence-plan';
 import { sendEvidenceToAgent, store } from '../store/store';
 import { theme } from '../lib/theme';
+import { CommentIcon, SendIcon } from './icons';
 
 /** Preview the exact item being sent; delivery never resolves the finding. */
 export function EvidenceQuestionButton(props: {
@@ -39,11 +40,12 @@ export function EvidenceQuestionButton(props: {
         <Show when={available()}>
           <button
             type="button"
-            class="btn-secondary"
+            class="btn-secondary btn-with-icon"
             style={props.buttonStyle}
             onClick={() => setPreview(!preview())}
             aria-expanded={preview()}
           >
+            <CommentIcon size={12} />
             Ask agent about this
           </button>
           <Show when={preview()}>
@@ -61,11 +63,12 @@ export function EvidenceQuestionButton(props: {
               </pre>
               <button
                 type="button"
-                class="btn-secondary"
+                class="btn-secondary btn-with-icon"
                 style={props.buttonStyle}
                 disabled={sending()}
                 onClick={() => void send()}
               >
+                <SendIcon size={12} />
                 {sending() ? 'Sending…' : 'Send to agent'}
               </button>{' '}
               <button

@@ -38,6 +38,7 @@ describe('describeGhError', () => {
 describe('parsePrRef', () => {
   it('parses a canonical PR URL', () => {
     expect(parsePrRef('https://github.com/o/r.js/pull/12')).toEqual({
+      host: 'github.com',
       owner: 'o',
       repo: 'r.js',
       number: 12,
@@ -45,9 +46,18 @@ describe('parsePrRef', () => {
     expect(parsePrRef('https://github.com/o/r/pull/12/files')?.number).toBe(12);
   });
 
+  it('preserves arbitrary enterprise hosts', () => {
+    expect(parsePrRef('https://code.acme.test/o/r/pull/42')).toEqual({
+      host: 'code.acme.test',
+      owner: 'o',
+      repo: 'r',
+      number: 42,
+    });
+  });
+
   it.each([
     'http://github.com/o/r/pull/1',
-    'https://gitlab.com/o/r/pull/1',
+    'https://gitlab.com/o/r/-/merge_requests/1',
     'https://user:pw@github.com/o/r/pull/1',
     'https://github.com/o/r/issues/1',
     'https://github.com/o/r/pull/abc',

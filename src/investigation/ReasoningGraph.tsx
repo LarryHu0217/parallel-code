@@ -12,6 +12,7 @@ import {
 } from 'solid-js';
 import {
   CommentIcon,
+  DownloadIcon,
   InfoIcon,
   MentionIcon,
   PencilIcon,
@@ -1002,7 +1003,7 @@ export function ReasoningGraph(props: Props) {
             aria-expanded={toolbarMenu()?.kind === 'export'}
             onClick={(event) => openToolbarMenu('export', event.currentTarget)}
           >
-            Export <span aria-hidden="true">▾</span>
+            <DownloadIcon /> Export <span aria-hidden="true">▾</span>
           </button>
           <span class="reasoning-graph-extra">{props.actions}</span>
         </fieldset>

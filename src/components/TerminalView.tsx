@@ -55,6 +55,7 @@ import { computeWrappedPathLinks, createTerminalHttpLinkHandler } from '../lib/t
 import { recordSharedWebglContextLoss, WEBGL_REATTACH_DELAY_MS } from '../lib/webglContextLoss';
 import { isTerminalPaneOnScreen, WEBGL_DETACH_DELAY_MS } from '../lib/terminalPaneVisibility';
 import type { PtyOutput } from '../ipc/types';
+import { SyncIcon } from './icons';
 
 let windowUnloading = false;
 if (typeof window !== 'undefined') {
@@ -1385,6 +1386,7 @@ export function TerminalView(props: TerminalViewProps) {
             MCP startup failed: {mcpError() ?? 'unknown error'}
           </span>
           <button
+            class="btn-with-icon"
             style={{
               padding: '6px 16px',
               background: 'var(--accent)',
@@ -1396,6 +1398,7 @@ export function TerminalView(props: TerminalViewProps) {
             }}
             onClick={() => retryTaskMcpStartup(props.taskId)}
           >
+            <SyncIcon size={14} />
             Retry
           </button>
         </div>

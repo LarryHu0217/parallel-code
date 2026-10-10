@@ -3,7 +3,7 @@ import { useReview, type ReviewContextValue } from './ReviewProvider';
 import { ReviewSidebar } from './ReviewSidebar';
 import { theme } from '../lib/theme';
 import { sf } from '../lib/fontScale';
-import { CloseIcon } from './icons';
+import { CloseIcon, CommentIcon, SyncIcon } from './icons';
 
 interface ReviewSidebarState {
   reviewCount: number;
@@ -38,6 +38,7 @@ export function ReviewCommentsButton() {
   return (
     <Show when={hasReviewSidebarState(state())}>
       <button
+        class="btn-with-icon"
         onClick={() => review.setSidebarOpen(!review.sidebarOpen())}
         style={{
           background: review.sidebarOpen() ? theme.warning : 'transparent',
@@ -49,6 +50,7 @@ export function ReviewCommentsButton() {
           cursor: 'pointer',
         }}
       >
+        <CommentIcon size={12} />
         Review ({state().reviewCount})
       </button>
     </Show>
@@ -60,6 +62,7 @@ export function ReviewFindingsRefreshButton() {
   const review = useReview();
   return (
     <button
+      class="btn-with-icon"
       type="button"
       onClick={review.refreshFindings}
       disabled={review.findingsLoading()}
@@ -76,6 +79,7 @@ export function ReviewFindingsRefreshButton() {
         opacity: review.findingsLoading() ? '0.6' : '1',
       }}
     >
+      <SyncIcon size={12} />
       Refresh findings
     </button>
   );
