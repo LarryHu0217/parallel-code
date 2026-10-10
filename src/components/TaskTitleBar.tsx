@@ -143,7 +143,11 @@ export function TaskTitleBar(props: TaskTitleBarProps) {
   };
 
   const statusDescription = () =>
-    getDotTooltip(getTaskDotStatus(props.task.id), getTaskAttentionState(props.task.id));
+    getDotTooltip(
+      getTaskDotStatus(props.task.id),
+      getTaskAttentionState(props.task.id),
+      props.task.id,
+    );
 
   function handleTitleMouseDown(e: MouseEvent) {
     handleDragReorder(e, {

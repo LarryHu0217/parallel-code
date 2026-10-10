@@ -1,9 +1,16 @@
 import { renderToString } from 'solid-js/web';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
+import { removePrChecks, setPrChecks } from '../store/pr-checks-state';
 import { StatusDot, getDotTooltip } from './StatusDot';
 
+function prChecks(overall: 'pending' | 'success' | 'failure' | 'none') {
+  return { overall, passing: 0, pending: 0, failing: 0, checks: [], checkedAt: '' };
+}
+
 describe('getDotTooltip', () => {
+  afterEach(() => removePrChecks('t1'));
+
   it('describes review status', () => {
     expect(getDotTooltip('review')).toBe('Ready for review');
   });
@@ -20,6 +27,15 @@ describe('getDotTooltip', () => {
   // attention 'review' — the purple dot must not read "Busy".
   it('describes review attention over a busy dot status', () => {
     expect(getDotTooltip('busy', 'review')).toBe('Ready for review');
+  });
+
+  // `ready` only means no known failure, so pending CI must not claim mergeability.
+  it('names the ready state after the PR checks', () => {
+    expect(getDotTooltip('ready', 'ready', 't1')).toBe('Ready');
+    setPrChecks('t1', prChecks('pending'));
+    expect(getDotTooltip('ready', 'ready', 't1')).toBe('CI running');
+    setPrChecks('t1', prChecks('success'));
+    expect(getDotTooltip('ready', 'ready', 't1')).toBe('Ready to merge');
   });
 });
 

@@ -12,7 +12,7 @@ import {
 } from '../store/canvas-tasks';
 import { toggleNewTaskPanel, setActiveTask } from '../store/navigation';
 import { uncollapseTask } from '../store/tasks';
-import { getTaskAttentionState } from '../store/taskStatus';
+import { getReadyLabel, getTaskAttentionState } from '../store/taskStatus';
 import { getTaskFocusedPanel, setTaskFocusedPanel } from '../store/focused-panel';
 import { showNotification } from '../store/notification';
 
@@ -22,7 +22,6 @@ const attentionLabels = {
   needs_input: 'Needs input',
   error: 'Error',
   review: 'Review',
-  ready: 'Ready to merge',
   idle: 'Idle',
 };
 
@@ -44,6 +43,7 @@ export function createCanvasTaskControls(context: Accessor<Omit<CanvasTaskSource
     if (task.closingStatus) return 'Closing';
     if (task.collapsed) return 'Collapsed';
     const attention = getTaskAttentionState(task.id);
+    if (attention === 'ready') return getReadyLabel(task.id);
     if (attention !== 'idle') return attentionLabels[attention];
     if (task.agentIds.length && task.agentIds.every((id) => store.agents[id]?.status === 'exited'))
       return 'Stopped';

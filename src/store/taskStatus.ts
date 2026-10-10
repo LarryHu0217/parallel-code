@@ -1024,6 +1024,15 @@ function isTaskReady(taskId: string): boolean {
   );
 }
 
+/** `ready` only knows nothing failed, so name what the PR checks actually say:
+ *  pending CI is not ready to merge, and without a PR there is nothing to vouch for. */
+export function getReadyLabel(taskId: string): string {
+  const overall = getPrChecks(taskId)?.overall;
+  if (overall === 'success') return 'Ready to merge';
+  if (overall === 'pending') return 'CI running';
+  return 'Ready';
+}
+
 function hasTaskAgentError(taskId: string): boolean {
   const task = store.tasks[taskId];
   if (!task) return false;

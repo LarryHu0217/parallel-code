@@ -245,7 +245,7 @@ export function SubTaskStrip(props: SubTaskStripProps) {
                           }
                           activateTaskFromPointer(task.id);
                         }}
-                        title={`${task.collapsed ? 'Resume and open: ' : ''}${task.name} — ${tone()?.label ?? getDotTooltip(getTaskDotStatus(task.id), getTaskAttentionState(task.id))}`}
+                        title={`${task.collapsed ? 'Resume and open: ' : ''}${task.name} — ${tone()?.label ?? getDotTooltip(getTaskDotStatus(task.id), getTaskAttentionState(task.id), task.id)}`}
                         data-urgent={tone()?.urgent ? '' : undefined}
                         style={{ '--tone': tone()?.color, 'font-size': sf(11) }}
                       >
@@ -278,6 +278,7 @@ export function SubTaskStrip(props: SubTaskStripProps) {
                             getDotTooltip(
                               getTaskDotStatus(task.id),
                               getTaskAttentionState(task.id),
+                              task.id,
                             ).split(' — ')[0]}
                         </span>
                       </button>

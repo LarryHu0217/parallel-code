@@ -1128,6 +1128,7 @@ function CoordinatorFolder(props: TaskEntryProps) {
             title={`${t().name} — ${getDotTooltip(
               getTaskDotStatus(props.taskId),
               getTaskAttentionState(props.taskId),
+              props.taskId,
             )}`}
             onClick={() => {
               setActiveTask(props.taskId);
@@ -1352,6 +1353,7 @@ function TaskRow(props: TaskRowProps) {
             title={`${t().name} — ${getDotTooltip(
               getTaskDotStatus(props.taskId),
               getTaskAttentionState(props.taskId),
+              props.taskId,
             )}`}
             onClick={() => {
               setActiveTask(props.taskId);
