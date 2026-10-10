@@ -47,7 +47,7 @@ export function getPullRequestDetails(prUrl: string): Promise<PullRequestDetails
 /** Resolves true when GitHub confirms the merge; false when it is still pending. */
 export async function mergePullRequestForTask(
   taskId: string,
-  merge: { prUrl: string; method: PrMergeMethod; headSha: string },
+  merge: { prUrl: string; method: PrMergeMethod; headSha: string; admin?: boolean },
 ): Promise<boolean> {
   const merged = await invoke<boolean>(IPC.MergePullRequest, merge);
   // Re-poll soon so the watcher sees the merge and drops the PR status.

@@ -110,8 +110,10 @@ export function FinishDialog(props: FinishDialogProps) {
     if (pr.mode() === 'merged') return 'Close task';
     if (merge.merging() || prMerging()) return 'Merging...';
     const method = pr.method();
-    if (pr.mode() === 'pr')
-      return `${method ? PR_MERGE_ACTIONS[method] : 'Merge'} PR #${pr.number()}`;
+    if (pr.mode() === 'pr') {
+      const action = `${method ? PR_MERGE_ACTIONS[method] : 'Merge'} PR #${pr.number()}`;
+      return pr.bypassing() ? `${action} as admin` : action;
+    }
     // The target lives on the button, so the dialog needs no sentence restating it.
     return `${merge.squash() ? 'Squash merge' : 'Merge'} into ${merge.baseBranchName()}`;
   };

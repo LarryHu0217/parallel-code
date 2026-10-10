@@ -52,11 +52,10 @@ beforeEach(() => {
 describe('mergePullRequest', () => {
   it('merges with the chosen method and never deletes the branch', async () => {
     const calls = stubGh(() => '');
-    await mergePullRequest(
-      'https://github.com/o/r/pull/7',
-      'squash',
-      'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-    );
+    await mergePullRequest('https://github.com/o/r/pull/7', {
+      method: 'squash',
+      headSha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    });
     expect(calls[0]).toEqual([
       'pr',
       'merge',
@@ -67,14 +66,24 @@ describe('mergePullRequest', () => {
     ]);
   });
 
+  it('bypasses branch protection only when asked', async () => {
+    const calls = stubGh(() => '');
+    const url = 'https://github.com/o/r/pull/7';
+    await mergePullRequest(url, { method: 'merge', headSha: 'a'.repeat(40), admin: true });
+    expect(calls[0]).toContain('--admin');
+    await mergePullRequest(url, { method: 'merge', headSha: 'a'.repeat(40) });
+    // calls: merge, view, merge, view
+    expect(calls[2]).not.toContain('--admin');
+  });
+
   it('reports merged only when GitHub says the PR is merged', async () => {
     const sha = 'a'.repeat(40);
     const url = 'https://github.com/o/r/pull/7';
     stubGh((args) => (args[1] === 'view' ? '{"state":"MERGED"}' : ''));
-    await expect(mergePullRequest(url, 'merge', sha)).resolves.toBe(true);
+    await expect(mergePullRequest(url, { method: 'merge', headSha: sha })).resolves.toBe(true);
     // Merge queues accept the request but leave the PR open.
     stubGh((args) => (args[1] === 'view' ? '{"state":"OPEN"}' : ''));
-    await expect(mergePullRequest(url, 'merge', sha)).resolves.toBe(false);
+    await expect(mergePullRequest(url, { method: 'merge', headSha: sha })).resolves.toBe(false);
   });
 
   it('does not fail the merge when only the follow-up state check fails', async () => {
@@ -83,18 +92,20 @@ describe('mergePullRequest', () => {
       return '';
     });
     await expect(
-      mergePullRequest('https://github.com/o/r/pull/7', 'merge', 'a'.repeat(40)),
+      mergePullRequest('https://github.com/o/r/pull/7', {
+        method: 'merge',
+        headSha: 'a'.repeat(40),
+      }),
     ).resolves.toBe(false);
   });
 
   it('rejects non-PR URLs before calling gh', async () => {
     const calls = stubGh(() => '');
     await expect(
-      mergePullRequest(
-        'https://github.com/o/r/issues/7',
-        'merge',
-        'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-      ),
+      mergePullRequest('https://github.com/o/r/issues/7', {
+        method: 'merge',
+        headSha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      }),
     ).rejects.toThrow();
     expect(calls).toHaveLength(0);
   });

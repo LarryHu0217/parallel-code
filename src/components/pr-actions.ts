@@ -35,15 +35,21 @@ export function taskPrUrl(task: Task): string | undefined {
   });
 }
 
-/** Why merging is not offered, or null when GitHub may accept it. */
-export function prMergeBlocker(pr: PullRequestDetails): string | null {
+/** GitHub withholds the merge until required reviews or checks pass; admins may bypass it. */
+export const prIsBlocked = (pr: PullRequestDetails): boolean => pr.mergeStateStatus === 'BLOCKED';
+
+/**
+ * Why merging is not offered, or null when GitHub may accept it. With
+ * `bypass`, branch protection is left for GitHub to waive (`--admin`).
+ */
+export function prMergeBlocker(pr: PullRequestDetails, bypass = false): string | null {
   if (pr.state === 'MERGED') return 'Already merged.';
   if (pr.state === 'CLOSED') return 'The pull request is closed.';
   if (pr.isDraft) return 'Draft pull requests cannot be merged. Mark it ready on GitHub first.';
   if (pr.mergeable === 'CONFLICTING') return 'The branch has conflicts with its base branch.';
   if (pr.mergeStateStatus === 'BEHIND')
     return 'The branch must be updated with its base branch first.';
-  if (pr.mergeStateStatus === 'BLOCKED') {
+  if (prIsBlocked(pr) && !bypass) {
     return 'GitHub blocks merging until required reviews or checks pass.';
   }
   if (pr.mergeMethods.length === 0) return 'The repository allows no merge method you can use.';
@@ -107,7 +113,7 @@ export function createPrActions(props: PrActionsProps) {
     return false;
   }
 
-  async function merge(): Promise<PrMergeOutcome> {
+  async function merge(admin = false): Promise<PrMergeOutcome> {
     const chosen = chosenMethod();
     const current = pr();
     if (!chosen || !current || !props.prUrl) return 'failed';
@@ -117,6 +123,7 @@ export function createPrActions(props: PrActionsProps) {
         prUrl: props.prUrl,
         method: chosen,
         headSha: current.headRefOid,
+        ...(admin ? { admin } : {}),
       });
       return merged ? 'merged' : 'queued';
     } catch (err) {
@@ -158,11 +165,22 @@ export function createFinishPr(props: FinishPrProps) {
   // GitHub confirmed the merge; a refetch that fails or lags must not reopen
   // the local merge path for an already merged branch.
   const [mergedHere, setMergedHere] = createSignal(false);
+  // Opt-in per opening, so a bypass is never carried over unseen.
+  const [bypassProtection, setBypassProtection] = createSignal(false);
   createEffect(() => {
     if (!props.open) return;
     setMergeLocally(false);
     setMergedHere(false);
+    setBypassProtection(false);
   });
+  // A new head is unseen code; the bypass must be confirmed again for it.
+  createEffect(
+    on(
+      () => actions.pr()?.headRefOid,
+      () => setBypassProtection(false),
+      { defer: true },
+    ),
+  );
 
   const number = () => {
     const url = taskPrUrl(props.task);
@@ -197,10 +215,16 @@ export function createFinishPr(props: FinishPrProps) {
     return Boolean(head && pr && head !== pr.headRefOid);
   };
 
+  /** Bypass applies only while GitHub still blocks; a PR that became mergeable merges normally. */
+  const bypassing = (): boolean => {
+    const pr = actions.pr();
+    return bypassProtection() && !!pr && prIsBlocked(pr);
+  };
+
   const blocker = (): string | undefined => {
     const pr = actions.pr();
     if (!pr) return 'Checking the pull request…';
-    const github = prMergeBlocker(pr);
+    const github = prMergeBlocker(pr, bypassing());
     if (github) return github;
     if (props.headSha() === undefined) return 'Checking the branch…';
     // Merging is pinned to the PR head, so local commits would be left behind.
@@ -211,7 +235,7 @@ export function createFinishPr(props: FinishPrProps) {
   };
 
   async function merge(): Promise<PrMergeOutcome> {
-    const outcome = await actions.merge();
+    const outcome = await actions.merge(bypassing());
     if (outcome === 'merged') setMergedHere(true);
     return outcome;
   }
@@ -226,6 +250,9 @@ export function createFinishPr(props: FinishPrProps) {
     blocker,
     mergeLocally,
     setMergeLocally,
+    bypassProtection,
+    setBypassProtection,
+    bypassing,
   };
 }
 

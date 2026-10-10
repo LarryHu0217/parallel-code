@@ -404,6 +404,8 @@ describe('FinishDialog GitHub', () => {
 });
 
 const PR_URL = 'https://github.com/o/r/pull/42';
+const bypassCheckbox = () =>
+  document.querySelector<HTMLInputElement>('[data-testid="bypass-protection"]');
 
 function prDetails(overrides: Partial<PullRequestDetails> = {}): PullRequestDetails {
   return {
@@ -456,6 +458,49 @@ describe('FinishDialog with an open PR', () => {
     expect(document.querySelector('[data-testid="footer-note"]')?.textContent).toContain(
       'Push the branch first',
     );
+  });
+
+  it('offers no bypass when GitHub does not block the merge', async () => {
+    vi.mocked(getPullRequestDetails).mockResolvedValue(prDetails());
+    mount({ task: task({ prUrl: PR_URL }) });
+    await flush();
+    expect(bypassCheckbox()).toBeNull();
+  });
+
+  it.each([
+    [{ mergeable: 'CONFLICTING' as const }, 'conflicts'],
+    [{ isDraft: true }, 'Draft'],
+  ])('keeps other blockers when bypassing: %j', async (overrides, note) => {
+    vi.mocked(getPullRequestDetails).mockResolvedValue(
+      prDetails({ mergeStateStatus: 'BLOCKED', ...overrides }),
+    );
+    mount({ task: task({ prUrl: PR_URL }) });
+    await flush();
+    bypassCheckbox()?.click();
+    expect(confirmButton()?.disabled).toBe(true);
+    expect(document.querySelector('[data-testid="footer-note"]')?.textContent).toContain(note);
+  });
+
+  it('merges a protection-blocked PR only after opting into the admin bypass', async () => {
+    vi.mocked(getPullRequestDetails).mockResolvedValue(prDetails({ mergeStateStatus: 'BLOCKED' }));
+    vi.mocked(mergePullRequestForTask).mockResolvedValueOnce(false);
+    mount({ task: task({ prUrl: PR_URL }) });
+    await flush();
+    expect(confirmButton()?.disabled).toBe(true);
+    expect(document.querySelector('[data-testid="footer-note"]')?.textContent).toContain(
+      'GitHub blocks merging',
+    );
+    bypassCheckbox()?.click();
+    expect(confirmButton()?.disabled).toBe(false);
+    expect(confirmButton()?.textContent).toBe('Squash and merge PR #42 as admin');
+    confirmButton()?.click();
+    await flush();
+    expect(mergePullRequestForTask).toHaveBeenCalledWith('parent', {
+      prUrl: PR_URL,
+      method: 'squash',
+      headSha: 'local',
+      admin: true,
+    });
   });
 
   it('can merge locally instead, and switch back', async () => {

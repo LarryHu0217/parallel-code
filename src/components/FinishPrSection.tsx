@@ -6,7 +6,7 @@ import type { PrMergeMethod } from '../ipc/types';
 import type { Task } from '../store/types';
 import type { MergeReadinessCheck } from './merge-readiness';
 import { MergeReadinessPanel } from './MergeReadinessPanel';
-import { PR_METHOD_LABELS, taskPrUrl, type FinishPr } from './pr-actions';
+import { PR_METHOD_LABELS, prIsBlocked, taskPrUrl, type FinishPr } from './pr-actions';
 
 interface FinishPrSectionProps {
   task: Task;
@@ -202,6 +202,21 @@ export function PrMergeRoute(props: { pr: FinishPr; disabled: boolean }) {
               {/* UNSTABLE: non-required checks fail; GitHub allows the merge. */}
               <Show when={details().mergeStateStatus === 'UNSTABLE'}>
                 <p style={mutedText}>Some checks are failing; GitHub still allows the merge.</p>
+              </Show>
+              <Show when={prIsBlocked(details())}>
+                <label
+                  style={{ ...mutedText, display: 'flex', gap: '6px', 'align-items': 'center' }}
+                  title="Merges with gh pr merge --admin, skipping branch protection and any merge queue. GitHub refuses unless you may bypass them."
+                >
+                  <input
+                    type="checkbox"
+                    data-testid="bypass-protection"
+                    checked={props.pr.bypassProtection()}
+                    disabled={disabled()}
+                    onChange={(e) => props.pr.setBypassProtection(e.currentTarget.checked)}
+                  />
+                  Bypass required reviews and checks (admin)
+                </label>
               </Show>
             </>
           )}
