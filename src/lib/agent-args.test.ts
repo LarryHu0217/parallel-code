@@ -121,21 +121,23 @@ describe('buildTaskAgentArgs with a session id', () => {
   it('keeps the session picker when a reviewer has a model override', () => {
     const codex = reviewerWithModel(codexAgent, 'codex-test');
     const claude = reviewerWithModel({ ...claudeAgent, resume_args: ['--continue'] }, 'opus');
-    expect(buildTaskAgentArgs(codex, {}, true)).toEqual(['resume', '--model', 'codex-test']);
-    expect(buildTaskAgentArgs(claude, {}, true)).toEqual(['--resume', '--model', 'opus']);
-    expect(taskAgentOpensSessionPicker(codex, {}, true)).toBe(true);
-    expect(taskAgentOpensSessionPicker(claude, {}, true)).toBe(true);
+    const chats = { codexChatThreadId: 'chat-thread', claudeChatSessionId: 'chat' };
+    expect(buildTaskAgentArgs(codex, chats, true)).toEqual(['resume', '--model', 'codex-test']);
+    expect(buildTaskAgentArgs(claude, chats, true)).toEqual(['--resume', '--model', 'opus']);
+    expect(taskAgentOpensSessionPicker(codex, chats, true)).toBe(true);
+    expect(taskAgentOpensSessionPicker(claude, chats, true)).toBe(true);
   });
 
-  it('offers the Codex picker after restart when no session id was saved', () => {
-    expect(buildTaskAgentArgs(codexAgent, {}, true, undefined)).toEqual(['resume']);
+  it('restores the latest Codex session after restart when no session id was saved', () => {
+    expect(buildTaskAgentArgs(codexAgent, {}, true, undefined)).toEqual(['resume', '--last']);
+    expect(taskAgentOpensSessionPicker(codexAgent, {}, true)).toBe(false);
   });
 
   it('offers the picker for a full-path Codex command and an invalid saved id', () => {
     expect(
       buildTaskAgentArgs(
         { ...codexAgent, command: '/usr/local/bin/codex' },
-        {},
+        { codexChatThreadId: 'chat-thread' },
         true,
         undefined,
         '--invalid',
@@ -217,12 +219,13 @@ describe('buildTaskAgentArgs', () => {
     expect(buildTaskAgentArgs(codexAgent, { codexChatThreadId: 'chat-thread' }, true)).toEqual([
       'resume',
     ]);
-    expect(buildTaskAgentArgs(codexAgent, {}, true)).toEqual(['resume']);
+    expect(buildTaskAgentArgs(codexAgent, {}, true)).toEqual(['resume', '--last']);
   });
-  it('offers a Claude resume picker when no session id was saved, with or without chat', () => {
+  it('offers a Claude resume picker only when chat could be the newest session', () => {
     const agent = { ...claudeAgent, resume_args: ['--continue'] };
     expect(buildTaskAgentArgs(agent, { claudeChatSessionId: 'chat' }, true)).toEqual(['--resume']);
-    expect(buildTaskAgentArgs(agent, {}, true)).toEqual(['--resume']);
+    expect(buildTaskAgentArgs(agent, {}, true)).toEqual(['--continue']);
+    expect(taskAgentOpensSessionPicker(agent, {}, true)).toBe(false);
     expect(buildTaskAgentArgs(agent, {}, false)).toEqual([]);
     expect(
       buildTaskAgentArgs(
@@ -236,7 +239,11 @@ describe('buildTaskAgentArgs', () => {
     expect(
       buildTaskAgentArgs(
         { ...claudeAgent, command: '/usr/local/bin/claude', resume_args: ['--continue'] },
-        { skipPermissions: true, mcpLaunchArgs: ['--mcp-config', '/tmp/mcp.json'] },
+        {
+          skipPermissions: true,
+          mcpLaunchArgs: ['--mcp-config', '/tmp/mcp.json'],
+          claudeChatSessionId: 'chat',
+        },
         true,
         undefined,
         '--invalid',
@@ -245,6 +252,7 @@ describe('buildTaskAgentArgs', () => {
   });
   it.each([
     [codexAgent, ['resume']],
+    [{ ...codexAgent, command: '/usr/local/bin/codex' }, ['resume']],
     [{ ...claudeAgent, resume_args: ['--continue'] }, ['--resume']],
     [copilotAgent, ['--resume']],
     [{ ...claudeAgent, command: 'gemini', resume_args: ['--resume', 'latest'] }, []],
@@ -293,6 +301,7 @@ describe('buildTaskAgentArgs', () => {
       ),
     ).toEqual([
       'resume',
+      '--last',
       '--dangerously-bypass-approvals-and-sandbox',
       '--config',
       'mcp_servers.parallel-code={ command = "node" }',
@@ -322,7 +331,7 @@ describe('buildTaskAgentArgs', () => {
         },
         true,
       ),
-    ).toEqual(['resume']);
+    ).toEqual(['resume', '--last']);
   });
 
   it('keeps --mcp-config fallback for Claude-compatible agents', () => {

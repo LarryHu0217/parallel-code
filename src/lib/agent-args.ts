@@ -109,13 +109,21 @@ function positionalAgentArgs(
   resumed: boolean,
 ): string[] {
   let args = resumed && agentDef.resume_args?.length ? agentDef.resume_args : agentDef.args;
-  // Without an owned session ID, the latest conversation may belong to another
-  // pane, a subagent, or a CLI launched by hand. Ask which session to resume.
-  if (resumed && isCodexCommand(agentDef.command) && args.join(' ') === 'resume --last') {
+  // A task's separate chat may now be the newest conversation. Let the user
+  // choose the terminal conversation instead of resuming the chat by accident.
+  // Without a chat, "latest" stays the default: a picker on every pane that
+  // has no saved session id would block restoring older tasks after restart.
+  if (
+    resumed &&
+    task.codexChatThreadId &&
+    isCodexCommand(agentDef.command) &&
+    args.join(' ') === 'resume --last'
+  ) {
     args = ['resume'];
   }
   if (
     resumed &&
+    task.claudeChatSessionId &&
     agentDef.command.split('/').pop() === 'claude' &&
     args.join(' ') === '--continue'
   ) {
@@ -126,7 +134,8 @@ function positionalAgentArgs(
     // terminal: use a picker, without rewriting explicit IDs or custom flags.
     const command = agentDef.command.split('/').pop();
     const resume = args.join(' ');
-    if (command === 'copilot' && resume === '--continue') {
+    if (isCodexCommand(agentDef.command) && resume === 'resume --last') args = ['resume'];
+    if ((command === 'claude' || command === 'copilot') && resume === '--continue') {
       args = ['--resume'];
     }
     // These defaults have no verified CLI picker. A fresh session is safer
@@ -145,8 +154,9 @@ function positionalAgentArgs(
  * Full argument list for a task's agent launch.
  *
  * `sessionId` names the conversation this pane owns, when the CLI supports it
- * (see session-resume.ts). Without one, Codex and Claude use their pickers; other CLIs
- * retain their configured positional fallback.
+ * (see session-resume.ts). Without one, resume stays positional ("the most
+ * recent session in this directory"); Codex and Claude switch to their pickers
+ * only where "latest" is ambiguous: a separate chat or a hidden agent.
  */
 export function buildTaskAgentArgs(
   agentDef: AgentDef,

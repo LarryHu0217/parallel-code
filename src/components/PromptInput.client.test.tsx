@@ -203,12 +203,16 @@ describe('PromptInput initial prompt after an app restart', () => {
     expect(onAgentReady).toHaveBeenCalled();
   });
 
+  // Only a separate chat makes "latest" ambiguous enough to open the picker;
+  // a saved id or no chat resumes directly, so the prompt can be sent.
   it.each([
-    ['claude', undefined],
-    ['codex', undefined],
-    ['claude', 'fb4f2bc6-62d9-4b29-a795-240caf2fc459'],
-    ['codex', 'fb4f2bc6-62d9-4b29-a795-240caf2fc459'],
-  ])('only auto-sends to %s when a saved session exists (%s)', (command, sessionId) => {
+    ['claude', undefined, false, true],
+    ['codex', undefined, false, true],
+    ['claude', undefined, true, false],
+    ['codex', undefined, true, false],
+    ['claude', 'fb4f2bc6-62d9-4b29-a795-240caf2fc459', true, true],
+    ['codex', 'fb4f2bc6-62d9-4b29-a795-240caf2fc459', true, true],
+  ])('%s with session %s and chat %s auto-sends: %s', (command, sessionId, chat, sends) => {
     vi.mocked(onAgentReady).mockClear();
     storeMock.agents = {
       'agent-1': {
@@ -226,10 +230,12 @@ describe('PromptInput initial prompt after an app restart', () => {
         id: 'task-1',
         agentIds: ['agent-1'],
         agentSessionIds: sessionId ? { 'agent-1': sessionId } : undefined,
+        claudeChatSessionId: chat ? 'chat' : undefined,
+        codexChatThreadId: chat ? 'chat-thread' : undefined,
       },
     };
     mountWithInitialPrompt();
-    if (sessionId) expect(onAgentReady).toHaveBeenCalled();
+    if (sends) expect(onAgentReady).toHaveBeenCalled();
     else expect(onAgentReady).not.toHaveBeenCalled();
     expect(document.querySelector<HTMLTextAreaElement>('textarea.prompt-textarea')?.value).toBe(
       'do it',
