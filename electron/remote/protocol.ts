@@ -34,6 +34,16 @@ export interface RemoteAgent {
   collapsed?: boolean;
 }
 
+/** An agent the mobile "New Task" screen can launch, with the models it offers. */
+export interface RemoteAgentChoice {
+  id: string;
+  name: string;
+  /** The agent the desktop New Task dialog would preselect. */
+  isDefault: boolean;
+  /** Model overrides; empty when the agent only runs with its configured model. */
+  models: { id: string; label: string }[];
+}
+
 /**
  * The desktop's answer to a phone's close request. `closed: false` means
  * nothing was closed because closing would lose work; `warnings` says what.
