@@ -173,10 +173,14 @@ export function createFinishPr(props: FinishPrProps) {
     setMergedHere(false);
     setBypassProtection(false);
   });
-  // A new head is unseen code; the bypass must be confirmed again for it.
+  // A new head is unseen code, and a block that lifts and returns may be a
+  // different rule; either way the bypass must be confirmed again.
   createEffect(
     on(
-      () => actions.pr()?.headRefOid,
+      () => {
+        const pr = actions.pr();
+        return `${pr?.headRefOid}:${pr ? prIsBlocked(pr) : false}`;
+      },
       () => setBypassProtection(false),
       { defer: true },
     ),
