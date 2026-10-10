@@ -2078,6 +2078,12 @@ export function registerAllHandlers(win: BrowserWindow): void {
         validateUUID(args.coordinatorTaskId, 'coordinatorTaskId');
         const coordinator = mcp.coordinator();
         if (!coordinator) throw new Error('Task coordination is not initialized');
+        // Startup authority restore fails for a task whose worktree was removed
+        // (e.g. an interrupted merge); name that instead of the generic authority error.
+        if (!fs.existsSync(args.worktreePath))
+          throw new Error(
+            `Task worktree is missing (${args.worktreePath}). Close the task to remove it.`,
+          );
         const authority = delegation.getTask(args.id);
         if (
           !authority ||

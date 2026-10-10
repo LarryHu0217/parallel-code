@@ -676,7 +676,11 @@ export async function mergeTask(
         coordinatorTaskId: task.coordinatedBy,
       }).catch((err) => console.warn('[MCP] Failed to notify coordinator of task close:', err));
     }
-    await delegationRequest({ action: 'unregister', taskId });
+    // The worktree and branch are already gone, so the task must leave the store
+    // regardless: a kept task cannot be restored and fails on every restart.
+    await delegationRequest({ action: 'unregister', taskId }).catch((err: unknown) =>
+      logWarn('tasks', 'Failed to unregister merged task', { taskId, err: String(err) }),
+    );
     removeTaskFromStore(taskId, [...agentIds, ...shellAgentIds]);
   }
 }

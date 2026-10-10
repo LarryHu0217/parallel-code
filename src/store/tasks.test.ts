@@ -1903,6 +1903,20 @@ describe('Super Productivity completion wiring', () => {
     expect(fireSpCompletion).toHaveBeenCalledWith('task-1');
   });
 
+  it('removes a merged task even when unregistering its authority fails', async () => {
+    mockTasks['task-1'] = { ...worktreeTask(), coordinatedBy: 'coord-1' };
+    mockInvoke.mockImplementation((channel: string) =>
+      channel === IPC.MergeTask
+        ? Promise.resolve({ lines_added: 1, lines_removed: 0 })
+        : channel === IPC.DelegationRequest
+          ? Promise.reject(new Error('persist failed'))
+          : Promise.resolve(undefined),
+    );
+    await mergeTask('task-1', { cleanup: true });
+    // The worktree and branch are gone; keeping the task would leave it unrestorable.
+    expect(fireSpCompletion).toHaveBeenCalledWith('task-1');
+  });
+
   it('does not complete anything for a merge that keeps the task', async () => {
     mockTasks['task-1'] = worktreeTask();
     await mergeTask('task-1', { cleanup: false });
