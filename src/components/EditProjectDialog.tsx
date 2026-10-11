@@ -128,6 +128,7 @@ export function EditProjectDialog(props: EditProjectDialogProps) {
   }
 
   const canSave = () => name().trim().length > 0;
+  const saveDisabled = () => !canSave() || saving();
 
   async function handleSave() {
     if (!canSave() || !props.project || saving()) return;
@@ -761,21 +762,19 @@ export function EditProjectDialog(props: EditProjectDialogProps) {
               <button
                 type="button"
                 class="btn-primary"
-                disabled={!canSave() || saving()}
+                disabled={saveDisabled()}
+                aria-busy={saving()}
                 onClick={handleSave}
                 style={{
                   padding: '9px 20px',
-                  background: theme.accent,
-                  border: 'none',
                   'border-radius': 'var(--radius-md)',
-                  color: theme.accentText,
-                  cursor: canSave() ? 'pointer' : 'not-allowed',
+                  cursor: saveDisabled() ? 'not-allowed' : 'pointer',
                   'font-size': '14px',
                   'font-weight': '500',
-                  opacity: canSave() ? '1' : '0.4',
+                  opacity: saveDisabled() ? '0.4' : '1',
                 }}
               >
-                Save
+                {saving() ? 'Saving…' : 'Save'}
               </button>
             </div>
             <ImportWorktreesDialog

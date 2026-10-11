@@ -27,6 +27,8 @@ import {
   setShowPromptInput,
   setModelTaskNames,
   setTaskNameModel,
+  setTaskBriefs,
+  setConfidencePrompt,
   setShowSidebarTips,
   setShowSidebarProgress,
   setSidebarNeedsInputFirst,
@@ -47,7 +49,6 @@ import {
   setDocumentWorkspacesEnabled,
   setCoordinatorNotificationDelayMs,
   setPreferUiMode,
-  setDefaultStepsEnabled,
   setDefaultSkipPermissions,
   setCanvasOwnershipBadges,
   setDefaultPropagateSkipPermissions,
@@ -61,6 +62,7 @@ import { CopyIcon, PencilIcon, PlusIcon, SyncIcon } from './icons';
 import { mod } from '../lib/platform';
 import { DEFAULT_COORDINATOR_CONCURRENT_TASKS } from '../lib/coordinator-limits';
 import { DEFAULT_DOCKER_IMAGE, PROJECT_DOCKERFILE_RELATIVE_PATH } from '../lib/docker';
+import { DEFAULT_CONFIDENCE_PROMPT } from '../lib/task-confidence';
 
 interface SettingsDialogProps {
   open: boolean;
@@ -109,10 +111,7 @@ export function SettingsCheckboxRow(props: {
         'align-items': props.align ?? 'center',
         gap: '10px',
         cursor: 'pointer',
-        padding: '8px 12px',
-        'border-radius': 'var(--radius-md)',
-        background: theme.bgInput,
-        border: `1px solid ${theme.border}`,
+        padding: '8px 0',
       }}
     >
       <input
@@ -364,10 +363,16 @@ export function SettingsDialog(props: SettingsDialogProps) {
       width="640px"
       zIndex={1100}
       labelledBy={titleId}
-      panelStyle={{ 'max-width': 'calc(100vw - 32px)', padding: '24px', gap: '18px' }}
+      panelStyle={{
+        'max-width': 'calc(100vw - 32px)',
+        padding: '24px',
+        gap: '18px',
+        overflow: 'hidden',
+      }}
     >
       <div
         style={{
+          'flex-shrink': '0',
           display: 'flex',
           'align-items': 'center',
           'justify-content': 'space-between',
@@ -422,6 +427,7 @@ export function SettingsDialog(props: SettingsDialogProps) {
         role="tablist"
         aria-label="Settings tabs"
         style={{
+          'flex-shrink': '0',
           display: 'flex',
           gap: '2px',
           'border-bottom': `1px solid ${theme.border}`,
@@ -477,7 +483,15 @@ export function SettingsDialog(props: SettingsDialogProps) {
           id="settings-tab-general"
           role="tabpanel"
           aria-labelledby="settings-tabbutton-general"
-          style={{ display: 'flex', 'flex-direction': 'column', gap: '18px' }}
+          data-dialog-scroll
+          style={{
+            'min-height': '0',
+            'overflow-y': 'auto',
+            padding: '4px',
+            display: 'flex',
+            'flex-direction': 'column',
+            gap: '18px',
+          }}
         >
           <SettingsSection title="Behavior">
             <SettingsCheckboxRow
@@ -498,7 +512,13 @@ export function SettingsDialog(props: SettingsDialogProps) {
               onChange={setModelTaskNames}
               description="Ask a cheap model for a short title when a task is named from its prompt; sends the prompt to that model's provider. The branch keeps its prompt-based name"
             />
-            <Show when={store.modelTaskNames}>
+            <SettingsCheckboxRow
+              label="Write task briefs"
+              checked={store.taskBriefs}
+              onChange={setTaskBriefs}
+              description="After each agent turn, a cheap model summarises what changed, what is open and what the agent decided. Sends the turn's prompts, the agent's last message and the diff to that model's provider"
+            />
+            <Show when={store.modelTaskNames || store.taskBriefs}>
               <label
                 style={{
                   display: 'flex',
@@ -511,7 +531,7 @@ export function SettingsDialog(props: SettingsDialogProps) {
                 }}
               >
                 <span style={{ 'font-size': '13px', color: theme.fg, 'white-space': 'nowrap' }}>
-                  Naming model
+                  Naming and brief model
                 </span>
                 <select
                   value={store.taskNameModel}
@@ -524,7 +544,6 @@ export function SettingsDialog(props: SettingsDialogProps) {
                     padding: '6px 10px',
                     color: theme.fg,
                     'font-size': '13px',
-                    outline: 'none',
                     cursor: 'pointer',
                   }}
                 >
@@ -534,6 +553,40 @@ export function SettingsDialog(props: SettingsDialogProps) {
                 </select>
               </label>
             </Show>
+            <label
+              style={{
+                display: 'flex',
+                'flex-direction': 'column',
+                gap: '6px',
+                padding: '8px 12px',
+                'border-radius': 'var(--radius-md)',
+                background: theme.bgInput,
+                border: `1px solid ${theme.border}`,
+              }}
+            >
+              <span style={{ 'font-size': '13px', color: theme.fg }}>Confidence rating prompt</span>
+              <span style={{ 'font-size': '12px', color: theme.fgMuted }}>
+                Sent to the agent by Rate confidence on the task brief (shown while task briefs are
+                on). Leave empty for the built-in self-check, or name your own rating skill. It
+                should end with the agent calling confidence_publish.
+              </span>
+              <textarea
+                rows={3}
+                value={store.confidencePrompt}
+                placeholder={DEFAULT_CONFIDENCE_PROMPT}
+                onChange={(e) => setConfidencePrompt(e.currentTarget.value)}
+                style={{
+                  resize: 'vertical',
+                  background: theme.taskPanelBg,
+                  border: `1px solid ${theme.border}`,
+                  'border-radius': 'var(--radius-sm)',
+                  padding: '6px 10px',
+                  color: theme.fg,
+                  'font-size': '12px',
+                  'font-family': 'inherit',
+                }}
+              />
+            </label>
             <SettingsCheckboxRow
               label="Show ownership badges on canvases"
               checked={store.canvasOwnershipBadges}
@@ -592,12 +645,6 @@ export function SettingsDialog(props: SettingsDialogProps) {
               checked={store.preferUiMode}
               onChange={setPreferUiMode}
               description="Start new Claude and Codex tasks in Chat when supported. You can still switch each task to Terminal. Existing tasks keep their current view."
-            />
-            <SettingsCheckboxRow
-              label="Steps tracking"
-              checked={store.defaultStepsEnabled}
-              onChange={setDefaultStepsEnabled}
-              description="Pre-tick Steps tracking in the New Task dialog"
             />
             <SettingsCheckboxRow
               label="Dangerously skip all confirms by default"
@@ -659,7 +706,6 @@ export function SettingsDialog(props: SettingsDialogProps) {
                     color: theme.fg,
                     'font-size': '14px',
                     'font-family': "'JetBrains Mono', monospace",
-                    outline: 'none',
                   }}
                 />
               </label>
@@ -710,7 +756,6 @@ export function SettingsDialog(props: SettingsDialogProps) {
                     padding: '6px 10px',
                     color: theme.fg,
                     'font-size': '13px',
-                    outline: 'none',
                     cursor: 'pointer',
                   }}
                 >
@@ -735,7 +780,6 @@ export function SettingsDialog(props: SettingsDialogProps) {
                       padding: '6px 10px',
                       color: theme.fg,
                       'font-size': '13px',
-                      outline: 'none',
                       cursor: 'pointer',
                     }}
                   >
@@ -781,7 +825,6 @@ export function SettingsDialog(props: SettingsDialogProps) {
                       color: theme.fg,
                       'font-size': '13px',
                       'font-family': "'JetBrains Mono', monospace",
-                      outline: 'none',
                     }}
                   />
                 </label>
@@ -840,7 +883,6 @@ export function SettingsDialog(props: SettingsDialogProps) {
                       color: theme.fg,
                       'font-size': '14px',
                       'font-family': "'JetBrains Mono', monospace",
-                      outline: 'none',
                     }}
                   />
                 </label>
@@ -1104,7 +1146,15 @@ export function SettingsDialog(props: SettingsDialogProps) {
           id="settings-tab-themes"
           role="tabpanel"
           aria-labelledby="settings-tabbutton-themes"
-          style={{ display: 'flex', 'flex-direction': 'column', gap: '18px' }}
+          data-dialog-scroll
+          style={{
+            'min-height': '0',
+            'overflow-y': 'auto',
+            padding: '4px',
+            display: 'flex',
+            'flex-direction': 'column',
+            gap: '18px',
+          }}
         >
           {/* Appearance mode selector */}
           <div style={{ display: 'flex', 'flex-direction': 'column', gap: '10px' }}>
@@ -1226,7 +1276,15 @@ export function SettingsDialog(props: SettingsDialogProps) {
           id="settings-tab-mcp"
           role="tabpanel"
           aria-labelledby="settings-tabbutton-mcp"
-          style={{ display: 'flex', 'flex-direction': 'column', gap: '18px' }}
+          data-dialog-scroll
+          style={{
+            'min-height': '0',
+            'overflow-y': 'auto',
+            padding: '4px',
+            display: 'flex',
+            'flex-direction': 'column',
+            gap: '18px',
+          }}
         >
           <SettingsSection title="Agent orchestration">
             <SettingsCheckboxRow
@@ -1296,7 +1354,6 @@ export function SettingsDialog(props: SettingsDialogProps) {
                     color: theme.fg,
                     'font-size': '14px',
                     'font-family': "'JetBrains Mono', monospace",
-                    outline: 'none',
                     'text-align': 'right',
                   }}
                 />
@@ -1315,7 +1372,15 @@ export function SettingsDialog(props: SettingsDialogProps) {
           id="settings-tab-experimental"
           role="tabpanel"
           aria-labelledby="settings-tabbutton-experimental"
-          style={{ display: 'flex', 'flex-direction': 'column', gap: '18px' }}
+          data-dialog-scroll
+          style={{
+            'min-height': '0',
+            'overflow-y': 'auto',
+            padding: '4px',
+            display: 'flex',
+            'flex-direction': 'column',
+            gap: '18px',
+          }}
         >
           <SettingsSection title="Document workspaces">
             <SettingsCheckboxRow

@@ -3,7 +3,7 @@ import { createSignal } from 'solid-js';
 import { render } from 'solid-js/web';
 import { AgentDetail } from './AgentDetail';
 import { fetchMergeReadiness, fetchNotes, fetchTaskDiff, mergeTask, closeTask } from './api';
-import { agents, sendInput } from './ws';
+import { agents, scrollAgent, sendInput } from './ws';
 import type { RemoteAgent } from '../../electron/remote/protocol';
 
 const terminalMocks = vi.hoisted(() => ({
@@ -11,6 +11,8 @@ const terminalMocks = vi.hoisted(() => ({
   refresh: vi.fn(),
   options: { fontSize: 14 },
   scrollback: undefined as ((data: string, cols: number, rows: number) => void) | undefined,
+  bufferType: 'normal' as 'normal' | 'alternate',
+  element: undefined as HTMLElement | undefined,
 }));
 
 vi.mock('@xterm/xterm', () => ({
@@ -19,7 +21,20 @@ vi.mock('@xterm/xterm', () => ({
     rows = 24;
     modes = { bracketedPasteMode: true };
     options = terminalMocks.options;
-    buffer = { active: { length: 0, viewportY: 0, baseY: 0, getLine: () => undefined } };
+    buffer = {
+      active: {
+        get type() {
+          return terminalMocks.bufferType;
+        },
+        length: 0,
+        viewportY: 0,
+        baseY: 0,
+        getLine: () => undefined,
+      },
+    };
+    get element() {
+      return terminalMocks.element;
+    }
     open() {}
     refresh(start: number, end: number) {
       terminalMocks.refresh(start, end);
@@ -62,6 +77,7 @@ vi.mock('./ws', () => ({
   subscribeAgent: vi.fn(),
   unsubscribeAgent: vi.fn(),
   sendInput: vi.fn(),
+  scrollAgent: vi.fn(),
   onOutput: () => () => {},
   onScrollback: (_id: string, callback: (data: string, cols: number, rows: number) => void) => {
     terminalMocks.scrollback = callback;
@@ -80,6 +96,8 @@ vi.mock('./api', () => ({
   }),
   mergeTask: vi.fn().mockResolvedValue(undefined),
   closeTask: vi.fn().mockResolvedValue(undefined),
+  fetchFixCiPrompt: vi.fn().mockResolvedValue('CI failed on pull request #7.'),
+  sendFixCiPrompt: vi.fn(),
   ApiError: class extends Error {},
 }));
 
@@ -110,6 +128,8 @@ beforeEach(() => {
       },
     ]);
   terminalMocks.options.fontSize = 14;
+  terminalMocks.bufferType = 'normal';
+  terminalMocks.element = undefined;
   localStorage.clear();
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
   host = document.createElement('div');
@@ -715,6 +735,29 @@ describe('phone terminal viewport', () => {
     expect(sendInput).not.toHaveBeenCalled();
   });
 
+  it('scrolls a full-screen agent UI by turning the wheel over the cell under the finger', () => {
+    const element = document.createElement('div');
+    const screen = document.createElement('div');
+    screen.className = 'xterm-screen';
+    element.append(screen);
+    // 80x24 cells of 10px, starting 100px down the page.
+    vi.spyOn(screen, 'getBoundingClientRect').mockReturnValue(
+      DOMRect.fromRect({ x: 0, y: 100, width: 800, height: 240 }),
+    );
+    terminalMocks.element = element;
+    terminalMocks.bufferType = 'alternate';
+    mount();
+    const { scroller } = viewport(300);
+    touch(scroller, 'touchstart', 100, 200);
+    touch(scroller, 'touchmove', 100, 260);
+    expect(scrollAgent).toHaveBeenCalledWith('a1', -3, 11, 17);
+    // Past the grid, the nearest edge cell still gets the wheel.
+    touch(scroller, 'touchmove', 900, 1100);
+    expect(scrollAgent).toHaveBeenLastCalledWith('a1', expect.any(Number), 80, 24);
+    expect(terminalMocks.scrollLines).not.toHaveBeenCalled();
+    expect(sendInput).not.toHaveBeenCalled();
+  });
+
   it('handles wheel scrolling before xterm consumes it, while preserving browser zoom', () => {
     mount();
     const { content } = viewport(300);
@@ -766,5 +809,62 @@ describe('phone terminal viewport', () => {
     terminalMocks.scrollback?.('', 100, 60);
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
     expect(scroller.scrollTop).toBe(120);
+  });
+});
+
+describe('failed PR checks', () => {
+  beforeEach(() => {
+    vi.mocked(agents).mockReturnValue([
+      {
+        agentId: 'a1',
+        taskId: 't1',
+        taskName: 'First task',
+        status: 'running',
+        attention: 'idle',
+        ci: 'failure',
+        exitCode: null,
+        lastLine: '',
+      },
+    ]);
+  });
+
+  it('offers Fix CI to a paired phone and opens the prompt for review', async () => {
+    mount();
+    const fix = [...host.querySelectorAll('button')].find((b) => b.textContent === 'Fix CI');
+    if (!fix) throw new Error('Missing Fix CI button');
+    fix.click();
+    await vi.waitFor(() =>
+      expect(host.querySelector<HTMLTextAreaElement>('[aria-label="Fix CI prompt"]')?.value).toBe(
+        'CI failed on pull request #7.',
+      ),
+    );
+  });
+
+  it('keeps the open prompt when CI or the agent list changes mid-edit', async () => {
+    const first = agents()[0];
+    const [list, setList] = createSignal([first]);
+    // eslint-disable-next-line solid/reactivity -- the component tracks reads through this mock
+    vi.mocked(agents).mockImplementation(list);
+    mount();
+    const fix = [...host.querySelectorAll('button')].find((b) => b.textContent === 'Fix CI');
+    if (!fix) throw new Error('Missing Fix CI button');
+    fix.click();
+    await vi.waitFor(() =>
+      expect(host.querySelector('[aria-label="Fix CI prompt"]')).not.toBeNull(),
+    );
+    setList([{ ...first, ci: 'pending' }]);
+    expect(host.querySelector('[aria-label="Fix CI prompt"]')).not.toBeNull();
+    // A reconnect briefly empties the list.
+    setList([]);
+    expect(host.querySelector('[aria-label="Fix CI prompt"]')).not.toBeNull();
+  });
+
+  it('shows the status but no Fix CI to a view-only phone', () => {
+    wsMocks.canControl = false;
+    mount();
+    expect(host.textContent).toContain('CI failed');
+    expect([...host.querySelectorAll('button')].some((b) => b.textContent === 'Fix CI')).toBe(
+      false,
+    );
   });
 });

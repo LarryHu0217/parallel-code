@@ -19,7 +19,7 @@
 /* Conversation text carries the meaning, so it reads a step larger and looser
    than the surrounding chrome, which stays at 11–13px. */
 .chat-markdown.plan-markdown {
-  font-size: 16px;
+  font-size: 13.5px;
   line-height: 1.7;
   color: var(--fg);
 }
@@ -34,16 +34,16 @@
   line-height: 1.35;
 }
 .chat-markdown.plan-markdown h1 {
-  font-size: 24px;
-}
-.chat-markdown.plan-markdown h2 {
   font-size: 20px;
 }
-.chat-markdown.plan-markdown h3 {
+.chat-markdown.plan-markdown h2 {
   font-size: 17px;
 }
+.chat-markdown.plan-markdown h3 {
+  font-size: 15px;
+}
 .chat-markdown.plan-markdown :is(h4, h5, h6) {
-  font-size: 16px;
+  font-size: 13.5px;
   letter-spacing: -0.01em;
 }
 .chat-markdown.plan-markdown strong {
@@ -98,7 +98,7 @@
   text-underline-offset: 3px;
 }
 .chat-markdown.plan-markdown table {
-  font-size: 14px;
+  font-size: inherit;
   line-height: 1.6;
 }
 .chat-markdown.plan-markdown :is(th, td) {
@@ -115,7 +115,7 @@
   background: var(--chat-surface);
   border: 1px solid transparent;
   border-radius: 16px;
-  font-size: 16px;
+  font-size: 13.5px;
   line-height: 1.7;
   white-space: pre-wrap;
 }

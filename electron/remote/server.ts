@@ -13,6 +13,7 @@ import {
   writeToAgent,
   resizeAgent,
   setAgentRemoteSize,
+  scrollAgent,
   killAgent,
   subscribeToAgent,
   subscribeToAgentRendered,
@@ -44,6 +45,11 @@ import { parseMindMapUpdate, type MindMapDocument, type MindMapUpdate } from '..
 import { parseReasoningUpdate } from '../shared/reasoning-feed.js';
 import { parseCanvasView, type CanvasView } from '../shared/canvas-view.js';
 import { parseAgentTourPayload, type AgentTourPayload } from '../shared/agent-tour.js';
+import {
+  CONFIDENCE_LIMITS,
+  parseConfidencePayload,
+  type ConfidencePayload,
+} from '../shared/task-confidence.js';
 import { parseGitHubList, type GitHubCustomList } from '../shared/github-list.js';
 import {
   EVIDENCE_LIMITS,
@@ -427,15 +433,26 @@ type CanvasOps = Pick<
   | 'updateReasoning'
   | 'openCanvas'
   | 'publishTour'
+  | 'publishConfidence'
   | 'publishGitHubList'
   | 'submitEvidence'
   | 'getEvidence'
 >;
-type CanvasRoute = 'mindmaps' | 'reasoning' | 'canvas' | 'tours' | 'github-lists' | 'evidence';
+type CanvasRoute =
+  | 'mindmaps'
+  | 'reasoning'
+  | 'canvas'
+  | 'tours'
+  | 'confidence'
+  | 'github-lists'
+  | 'evidence';
 /** A published tour inlines its own context; the shared parser caps it again. */
 const TOUR_MAX_BODY_BYTES = 256 * 1024;
 /** 100 items with full-length titles and reasons, plus JSON overhead. */
 const GITHUB_LIST_MAX_BODY_BYTES = 1024 * 1024;
+// Several failed jobs at 4,000 log characters each; the chat route allows the same.
+const FIX_CI_MAX_PROMPT_CHARS = 60_000;
+const FIX_CI_MAX_BODY_BYTES = 256 * 1024;
 const CANVAS_MAX_IN_FLIGHT = 4;
 // The renderer reports failures as plain messages; 409 tells the agent to read again, 400 to fix its input.
 const CANVAS_CONFLICT =
@@ -488,6 +505,13 @@ async function canvasRequest(
     const payload = parseAgentTourPayload(await readJsonBody(req, TOUR_MAX_BODY_BYTES));
     await ops.publishTour(taskId, payload);
     return { ok: true, subject: payload.subject };
+  }
+  if (route === 'confidence') {
+    if (req.method !== 'POST') throw httpError(405, 'Method not allowed');
+    if (!ops.publishConfidence) throw httpError(503, 'Confidence ratings unavailable');
+    const payload = parseConfidencePayload(await readJsonBody(req, CONFIDENCE_LIMITS.payloadBytes));
+    await ops.publishConfidence(taskId, payload);
+    return { ok: true, scores: payload.scores.length };
   }
   if (route === 'github-lists') {
     if (req.method !== 'POST') throw httpError(405, 'Method not allowed');
@@ -1010,6 +1034,8 @@ export function startRemoteServer(opts: {
   openCanvas?: (taskId: string, view: CanvasView) => Promise<void>;
   /** Show a tour the agent wrote for its own task (renderer-backed). */
   publishTour?: (taskId: string, payload: AgentTourPayload) => Promise<unknown>;
+  /** Show a confidence rating the agent published for its own task (renderer-backed). */
+  publishConfidence?: (taskId: string, payload: ConfidencePayload) => Promise<unknown>;
   /** Show an issue list the agent ordered and grouped on its project's GitHub page. */
   publishGitHubList?: (taskId: string, list: GitHubCustomList) => Promise<unknown>;
   /** Record the agent's handoff claim and start building evidence (renderer-backed). */
@@ -1020,6 +1046,10 @@ export function startRemoteServer(opts: {
   getTaskNotes?: (taskId: string) => Promise<string>;
   /** Read merge readiness for the phone's merge dialog (renderer-backed). */
   getMergeReadiness?: (taskId: string) => Promise<RemoteMergeReadiness>;
+  /** The failed-checks prompt for a task's PR, or null when nothing failed (renderer-backed). */
+  getFixCiPrompt?: (taskId: string) => Promise<string | null>;
+  /** Send a phone-reviewed Fix CI prompt to the task's agent (renderer-backed). */
+  sendFixCiPrompt?: (taskId: string, prompt: string) => Promise<void>;
   /** Merge a task on behalf of a paired phone (renderer-backed). */
   mergeTaskFromMobile?: (req: {
     taskId: string;
@@ -1308,7 +1338,7 @@ export function startRemoteServer(opts: {
       };
 
       const mapMatch = url.pathname.match(
-        /^\/api\/(mindmaps|reasoning|canvas|tours|github-lists|evidence)\/([^/]+)$/,
+        /^\/api\/(mindmaps|reasoning|canvas|tours|confidence|github-lists|evidence)\/([^/]+)$/,
       );
       if (mapMatch) {
         const route = mapMatch[1] as CanvasRoute;
@@ -1716,6 +1746,51 @@ export function startRemoteServer(opts: {
         return;
       }
 
+      // --- Paired-mobile Fix CI ---
+      // GET builds the desktop's failed-checks prompt; POST sends the text the
+      // phone showed back to the agent. The log tails are untrusted GitHub
+      // content, so the user reads (and may edit) them before the agent does.
+      const fixCiMatch = url.pathname.match(/^\/api\/mobile\/tasks\/([^/]+)\/fix-ci$/);
+      if (fixCiMatch) {
+        if (tokenClass !== 'paired') return jsonEnd(403, { error: 'forbidden' });
+        if (req.method !== 'GET' && req.method !== 'POST')
+          return jsonEnd(405, { error: 'method not allowed' });
+        const getFixCiPrompt = opts.getFixCiPrompt;
+        const sendFixCiPrompt = opts.sendFixCiPrompt;
+        if (!getFixCiPrompt || !sendFixCiPrompt)
+          return jsonEnd(503, { error: 'fix CI unavailable' });
+        let taskId: string;
+        try {
+          taskId = decodeURIComponent(fixCiMatch[1]);
+        } catch {
+          return jsonEnd(400, { error: 'invalid task id' });
+        }
+        if (taskId === '__proto__' || taskId === 'constructor' || taskId === 'prototype') {
+          return jsonEnd(400, { error: 'invalid task id' });
+        }
+        if (req.method === 'GET') {
+          getFixCiPrompt(taskId)
+            .then((prompt) => jsonEnd(200, { prompt }))
+            .catch((err) => jsonEnd(500, { error: String(err) }));
+          return;
+        }
+        readJsonBody(req, FIX_CI_MAX_BODY_BYTES)
+          .then((body) => {
+            if (
+              typeof body.prompt !== 'string' ||
+              !body.prompt.trim() ||
+              body.prompt.length > FIX_CI_MAX_PROMPT_CHARS
+            )
+              return jsonEnd(400, { error: 'prompt must be a non-empty string' });
+            return sendFixCiPrompt(taskId, body.prompt).then(
+              () => jsonEnd(200, { ok: true }),
+              (err: unknown) => jsonEnd(500, { error: String(err) }),
+            );
+          })
+          .catch(() => jsonEnd(400, { error: 'bad request' }));
+        return;
+      }
+
       // Coordinator agents reach their own tasks and canvases, never other agents' terminals.
       if (
         coordinatorAgent &&
@@ -2111,9 +2186,13 @@ export function startRemoteServer(opts: {
         ws.close(4003, 'Pairing required');
         return;
       }
-      // A viewing phone may size the terminal once paired: it changes what the
-      // desktop pane shows, and typing already needs the same trust.
-      if (msg.type === 'view-size' && tokenType !== 'coordinator' && tokenType !== 'paired') {
+      // A viewing phone may size or scroll the terminal once paired: both change
+      // what the desktop pane shows, and typing already needs the same trust.
+      if (
+        (msg.type === 'view-size' || msg.type === 'scroll') &&
+        tokenType !== 'coordinator' &&
+        tokenType !== 'paired'
+      ) {
         ws.close(4003, 'Pairing required');
         return;
       }
@@ -2248,6 +2327,10 @@ export function startRemoteServer(opts: {
           }
           break;
         }
+
+        case 'scroll':
+          scrollAgent(msg.agentId, msg.lines, msg.col, msg.row);
+          break;
 
         case 'kill':
           try {

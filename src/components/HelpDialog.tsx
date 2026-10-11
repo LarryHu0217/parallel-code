@@ -259,7 +259,6 @@ export function HelpDialog(props: HelpDialogProps) {
             padding: '4px 8px',
             'font-size': '12px',
             cursor: 'pointer',
-            outline: 'none',
             flex: '1',
           }}
         >

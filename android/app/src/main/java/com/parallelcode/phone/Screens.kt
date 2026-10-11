@@ -104,6 +104,9 @@ import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
@@ -111,6 +114,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -144,6 +148,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.animation.core.Animatable
@@ -793,7 +798,8 @@ private fun AgentCard(
     onOpen: (RemoteAgent) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val isAttention = !agent.collapsed && (agent.attention == "needs_input" || agent.attention == "error")
+    val isError = agent.attention == "error" || agent.ciFailed()
+    val isAttention = !agent.collapsed && (agent.attention == "needs_input" || isError)
     val attentionTransition = rememberInfiniteTransition(label = "attentionPulse")
     val attentionGlow by if (isAttention) {
         attentionTransition.animateFloat(
@@ -810,7 +816,7 @@ private fun AgentCard(
     }
 
     val cardBorderColor = if (isAttention) {
-        if (agent.attention == "error") MaterialTheme.colorScheme.error.copy(alpha = attentionGlow)
+        if (isError) MaterialTheme.colorScheme.error.copy(alpha = attentionGlow)
         else AppTheme.extra.attentionBorder.copy(alpha = attentionGlow)
     } else {
         AppTheme.extra.border
@@ -830,12 +836,13 @@ private fun AgentCard(
 
     val (statusColor, statusText) = when {
         agent.collapsed -> Pair(AppTheme.extra.textMuted, "Minimized")
+        agent.ciFailed() -> Pair(MaterialTheme.colorScheme.error, "CI failed")
         !agent.running -> Pair(AppTheme.extra.textMuted, agent.exitCode?.let { "Exited ($it)" } ?: "Exited")
         agent.attention == "needs_input" -> Pair(AppTheme.extra.warningText, "Needs input")
         agent.attention == "error" -> Pair(MaterialTheme.colorScheme.error, "Error")
         agent.attention == "active" -> Pair(MaterialTheme.colorScheme.primary, "Working")
         agent.attention == "shell_busy" -> Pair(MaterialTheme.colorScheme.primary, "Running command")
-        agent.attention == "ready" -> Pair(AppTheme.extra.success, "Ready")
+        agent.attention == "ready" -> Pair(AppTheme.extra.success, readyLabel(agent.ci))
         agent.attention == "review" -> Pair(AppTheme.extra.review, "Review")
         else -> Pair(AppTheme.extra.textMuted, "Idle")
     }
@@ -951,6 +958,8 @@ fun AgentScreen(
     client: RemoteClient,
     alwaysFollowOutput: Boolean,
     fitTerminalToPhone: Boolean,
+    quickReplies: List<String> = emptyList(),
+    sendQuickReplies: Boolean = false,
     promptHistory: PromptHistoryStore? = null,
     pageLabel: String? = null,
     nextNeedingYou: RemoteAgent? = null,
@@ -963,9 +972,12 @@ fun AgentScreen(
     val version by buffer.version.collectAsState()
     // Recomposition is batched per frame, so a burst of output renders the text once.
     val lines = remember(version) { buffer.screen.styledLines() }
+    val fullScreen = remember(version) { buffer.screen.alternateScreen }
     var tab by rememberSaveable { mutableStateOf(AgentTab.TERMINAL) }
     var closing by remember { mutableStateOf(false) }
     var merging by remember { mutableStateOf(false) }
+    // The task id, held from the click: a reconnect blanking `agent` must not drop the user's edits.
+    var fixingCiTask by rememberSaveable { mutableStateOf<String?>(null) }
     var viewSize by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     var terminalExpanded by rememberSaveable { mutableStateOf(false) }
     BackHandler(enabled = terminalExpanded) { terminalExpanded = false }
@@ -1001,6 +1013,15 @@ fun AgentScreen(
                 merging = false
                 onBack()
             },
+        )
+    }
+
+    fixingCiTask?.let { taskId ->
+        FixCiDialog(
+            taskId = taskId,
+            client = client,
+            onDismiss = { fixingCiTask = null },
+            onSent = { fixingCiTask = null },
         )
     }
 
@@ -1051,6 +1072,12 @@ fun AgentScreen(
                         if (tab == AgentTab.TERMINAL && agent?.collapsed != true) {
                             IconButton(onClick = { terminalExpanded = true }) {
                                 Icon(Icons.Filled.Fullscreen, contentDescription = "Expand terminal")
+                            }
+                        }
+                        if (agent != null && state.canControl && agent.ci == "failure") {
+                            // Red like the desktop's Fix CI button: a failed check is urgent.
+                            TextButton(onClick = { fixingCiTask = agent.taskId }) {
+                                Text("Fix CI", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.SemiBold)
                             }
                         }
                         if (agent != null && state.canControl) {
@@ -1141,6 +1168,11 @@ fun AgentScreen(
                                 fitToView = sizeTerminal,
                                 onViewSize = { cols, rows -> viewSize = cols to rows },
                                 onZoomedChange = onZoomedChange,
+                                onWheel = if (fullScreen && state.canControl) {
+                                    { wheelLines: Int -> client.scrollTerminal(agentId, wheelLines) }
+                                } else {
+                                    null
+                                },
                                 // Keeps an agent's prompt clear of the Next task pill below it.
                                 bottomInset = if (nextNeedingYou != null) 44.dp else 0.dp,
                             )
@@ -1203,6 +1235,8 @@ fun AgentScreen(
                 ReplyBox(
                     agentId = agentId,
                     compact = terminalExpanded,
+                    quickReplies = quickReplies,
+                    sendQuickReplies = sendQuickReplies,
                     working = agent?.running == true &&
                         (agent.attention == "active" || agent.attention == "shell_busy"),
                     promptHistory = promptHistory,
@@ -1321,6 +1355,8 @@ private fun TerminalText(
     fitToView: Boolean,
     onViewSize: (cols: Int, rows: Int) -> Unit,
     onZoomedChange: (Boolean) -> Unit = {},
+    /** Takes the drag the terminal cannot follow, as mouse-wheel lines for a full-screen agent. */
+    onWheel: ((lines: Int) -> Unit)? = null,
     /** Room kept under the newest line for a pill floating over the terminal's bottom. */
     bottomInset: Dp = 0.dp,
 ) {
@@ -1343,6 +1379,8 @@ private fun TerminalText(
     val currentOnZoomedChange by rememberUpdatedState(onZoomedChange)
     LaunchedEffect(zoomed) { currentOnZoomedChange(zoomed) }
     DisposableEffect(Unit) { onDispose { currentOnZoomedChange(false) } }
+    val wheel = remember { AgentWheel() }
+    SideEffect { wheel.onWheel = onWheel }
 
     // Follow output only while parked at the bottom, decided where each scroll ends. Deciding at
     // the start instead kept follow on for a scroll that began at the bottom (the usual case), so
@@ -1370,6 +1408,7 @@ private fun TerminalText(
             .fillMaxSize()
             .background(Color(palette.background))
             .clipToBounds()
+            .nestedScroll(wheel)
             .pointerInput(Unit) {
                 awaitEachGesture {
                     awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
@@ -1418,6 +1457,7 @@ private fun TerminalText(
         val autoFont = (10f * textWidthPx / (cols.coerceAtLeast(1) * charPxAt10)).coerceIn(8f, 14f).sp
         val phoneFont = TERMINAL_FONT
         val fontSize = if (fitToView) phoneFont else autoFont
+        SideEffect { wheel.linePx = with(density) { (fontSize * 1.27f).toPx() } }
 
         val viewPaddingPx = with(density) { 16.dp.roundToPx() }
         val viewHeightPx = constraints.maxHeight
@@ -1536,6 +1576,34 @@ private fun TerminalText(
                 }
             }
         }
+    }
+}
+
+/**
+ * Turns the drag a full-screen agent's terminal cannot follow into mouse-wheel lines for the agent,
+ * as scrolling over the desktop pane does: the agent keeps its transcript out of the history.
+ */
+internal class AgentWheel : NestedScrollConnection {
+    var onWheel: ((lines: Int) -> Unit)? = null
+    var linePx = 0f
+    private var pending = 0f
+
+    override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
+        val turn = onWheel
+        if (turn == null || source != NestedScrollSource.UserInput || linePx <= 0f) return Offset.Zero
+        // Dragging down reveals what came before, so the wheel turns up (negative lines).
+        pending -= available.y
+        val lines = (pending / linePx).toInt()
+        if (lines != 0) {
+            pending -= lines * linePx
+            turn(lines)
+        }
+        return Offset(0f, available.y)
+    }
+
+    override suspend fun onPreFling(available: Velocity): Velocity {
+        pending = 0f
+        return Velocity.Zero
     }
 }
 
@@ -1681,6 +1749,8 @@ private fun arrowKeyFor(label: String): Pair<ImageVector, String>? = when (label
 private fun ReplyBox(
     agentId: String,
     compact: Boolean = false,
+    quickReplies: List<String> = emptyList(),
+    sendQuickReplies: Boolean = false,
     working: Boolean = false,
     promptHistory: PromptHistoryStore? = null,
     needsInput: Boolean = false,
@@ -1802,6 +1872,21 @@ private fun ReplyBox(
                         enabled = !busy,
                         modifier = Modifier.fillMaxHeight(),
                     ) { setDraft(appendToDraft(draft, it)) }
+                    // Behind a button rather than a row of chips, so the terminal keeps its room.
+                    QuickRepliesButton(
+                        quickReplies,
+                        enabled = !busy,
+                        modifier = Modifier.fillMaxHeight(),
+                    ) {
+                        // A quick reply is for the agent, sent straight away or not: one that starts the
+                        // draft leaves shell mode, so Send cannot run it as a shell command.
+                        if (sendQuickReplies) {
+                            run { send(it, false) }
+                        } else {
+                            if (draft.isBlank()) shellMode = false
+                            setDraft(appendToDraft(draft, it))
+                        }
+                    }
                     if (promptHistory != null) {
                         OutlinedButton(
                             onClick = { showHistory = true },
@@ -1881,13 +1966,14 @@ fun statusLabel(state: ConnectionState) = when (state.status) {
 
 internal fun agentStatusLabel(agent: RemoteAgent): String {
     if (agent.collapsed) return "Minimized"
+    if (agent.ciFailed()) return "CI failed"
     if (!agent.running) return agent.exitCode?.let { "Exited ($it)" } ?: "Exited"
     return when (agent.attention) {
         "needs_input" -> "Needs input"
         "active" -> "Working"
         "shell_busy" -> "Running command"
         "error" -> "Error"
-        "ready" -> "Ready"
+        "ready" -> readyLabel(agent.ci)
         "review" -> "Review"
         else -> "Idle"
     }

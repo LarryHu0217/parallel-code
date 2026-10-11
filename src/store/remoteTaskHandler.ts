@@ -5,6 +5,7 @@
 // main-side bridge.
 
 import { publishAgentTour } from './agent-tour';
+import { publishTaskConfidence } from './task-brief';
 import { publishGitHubList } from './github-lists';
 import { getTaskMindMap, openCanvasViewFromAgent, updateTaskMindMapFromAgent } from './canvas';
 import { getEvidenceForAgent, submitEvidence } from './evidence';
@@ -16,12 +17,16 @@ import {
   createTask,
   getCoordinatorCloseWarning,
   mergeTask,
+  sendPrompt,
   updateTaskNotes,
 } from './tasks';
 import { getVerifyCommand } from './verification';
 import { getPrChecks } from './pr-checks-state';
+import { loadFailedChecksPrompt } from './github';
 import { getEvidenceConfidence } from './evidence-state';
 import { buildMergeReadiness, type MergeReadinessCheck } from '../components/merge-readiness';
+import { taskPrUrl } from '../components/pr-actions';
+import { parseGitHubUrl } from '../lib/github-url';
 import { invoke } from '../lib/ipc';
 import { errMessage } from '../lib/log';
 import { getTaskDiffBaseBranch, loadTaskDiff } from '../lib/load-task-diff';
@@ -68,6 +73,11 @@ interface CloseTaskRequest extends RendererRequest {
 }
 interface GetTaskDiffRequest extends RendererRequest {
   taskId: string;
+}
+
+interface SendFixCiPromptRequest extends RendererRequest {
+  taskId: string;
+  prompt: string;
 }
 
 function reply(reqId: string, ok: boolean, data?: unknown, error?: string): void {
@@ -417,6 +427,35 @@ async function handleMergeTask(req: MergeTaskRequest): Promise<void> {
   }
 }
 
+/** The desktop's Fix CI prompt for a phone to review; null when nothing failed. */
+async function handleGetFixCiPrompt(req: GetTaskDiffRequest): Promise<void> {
+  try {
+    if (!isKnownTask(store.tasks, req.taskId)) throw new Error('Task not found');
+    const url = taskPrUrl(store.tasks[req.taskId]);
+    const number = url ? Number(parseGitHubUrl(url)?.number) : 0;
+    reply(req.reqId, true, {
+      prompt: url && number ? await loadFailedChecksPrompt({ number, url }) : null,
+    });
+  } catch (err) {
+    reply(req.reqId, false, undefined, errMessage(err));
+  }
+}
+
+/** Sends the Fix CI prompt the phone showed, to the agent its task card follows. */
+async function handleSendFixCiPrompt(req: SendFixCiPromptRequest): Promise<void> {
+  try {
+    if (!isKnownTask(store.tasks, req.taskId)) throw new Error('Task not found');
+    const task = store.tasks[req.taskId];
+    const agentId =
+      task.agentIds.find((id) => store.agents[id]?.status === 'running') ?? task.agentIds[0];
+    if (!agentId) throw new Error('Task has no agent');
+    await sendPrompt(req.taskId, agentId, req.prompt);
+    reply(req.reqId, true, { ok: true });
+  } catch (err) {
+    reply(req.reqId, false, undefined, errMessage(err));
+  }
+}
+
 /** Subscribe to mobile task-creation requests. Returns an unsubscribe fn. */
 export function startRemoteTaskHandlers(): () => void {
   const offReadReasoning = window.electron.ipcRenderer.on(
@@ -478,6 +517,19 @@ export function startRemoteTaskHandlers(): () => void {
         void handleGetMergeReadiness(data as GetTaskDiffRequest);
     },
   );
+  const offFixCiPrompt = window.electron.ipcRenderer.on(
+    IPC.Remote_GetFixCiPromptRequest,
+    (data: unknown) => {
+      if (data && typeof data === 'object') void handleGetFixCiPrompt(data as GetTaskDiffRequest);
+    },
+  );
+  const offSendFixCi = window.electron.ipcRenderer.on(
+    IPC.Remote_SendFixCiPromptRequest,
+    (data: unknown) => {
+      if (data && typeof data === 'object')
+        void handleSendFixCiPrompt(data as SendFixCiPromptRequest);
+    },
+  );
   const offMerge = window.electron.ipcRenderer.on(IPC.Remote_MergeTaskRequest, (data: unknown) => {
     if (data && typeof data === 'object') void handleMergeTask(data as MergeTaskRequest);
   });
@@ -530,6 +582,19 @@ export function startRemoteTaskHandlers(): () => void {
       }
     },
   );
+  const offPublishConfidence = window.electron.ipcRenderer.on(
+    IPC.MCP_PublishConfidenceRequest,
+    (data: unknown) => {
+      if (!data || typeof data !== 'object') return;
+      const req = data as GetNotesRequest & { payload: unknown };
+      try {
+        publishTaskConfidence(req.taskId, req.payload);
+        reply(req.reqId, true, { ok: true });
+      } catch (error) {
+        reply(req.reqId, false, undefined, errMessage(error));
+      }
+    },
+  );
   const offPublishGitHubList = window.electron.ipcRenderer.on(
     IPC.MCP_PublishGitHubListRequest,
     (data: unknown) => {
@@ -576,6 +641,7 @@ export function startRemoteTaskHandlers(): () => void {
     offUpdateMap();
     offOpenCanvas();
     offPublishTour();
+    offPublishConfidence();
     offPublishGitHubList();
     offProjects();
     offCreate();
@@ -585,6 +651,8 @@ export function startRemoteTaskHandlers(): () => void {
     offClose();
     offDiff();
     offReadiness();
+    offFixCiPrompt();
+    offSendFixCi();
     offMerge();
   };
 }

@@ -114,3 +114,38 @@ it('toggles the global UI mode preference in General settings', () => {
   checkbox?.click();
   expect(store.preferUiMode).toBe(false);
 });
+
+it('scrolls the active tab from the dialog while keeping its heading and tabs outside', () => {
+  const panel = document.querySelector<HTMLElement>('[role="dialog"]');
+  if (!panel) throw new Error('Missing settings dialog');
+
+  for (const label of ['General', 'Themes', 'MCP', 'Experimental']) {
+    selectTab(label);
+    const body = panel.querySelector<HTMLElement>('[data-dialog-scroll]');
+    if (!body) throw new Error(`Missing ${label} scroll region`);
+    expect(body.getAttribute('role')).toBe('tabpanel');
+    expect(body.contains(panel.querySelector('h2'))).toBe(false);
+    expect(body.contains(panel.querySelector('[role="tablist"]'))).toBe(false);
+    expect(body.contains(panel.querySelector('[aria-label="Close settings"]'))).toBe(false);
+
+    panel.dispatchEvent(new KeyboardEvent('keydown', { key: 'PageDown', bubbles: true }));
+    expect(body.scrollTop).toBe(200);
+    expect(panel.scrollTop).toBe(0);
+    panel.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }));
+    expect(body.scrollTop).toBe(160);
+  }
+});
+
+it('leaves native select keyboard handling alone inside the scrolling tab', () => {
+  const body = document.querySelector<HTMLElement>('[data-dialog-scroll]');
+  const select = body?.querySelector('select');
+  if (!body || !select) throw new Error('Missing settings select');
+  const key = new KeyboardEvent('keydown', {
+    key: 'ArrowDown',
+    bubbles: true,
+    cancelable: true,
+  });
+  select.dispatchEvent(key);
+  expect(key.defaultPrevented).toBe(false);
+  expect(body.scrollTop).toBe(0);
+});

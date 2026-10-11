@@ -37,7 +37,6 @@ export type {
   ResourceGroup,
   ResourceProcess,
   ResourceSnapshot,
-  StepEntry,
   CreditUsage,
   UsageProvider,
   UsageResult,

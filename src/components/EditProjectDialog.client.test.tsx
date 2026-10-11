@@ -24,7 +24,10 @@ it('saves project fields even when the peer-access update fails', async () => {
     color: 'hsl(0, 70%, 75%)',
   };
   setStore('projects', [project]);
-  vi.mocked(invoke).mockRejectedValue(new Error('backend unavailable'));
+  let rejectSave: (error: Error) => void = () => {
+    throw new Error('Save has not started');
+  };
+  vi.mocked(invoke).mockImplementation(() => new Promise((_, reject) => (rejectSave = reject)));
   const onClose = vi.fn();
   const host = document.createElement('div');
   document.body.append(host);
@@ -42,7 +45,14 @@ it('saves project fields even when the peer-access update fails', async () => {
   );
   if (!save) throw new Error('Missing Save button');
   save.click();
+  expect(save.disabled).toBe(true);
+  expect(save.textContent).toBe('Saving…');
+  expect(save.getAttribute('aria-busy')).toBe('true');
+  rejectSave(new Error('backend unavailable'));
   await vi.waitFor(() => expect(document.body.textContent).toContain('backend unavailable'));
+  expect(save.disabled).toBe(false);
+  expect(save.textContent).toBe('Save');
+  expect(save.getAttribute('aria-busy')).toBe('false');
 
   expect(store.projects[0].name).toBe('New name');
   expect(store.projects[0].allowPeerAccess).toBeUndefined();

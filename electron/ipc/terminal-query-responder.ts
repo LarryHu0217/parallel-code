@@ -43,6 +43,11 @@ export interface TerminalQueryResponder {
   resize(cols: number, rows: number): void;
   /** Change how many lines are kept above the viewport; lowering it drops the oldest. */
   setScrollback(lines: number): void;
+  /**
+   * What the renderer's xterm sends for `lines` wheel turns over a 1-based cell,
+   * negative scrolling up. Null when the program is not reading SGR wheel reports.
+   */
+  wheelReport(lines: number, col: number, row: number): string | null;
   dispose(): void;
 }
 
@@ -70,6 +75,26 @@ export function createTerminalQueryResponder(opts: {
   let muted = 0;
   let disposed = false;
   let pendingWrites = 0;
+  // xterm keeps the report encoding private, so follow the same modes it does:
+  // 1006 selects SGR reports, 1016 SGR pixel reports, and resetting either the default.
+  let sgrReports = false;
+  const trackMouseEncoding = (params: (number | number[])[], set: boolean) => {
+    for (const param of params) {
+      if (param === 1006) sgrReports = set;
+      else if (param === 1016) sgrReports = false;
+    }
+    return false;
+  };
+  term.parser.registerCsiHandler({ prefix: '?', final: 'h' }, (params) =>
+    trackMouseEncoding(params, true),
+  );
+  term.parser.registerCsiHandler({ prefix: '?', final: 'l' }, (params) =>
+    trackMouseEncoding(params, false),
+  );
+  term.parser.registerEscHandler({ final: 'c' }, () => {
+    sgrReports = false;
+    return false;
+  });
 
   term.onData((data) => {
     if (disposed || muted > 0 || !CURSOR_POSITION_REPORT.test(data)) return;
@@ -115,6 +140,16 @@ export function createTerminalQueryResponder(opts: {
     },
     setScrollback(lines) {
       if (!disposed) term.options.scrollback = lines;
+    },
+    wheelReport(lines, col, row) {
+      const tracking = term.modes.mouseTrackingMode;
+      // X10 tracking reports presses only. The renderer sends other encodings as
+      // binary events the desktop pane never forwards, so the wheel does nothing there.
+      if (disposed || !lines || !sgrReports || tracking === 'none' || tracking === 'x10')
+        return null;
+      const x = Math.min(term.cols, Math.max(1, col));
+      const y = Math.min(term.rows, Math.max(1, row));
+      return `\x1b[<${lines < 0 ? 64 : 65};${x};${y}M`.repeat(Math.abs(lines));
     },
     dispose() {
       if (disposed) return;

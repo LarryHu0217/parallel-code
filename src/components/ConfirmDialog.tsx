@@ -134,10 +134,10 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
           onClick={() => props.onConfirm()}
           style={{
             padding: '9px 20px',
-            background: props.danger ? theme.error : theme.accent,
-            border: 'none',
+            background: props.danger ? theme.error : undefined,
+            border: props.danger ? 'none' : undefined,
             'border-radius': 'var(--radius-md)',
-            color: props.danger ? '#fff' : theme.accentText,
+            color: props.danger ? '#fff' : undefined,
             cursor: props.confirmDisabled ? 'not-allowed' : 'pointer',
             'font-size': '14px',
             'font-weight': '500',

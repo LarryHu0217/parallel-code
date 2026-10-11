@@ -426,6 +426,22 @@ class RemoteClient(
         )
     }
 
+    /**
+     * The desktop's Fix CI prompt: the failed PR checks and their log tails. Null when nothing
+     * failed. Paired only, since the phone's next step is sending it to the agent.
+     */
+    suspend fun fetchFixCiPrompt(taskId: String): String? =
+        parseFixCiPrompt(
+            api("GET", fixCiPath(taskId), null, pairedTokenOrThrow(), slow = true),
+        )
+
+    /** Send the reviewed Fix CI prompt to the task's agent, exactly as the user left it. */
+    suspend fun sendFixCiPrompt(taskId: String, prompt: String) {
+        api("POST", fixCiPath(taskId), JSONObject().put("prompt", prompt), pairedTokenOrThrow(), slow = true)
+    }
+
+    private fun fixCiPath(taskId: String) = "/api/mobile/tasks/${encodePath(taskId)}/fix-ci"
+
     private val _usage = MutableStateFlow<List<ProviderUsage>>(emptyList())
 
     private val usageRoute = MissingRoutes()
@@ -588,6 +604,25 @@ class RemoteClient(
         send(JSONObject().put("type", "view-size").put("agentId", agentId).put("cols", cols).put("rows", rows))
         viewSizeSent = true
         terminalBuffers[agentId]?.resize(cols, rows)
+    }
+
+    /**
+     * Turn the mouse wheel over an agent's full-screen TUI, as scrolling over the desktop pane
+     * does: the TUI keeps its transcript out of the terminal history. Negative [lines] scroll up.
+     * Needs pairing; the server closes a view-only socket that tries. Agents scroll their
+     * transcript wherever the wheel turns, so it turns over the middle of the screen.
+     */
+    fun scrollTerminal(agentId: String, lines: Int) {
+        val screen = terminalBuffers[agentId]?.screen ?: return
+        if (lines == 0 || !_state.value.canControl) return
+        send(
+            JSONObject()
+                .put("type", "scroll")
+                .put("agentId", agentId)
+                .put("lines", lines.coerceIn(-MAX_SCROLL_LINES, MAX_SCROLL_LINES))
+                .put("col", screen.cols / 2 + 1)
+                .put("row", screen.rows / 2 + 1),
+        )
     }
 
     /** Stream an agent's terminal. Retained for backwards compatibility. */
@@ -867,6 +902,8 @@ class RemoteClient(
         // The server drops a socket message past 64 KiB; leave room for the envelope.
         const val MAX_CHAT_MESSAGE_LENGTH = 60_000
         const val MAX_INPUT_LENGTH = 4096
+        // The server's MAX_SCROLL_LINES: wheel turns in one scroll message.
+        const val MAX_SCROLL_LINES = 100
         const val PREFIX_KEY_DELAY_MS = 50L
     }
 }

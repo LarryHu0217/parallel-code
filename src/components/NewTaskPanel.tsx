@@ -418,7 +418,6 @@ export function NewTaskPanel(props: NewTaskPanelProps) {
   const [branchesError, setBranchesError] = createSignal(false);
   // Bumped by the Retry button to re-run the branch-fetch effect.
   const [branchRetryToken, setBranchRetryToken] = createSignal(0);
-  const [stepsEnabled, setStepsEnabled] = createSignal(store.defaultStepsEnabled);
   const [skipPermissions, setSkipPermissions] = createSignal(store.defaultSkipPermissions);
   const [dockerMode, setDockerMode] = createSignal(false);
   const [dockerImageReady, setDockerImageReady] = createSignal<boolean | null>(null); // null = unknown
@@ -517,7 +516,6 @@ export function NewTaskPanel(props: NewTaskPanelProps) {
       (open) => {
         if (!open) return;
         untrack(() => {
-          setStepsEnabled(store.defaultStepsEnabled);
           setSkipPermissions(store.defaultSkipPermissions);
           setPropagateSkipPermissions(store.defaultPropagateSkipPermissions);
         });
@@ -1117,7 +1115,6 @@ export function NewTaskPanel(props: NewTaskPanelProps) {
         initialPrompt: isFromDrop ? undefined : p,
         githubUrl: ghUrl,
         pullRequestNumber: githubPr()?.number,
-        stepsEnabled: stepsEnabled(),
         skipPermissions: agentSupportsSkipPermissions() && skipPermissions(),
         dockerMode: dockerMode() || undefined,
         dockerSource: dockerMode()
@@ -1369,7 +1366,6 @@ export function NewTaskPanel(props: NewTaskPanelProps) {
             selectedAgent={selectedAgent()}
             dockerMode={dockerMode()}
             onSelect={setSelectedAgent}
-            wrap={false}
           />
 
           <Show when={gitIsolation() === 'direct' && !isNonGitProject()}>
@@ -1593,15 +1589,6 @@ export function NewTaskPanel(props: NewTaskPanelProps) {
 
               {/* Checkboxes group */}
               <div style={{ display: 'flex', 'flex-direction': 'column', gap: '10px' }}>
-                <div data-nav-field="steps-enabled">
-                  <CheckboxOption
-                    title="Instructs the agent to append progress entries to .claude/steps.json. Each entry is shown live in the Steps panel as the agent works."
-                    label="Steps tracking"
-                    checked={stepsEnabled()}
-                    onChange={setStepsEnabled}
-                  />
-                </div>
-
                 <Show when={agentSupportsSkipPermissions()}>
                   <div
                     data-nav-field="skip-permissions"
@@ -1718,10 +1705,7 @@ export function NewTaskPanel(props: NewTaskPanelProps) {
             disabled={!canSubmit()}
             style={{
               padding: '9px 20px',
-              background: theme.accent,
-              border: 'none',
               'border-radius': 'var(--radius-md)',
-              color: theme.accentText,
               cursor: 'pointer',
               'font-size': '14px',
               'font-weight': '500',
