@@ -19,7 +19,7 @@ export interface ActivityActions {
 }
 
 /** A command line above its output, as a terminal shows it. */
-function CommandOutput(props: { command: string; output: string; running: boolean }) {
+export function CommandOutput(props: { command: string; output: string; running: boolean }) {
   return (
     <pre class="chat-command">
       <span class="chat-command-line">$ {props.command}</span>

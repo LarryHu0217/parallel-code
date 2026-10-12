@@ -79,6 +79,7 @@ export function TaskTitleBar(props: TaskTitleBarProps) {
   const snoozedUntil = () => getTaskSnoozedUntil(props.task.id);
   const dockerBadgeLabel = () => getTaskDockerBadgeLabel(props.task.dockerSource);
   const isLandedTask = () => isLandedTaskState(props.task.landingState);
+  const canFinish = () => props.task.gitIsolation === 'worktree' && !isLandedTask();
   const landingBadge = () => {
     switch (props.task.landingState) {
       case 'landed_pending_review':
@@ -184,9 +185,28 @@ export function TaskTitleBar(props: TaskTitleBarProps) {
             </span>
             <Show when={checkSignal()}>
               {(signal) => (
-                <span style={{ color: signal().color }} title={signal().title}>
-                  {` · ${signal().label}`}
-                </span>
+                // The Finish dialog is where flags are accepted and checks rerun.
+                <Show
+                  when={canFinish()}
+                  fallback={
+                    <span style={{ color: signal().color }} title={signal().title}>
+                      {` · ${signal().label}`}
+                    </span>
+                  }
+                >
+                  <button
+                    type="button"
+                    class="task-check-signal"
+                    style={{ color: signal().color }}
+                    title={`${signal().title}\n\nOpen Finish to review.`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      props.onFinish();
+                    }}
+                  >
+                    {` · ${signal().label}`}
+                  </button>
+                </Show>
               )}
             </Show>
           </span>
@@ -248,7 +268,7 @@ export function TaskTitleBar(props: TaskTitleBarProps) {
       </div>
       <div class="task-title-actions">
         <div class="task-action-group" role="group" aria-label="Task actions">
-          <Show when={props.task.gitIsolation === 'worktree' && !isLandedTask()}>
+          <Show when={canFinish()}>
             <button
               type="button"
               class="task-finish-btn"

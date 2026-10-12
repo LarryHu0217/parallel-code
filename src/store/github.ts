@@ -51,10 +51,21 @@ export async function mergePullRequestForTask(
 ): Promise<boolean> {
   const merged = await invoke<boolean>(IPC.MergePullRequest, merge);
   // Re-poll soon so the watcher sees the merge and drops the PR status.
-  void invoke(IPC.RefreshPrChecksWatcher, { taskId }).catch((err: unknown) =>
-    logWarn('github', 'Failed to refresh PR checks after merge', { err: String(err) }),
-  );
+  refreshPrChecks(taskId);
   return merged;
+}
+
+/** Takes the task's draft PR out of draft so it can be merged. */
+export async function markPullRequestReadyForTask(taskId: string, prUrl: string): Promise<void> {
+  await invoke(IPC.MarkPullRequestReady, { prUrl });
+  // The PR chip shows Draft until the watcher polls again.
+  refreshPrChecks(taskId);
+}
+
+function refreshPrChecks(taskId: string): void {
+  void invoke(IPC.RefreshPrChecksWatcher, { taskId }).catch((err: unknown) =>
+    logWarn('github', 'Failed to refresh PR checks', { err: String(err) }),
+  );
 }
 
 /** The "fix CI" prompt for a PR's failed checks, or null when nothing failed. */

@@ -20,7 +20,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
@@ -51,6 +51,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -192,6 +193,7 @@ fun ChatScreen(
                 }
             } else {
                 ChatTranscript(
+                    agentId = agentId,
                     chat = current,
                     agentName = agentName,
                     canRespond = canSend,
@@ -247,16 +249,35 @@ private fun Banner(text: String, error: Boolean = false) {
 
 @Composable
 private fun ChatTranscript(
+    agentId: String,
     chat: ChatState,
     agentName: String,
     canRespond: Boolean,
     respond: suspend (ChatRequest, String, Map<String, String>) -> Unit,
     modifier: Modifier,
 ) {
-    val list = rememberLazyListState()
+    val list = remember(agentId) {
+        val (index, offset) = chatOpeningScroll(chatKeys(chat), chatScrolls[agentId])
+        LazyListState(index, offset)
+    }
     val count = chat.items.size + chat.requests.size
+    val currentCount by rememberUpdatedState(count)
+    // Leaving the chat (back, another task, a rotation) remembers where the reader was.
+    DisposableEffect(list) {
+        onDispose {
+            // Never laid out (disposed before its first frame): keep what was saved before.
+            val first = list.layoutInfo.visibleItemsInfo.firstOrNull { it.index == list.firstVisibleItemIndex }
+                ?: return@onDispose
+            if (leftAtNewest(first.index, currentCount - 1, list.canScrollForward)) chatScrolls.remove(agentId)
+            else chatScrolls[agentId] = ChatScroll(first.key, list.firstVisibleItemScrollOffset)
+        }
+    }
+    val newestLength = chat.items.lastOrNull()?.text?.length
+    // The list opens where the reader left it, or at its end: follow only what arrives after that.
+    val opening = remember(list) { count to newestLength }
     // Follow the conversation while the reader is at its end; leave them be if they scrolled up.
-    LaunchedEffect(count, chat.items.lastOrNull()?.text?.length) {
+    LaunchedEffect(count, newestLength) {
+        if (count to newestLength == opening) return@LaunchedEffect
         val last = list.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
         if (count > 0 && last >= list.layoutInfo.totalItemsCount - 3) list.animateScrollToItem(count - 1)
     }
@@ -266,7 +287,7 @@ private fun ChatTranscript(
         contentPadding = PaddingValues(12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        items(chat.items, key = { "item:${it.id}" }) { item ->
+        items(chat.items, key = ::chatItemKey) { item ->
             // New messages fade and rise in; existing ones slide when others arrive.
             Box(Modifier.animateItem(fadeInSpec = tween(220), placementSpec = spring(stiffness = Spring.StiffnessMediumLow))) {
                 when (item.kind) {
@@ -278,13 +299,42 @@ private fun ChatTranscript(
                 }
             }
         }
-        items(chat.requests, key = { "request:${it.id}" }) { request ->
+        items(chat.requests, key = ::chatRequestKey) { request ->
             Box(Modifier.animateItem()) { RequestCard(request, agentName, canRespond, respond) }
         }
         if (chat.status == "working" && chat.requests.isEmpty()) {
             item(key = "typing") { TypingIndicator(Modifier.animateItem()) }
         }
     }
+}
+
+private fun chatItemKey(item: ChatItem): Any = "item:${item.id}"
+
+private fun chatRequestKey(request: ChatRequest): Any = "request:${request.id}"
+
+private fun chatKeys(chat: ChatState) = chat.items.map(::chatItemKey) + chat.requests.map(::chatRequestKey)
+
+/** Where a reader left a chat: the list key of the first item on screen and how far it was scrolled. */
+internal data class ChatScroll(val key: Any, val offset: Int)
+
+/**
+ * Where each chat was left, by agent id. A chat left at its newest message keeps nothing, so it
+ * reopens on whatever is newest by then.
+ */
+// shortcut: in memory only, so a restarted app opens every chat at its end; persist it if that matters.
+private val chatScrolls = mutableMapOf<String, ChatScroll>()
+
+/**
+ * Whether a reader left a chat on its newest message: scrolled to the end, or reading a newest
+ * message taller than the screen. Then nothing is kept, so it reopens on whatever is newest.
+ */
+internal fun leftAtNewest(firstIndex: Int, newestIndex: Int, canScrollForward: Boolean) =
+    !canScrollForward || firstIndex >= newestIndex
+
+/** The first item index and offset a chat opens at: where it was left, else its newest message. */
+internal fun chatOpeningScroll(keys: List<Any>, saved: ChatScroll?): Pair<Int, Int> {
+    val index = saved?.let { keys.indexOf(it.key) } ?: -1
+    return if (saved != null && index >= 0) index to saved.offset else maxOf(keys.lastIndex, 0) to 0
 }
 
 /** Three dots rising in turn while the agent works. */

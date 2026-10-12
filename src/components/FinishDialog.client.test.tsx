@@ -6,6 +6,7 @@ import { invoke } from '../lib/ipc';
 import { getPrChecks, mergeTask, pushTask } from '../store/store';
 import {
   getPullRequestDetails,
+  markPullRequestReadyForTask,
   mergePullRequestForTask,
   stageFailedChecksPrompt,
 } from '../store/github';
@@ -86,6 +87,7 @@ vi.mock('../store/tasks', () => ({ sendPrompt: vi.fn() }));
 vi.mock('../store/notification', () => ({ showNotification: vi.fn() }));
 vi.mock('../store/github', () => ({
   getPullRequestDetails: vi.fn(),
+  markPullRequestReadyForTask: vi.fn(),
   mergePullRequestForTask: vi.fn(),
   stageFailedChecksPrompt: vi.fn(),
   stageReviewFeedbackPrompt: vi.fn(),
@@ -532,6 +534,21 @@ describe('FinishDialog with an open PR', () => {
     bypassCheckbox()?.click();
     expect(confirmButton()?.disabled).toBe(true);
     expect(document.querySelector('[data-testid="footer-note"]')?.textContent).toContain(note);
+  });
+
+  it('marks a draft PR ready for review, then allows the merge', async () => {
+    vi.mocked(getPullRequestDetails).mockResolvedValueOnce(prDetails({ isDraft: true }));
+    vi.mocked(getPullRequestDetails).mockResolvedValueOnce(prDetails());
+    vi.mocked(markPullRequestReadyForTask).mockResolvedValueOnce(undefined);
+    mount({ task: task({ prUrl: PR_URL }) });
+    await flush();
+    expect(confirmButton()?.disabled).toBe(true);
+    button('Mark ready for review')?.click();
+    await flush();
+    await flush();
+    expect(markPullRequestReadyForTask).toHaveBeenCalledWith('parent', PR_URL);
+    expect(button('Mark ready for review')).toBeUndefined();
+    expect(confirmButton()?.disabled).toBe(false);
   });
 
   it('merges a protection-blocked PR only after opting into the admin bypass', async () => {

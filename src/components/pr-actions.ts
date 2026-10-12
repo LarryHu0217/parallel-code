@@ -3,6 +3,7 @@ import { parseGitHubUrl } from '../lib/github-url';
 import { errMessage } from '../lib/log';
 import {
   getPullRequestDetails,
+  markPullRequestReadyForTask,
   mergePullRequestForTask,
   stageFailedChecksPrompt,
   stageReviewFeedbackPrompt,
@@ -11,7 +12,7 @@ import { getPrChecks } from '../store/store';
 import type { PrMergeMethod, PullRequestDetails } from '../ipc/types';
 import type { Task } from '../store/types';
 
-export type PrBusy = 'fix-ci' | 'review' | 'merge' | null;
+export type PrBusy = 'fix-ci' | 'review' | 'merge' | 'ready' | null;
 export type PrMergeOutcome = 'merged' | 'queued' | 'failed';
 
 export const PR_METHOD_LABELS: Record<PrMergeMethod, string> = {
@@ -45,7 +46,7 @@ export const prIsBlocked = (pr: PullRequestDetails): boolean => pr.mergeStateSta
 export function prMergeBlocker(pr: PullRequestDetails, bypass = false): string | null {
   if (pr.state === 'MERGED') return 'Already merged.';
   if (pr.state === 'CLOSED') return 'The pull request is closed.';
-  if (pr.isDraft) return 'Draft pull requests cannot be merged. Mark it ready on GitHub first.';
+  if (pr.isDraft) return 'Draft pull requests cannot be merged. Mark it ready for review first.';
   if (pr.mergeable === 'CONFLICTING') return 'The branch has conflicts with its base branch.';
   if (pr.mergeStateStatus === 'BEHIND')
     return 'The branch must be updated with its base branch first.';
@@ -134,7 +135,34 @@ export function createPrActions(props: PrActionsProps) {
     }
   }
 
-  return { details, pr, refetch, busy, error, info, method: chosenMethod, setMethod, stage, merge };
+  async function markReady(): Promise<void> {
+    const url = props.prUrl;
+    if (!url) return;
+    begin('ready');
+    try {
+      await markPullRequestReadyForTask(props.task.id, url);
+      // Stay busy until the refetch lands, so the merge never acts on the draft state.
+      await refetch();
+    } catch (err) {
+      setError(errMessage(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return {
+    details,
+    pr,
+    refetch,
+    busy,
+    error,
+    info,
+    method: chosenMethod,
+    setMethod,
+    stage,
+    merge,
+    markReady,
+  };
 }
 
 interface FinishPrProps {

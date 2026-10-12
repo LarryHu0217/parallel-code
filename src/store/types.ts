@@ -628,7 +628,7 @@ export interface AppStore {
   taskNameModel: TaskNameModelId;
   /** Opt-in: write a task brief with the naming model after each agent turn. */
   taskBriefs: boolean;
-  /** Prompt "Rate confidence" sends; empty uses the built-in self-check. */
+  /** Prompt "Rate confidence" sends; empty uses the built-in audit. */
   confidencePrompt: string;
   showSidebarTips: boolean;
   showSidebarProgress: boolean;

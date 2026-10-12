@@ -153,6 +153,7 @@
   "GetPrFailedChecks": "get_pr_failed_checks",
   "GetPrReviewFeedback": "get_pr_review_feedback",
   "MergePullRequest": "merge_pull_request",
+  "MarkPullRequestReady": "mark_pull_request_ready",
   "GetEslintQualityFindings": "get_eslint_quality_findings",
   "RunTaskVerification": "run_task_verification",
   "CancelTaskVerification": "cancel_task_verification",

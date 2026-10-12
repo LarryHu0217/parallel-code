@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -129,6 +129,31 @@ describe('Claude chat adapter', () => {
     await h.chat.selectModel('claude-fixture');
     expect(h.chat.state.contextUsage?.maxTokens).toBe(1000000);
     expect(h.controls.getContextUsage).toHaveBeenCalledTimes(3);
+  });
+
+  it('lists the slash commands and skills the CLI reports, and replaces them when they change', async () => {
+    const h = harness();
+    h.controls.initializationResult.mockResolvedValueOnce({
+      commands: [
+        { name: 'review', description: 'Review the diff', argumentHint: '<pr>' },
+        { name: '', description: 'Nameless entries are dropped', argumentHint: '' },
+      ],
+    } as never);
+    await h.chat.start();
+    expect(h.chat.state.commands).toEqual([
+      { name: 'review', description: 'Review the diff', argumentHint: '<pr>' },
+    ]);
+    await h.emit({
+      type: 'system',
+      subtype: 'commands_changed',
+      commands: [{ name: 'deploy', description: 'Ship it' }],
+    });
+    expect(h.chat.state.commands).toEqual([
+      { name: 'deploy', description: 'Ship it', argumentHint: '' },
+    ]);
+    expect(h.publish).toHaveBeenLastCalledWith(
+      expect.objectContaining({ commands: h.chat.state.commands }),
+    );
   });
 
   it('ignores stale context responses and reports unavailable summaries without failing chat', async () => {
@@ -458,6 +483,45 @@ describe('Claude chat adapter', () => {
     expect(h.chat.state.status).toBe('ready');
   });
 
+  it('matches streamed text to a reply the CLI splits into one message per block', async () => {
+    const h = harness();
+    await h.chat.start();
+    await h.send();
+    const delta = (index: number, text: string) =>
+      h.emit({
+        type: 'stream_event',
+        event: { type: 'content_block_delta', index, delta: { type: 'text_delta', text } },
+      });
+    const block = (uuid: string, content: unknown) =>
+      h.emit({ type: 'assistant', uuid, message: { id: 'reply', content: [content] } });
+    await h.emit({
+      type: 'stream_event',
+      event: { type: 'message_start', message: { id: 'reply' } },
+    });
+    await block('thinking', { type: 'thinking', thinking: 'Hmm' });
+    await delta(1, 'Al');
+    await block('first', { type: 'text', text: 'All tests pass.' });
+    // The CLI forwards no message for a blank block, so it cannot be counted on.
+    await delta(2, '');
+    await block('tool', { type: 'tool_use', id: 'tool-1', name: 'Read', input: {} });
+    await delta(4, 'All');
+    // A repeat lands where its block did, not on a later block its text happens to extend.
+    await block('first', { type: 'text', text: 'All tests pass.' });
+    await block('last', { type: 'text', text: 'All done.' });
+    // Unstreamed blocks of one reply, as history replays them, must not replace each other.
+    for (const text of ['Earlier.', 'Later.'])
+      await h.emit({
+        type: 'assistant',
+        uuid: text,
+        message: { id: 'history', content: [{ type: 'text', text }] },
+      });
+    expect(
+      h.chat.state.items
+        .filter((item) => item.kind !== 'assistant' || item.text.trim())
+        .map((item) => (item.kind === 'assistant' ? item.text : item.kind)),
+    ).toEqual(['user', 'All tests pass.', 'tool', 'All done.', 'Earlier.', 'Later.']);
+  });
+
   it('keeps the words the user sent and cleans up only the turns it did not send', async () => {
     const h = harness();
     await h.chat.start();
@@ -499,6 +563,181 @@ describe('Claude chat adapter', () => {
     expect(h.chat.state.items.map(({ kind, text }) => ({ kind, text }))).toEqual([
       { kind: 'user', text: '/model claude-fable-5-1' },
       { kind: 'assistant', text: 'Set model to `claude-fable-5-1`' },
+    ]);
+  });
+
+  it('runs a ! command in the worktree and lets Claude answer its output', async () => {
+    const cwd = mkdtempSync(join(settingsDir, 'shell-'));
+    const h = harness([], undefined, { cwd });
+    await h.chat.start();
+    const running = h.chat.runShell('pwd; echo oops >&2; exit 3');
+    expect(h.chat.state.status).toBe('working');
+    expect(h.chat.state.items[0]).toMatchObject({
+      kind: 'shell',
+      activity: { command: 'pwd; echo oops >&2; exit 3', status: 'running' },
+    });
+    await running;
+    await vi.waitFor(() => expect(h.chat.state.items[0].activity?.status).toBe('failed'));
+    const item = h.chat.state.items[0];
+    expect(item.text).toContain(cwd);
+    expect(item.text).toContain('oops');
+    expect(item.activity).toMatchObject({ status: 'failed', exitCode: 3 });
+    const prompt = h.sdk.query.mock.calls[0][0].prompt as AsyncIterable<SDKUserMessage>;
+    const { value } = await prompt[Symbol.asyncIterator]().next();
+    // The terminal's shell mode starts a turn on the output; Chat does the same.
+    expect(value).toMatchObject({ uuid: item.id, shouldQuery: true });
+    expect(value?.message.content).toBe(
+      `<bash-input>pwd; echo oops >&2; exit 3</bash-input>\n<bash-stdout>${cwd}\n</bash-stdout><bash-stderr>oops\n\nExit code 3</bash-stderr>`,
+    );
+    // The CLI's replay of the entry must not show the command a second time, and
+    // the chat stays busy through Claude's answer, so no prompt can overtake it.
+    await h.emit({ ...value, isReplay: true });
+    expect(h.chat.state.items).toHaveLength(1);
+    await h.emit({
+      type: 'assistant',
+      message: { id: 'reply', content: [{ type: 'text', text: 'It exited with code 3.' }] },
+    });
+    expect(h.chat.state.items[1]).toMatchObject({
+      kind: 'assistant',
+      text: 'It exited with code 3.',
+    });
+    expect(h.chat.state.status).toBe('working');
+    await h.emit({ type: 'result', is_error: false });
+    expect(h.chat.state.status).toBe('ready');
+  });
+
+  it('stops a running ! command and tells the model it was stopped', async () => {
+    const h = harness([], undefined, { cwd: settingsDir });
+    await h.chat.start();
+    // Returns once the command starts, so the composer is free to queue a follow-up.
+    await h.chat.runShell('echo started; sleep 30');
+    expect(h.chat.state.items[0].activity?.status).toBe('running');
+    await vi.waitFor(() => expect(h.chat.state.items[0]?.text).toContain('started'));
+    await h.chat.interrupt();
+    await vi.waitFor(() => expect(h.chat.state.items[0].activity?.status).toBe('interrupted'));
+    expect(h.controls.interrupt).not.toHaveBeenCalled();
+    const prompt = h.sdk.query.mock.calls[0][0].prompt as AsyncIterable<SDKUserMessage>;
+    const { value } = await prompt[Symbol.asyncIterator]().next();
+    expect(value?.message.content).toContain('Stopped by the user.');
+    // Stopping says the user is done with it; Claude reads it with the next message.
+    expect(value).toMatchObject({ shouldQuery: false });
+  });
+
+  it('gives the model command output without terminal colours', async () => {
+    const h = harness([], undefined, { cwd: settingsDir });
+    await h.chat.start();
+    await h.chat.runShell("printf '\\033[31mred\\033[0m'");
+    const prompt = h.sdk.query.mock.calls[0][0].prompt as AsyncIterable<SDKUserMessage>;
+    const { value } = await prompt[Symbol.asyncIterator]().next();
+    expect(value?.message.content).toContain('<bash-stdout>red</bash-stdout>');
+  });
+
+  it('ends background jobs a ! command left behind when the chat closes', async () => {
+    const cwd = mkdtempSync(join(settingsDir, 'shell-'));
+    const h = harness([], undefined, { cwd });
+    await h.chat.start();
+    await h.chat.runShell('(sleep 30 & echo $! > job.pid); echo started');
+    await vi.waitFor(() => expect(h.chat.state.items[0].activity?.status).toBe('completed'));
+    const pid = Number(readFileSync(join(cwd, 'job.pid'), 'utf8'));
+    expect(() => process.kill(pid, 0)).not.toThrow();
+    h.chat.stop();
+    await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow());
+  });
+
+  it('refuses a ! command while Claude is answering', async () => {
+    const h = harness();
+    await h.chat.start();
+    await h.send();
+    await expect(h.chat.runShell('ls')).rejects.toThrow('Wait for Claude to finish');
+  });
+
+  it("shows ! commands from the transcript, including the terminal's two-turn form", async () => {
+    const h = harness(
+      [
+        {
+          type: 'user',
+          uuid: 'terminal-command',
+          message: { role: 'user', content: '<bash-input>git status</bash-input>' },
+        },
+        {
+          type: 'user',
+          uuid: 'terminal-output',
+          message: {
+            role: 'user',
+            content: '<bash-stdout>On branch main</bash-stdout><bash-stderr></bash-stderr>',
+          },
+        },
+        {
+          type: 'user',
+          uuid: 'chat-command',
+          message: {
+            role: 'user',
+            content:
+              '<bash-input>false</bash-input>\n<bash-stdout></bash-stdout><bash-stderr>Exit code 1</bash-stderr>',
+          },
+        },
+        {
+          type: 'user',
+          uuid: 'killed-command',
+          message: {
+            role: 'user',
+            content:
+              '<bash-input>make</bash-input>\n<bash-stdout></bash-stdout><bash-stderr>Exit code unknown</bash-stderr>',
+          },
+        },
+        {
+          type: 'user',
+          uuid: 'stopped-command',
+          message: {
+            role: 'user',
+            content:
+              '<bash-input>npm run dev</bash-input>\n<bash-stdout>\u001b[32mready\u001b[0m\n</bash-stdout><bash-stderr>Stopped by the user.</bash-stderr>',
+          },
+        },
+      ] as unknown as SessionMessage[],
+      'saved-session',
+    );
+    await h.chat.start();
+    expect(
+      h.chat.state.items.map(({ kind, text, activity }) => ({ kind, text, activity })),
+    ).toEqual([
+      {
+        kind: 'shell',
+        text: 'On branch main',
+        activity: {
+          type: 'command',
+          label: 'git status',
+          command: 'git status',
+          status: 'completed',
+        },
+      },
+      // A reload shows a command the way it looked when it ran.
+      {
+        kind: 'shell',
+        text: '',
+        activity: {
+          type: 'command',
+          label: 'false',
+          command: 'false',
+          status: 'failed',
+          exitCode: 1,
+        },
+      },
+      {
+        kind: 'shell',
+        text: '',
+        activity: { type: 'command', label: 'make', command: 'make', status: 'failed' },
+      },
+      {
+        kind: 'shell',
+        text: 'ready',
+        activity: {
+          type: 'command',
+          label: 'npm run dev',
+          command: 'npm run dev',
+          status: 'interrupted',
+        },
+      },
     ]);
   });
 
@@ -731,6 +970,40 @@ describe('Claude chat adapter', () => {
     });
     await h.send();
     await expect(h.chat.selectModel('claude-fixture')).rejects.toThrow('Wait for Claude');
+  });
+
+  it('names the model and effort the CLI applies instead of its defaults', async () => {
+    const h = harness();
+    const getSettings = vi.fn(
+      async (): Promise<{ applied: { model: string; effort: string | null } }> => ({
+        applied: { model: 'claude-fixture', effort: 'high' },
+      }),
+    );
+    Object.assign(h.controls, { getSettings });
+    h.controls.supportedModels.mockResolvedValueOnce([
+      {
+        value: 'default',
+        resolvedModel: 'claude-fixture',
+        displayName: 'Default (recommended)',
+        supportedEffortLevels: ['low', 'high'],
+      },
+      {
+        value: 'sonnet',
+        resolvedModel: 'claude-fixture',
+        displayName: 'Claude Fixture',
+        supportedEffortLevels: ['low', 'high'],
+      },
+    ]);
+    await h.chat.start();
+    expect(h.chat.state.models?.map((model) => model.displayName)).toEqual(['Claude Fixture']);
+    expect(h.chat.state).toMatchObject({ model: 'claude-fixture', reasoningEffort: 'high' });
+    // Clearing the effort leaves the model's own default, which the CLI then names.
+    getSettings.mockResolvedValueOnce({ applied: { model: 'claude-fixture', effort: 'low' } });
+    await h.chat.selectModel('claude-fixture');
+    expect(h.chat.state.reasoningEffort).toBe('low');
+    getSettings.mockResolvedValueOnce({ applied: { model: 'claude-fixture', effort: null } });
+    await h.chat.selectModel('claude-fixture');
+    expect(h.chat.state.reasoningEffort).toBeUndefined();
   });
 
   it('explains a launch failure with the CLI output', async () => {

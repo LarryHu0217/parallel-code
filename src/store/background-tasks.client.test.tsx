@@ -6,6 +6,7 @@ import { store, setStore } from './core';
 import { AGENT_HOOK_STALE_MS, applyAgentHookEvent, getAgentHookStatus } from './agentHookStatus';
 import { clearAgentActivity, getTaskAttentionState, markAgentBusy } from './taskStatus';
 import { invoke } from '../lib/ipc';
+import { info } from '../lib/log';
 import { IPC } from '../../electron/ipc/channels';
 import { collapseTask, uncollapseTask } from './tasks';
 import { setActiveTask } from './navigation';
@@ -25,6 +26,10 @@ import {
 import type { Task } from './types';
 
 vi.mock('../lib/ipc', () => ({ invoke: vi.fn(), fireAndForget: vi.fn() }));
+vi.mock('../lib/log', async (original) => ({
+  ...(await original<typeof import('../lib/log')>()),
+  info: vi.fn(),
+}));
 
 function task(id: string): Task {
   return {
@@ -659,6 +664,35 @@ it('returns a CI snooze when the PR stops being watched', () => {
   snoozeTaskUntilCi('one');
   removePrChecks('one');
   expect(isTaskBackgrounded('one')).toBe(false);
+});
+
+it.each([
+  ['ci finished', () => setPrChecks('one', { ...prChecks, overall: 'success', pending: 0 })],
+  ['checks gone', () => removePrChecks('one')],
+  ['activated', () => setActiveTask('one')],
+] as const)('logs %s as the reason a CI snooze returned', (reason, wake) => {
+  setPrChecks('one', { ...prChecks });
+  snoozeTaskUntilCi('one');
+  vi.mocked(info).mockClear();
+  wake();
+  expect(isTaskBackgrounded('one')).toBe(false);
+  expect(info).toHaveBeenCalledWith(
+    'background-tasks',
+    'returning task',
+    expect.objectContaining({ taskId: 'one', reason }),
+  );
+});
+
+it('logs who activates a CI-snoozed task', () => {
+  setPrChecks('one', { ...prChecks });
+  snoozeTaskUntilCi('one');
+  vi.mocked(info).mockClear();
+  setActiveTask('one');
+  expect(info).toHaveBeenCalledWith(
+    'background-tasks',
+    'activating snoozed task',
+    expect.objectContaining({ taskId: 'one', stack: expect.stringContaining('setActiveTask') }),
+  );
 });
 
 it('switches a backgrounded coordinator group to its own PR from a child', () => {

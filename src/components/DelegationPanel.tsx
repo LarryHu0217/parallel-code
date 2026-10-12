@@ -106,6 +106,9 @@ export function DelegationPanel(props: {
       state: 'handled',
     });
   }
+  // Chat mode registers only canvas tools, so no restart can give its pane delegation tools.
+  const isChatPane = (agentId: string) =>
+    props.task.mainAgentView === 'chat' && props.task.agentIds[0] === agentId;
   const rolloutAgents = () => {
     if (
       !store.mcpOrchestrationEnabled ||
@@ -115,6 +118,7 @@ export function DelegationPanel(props: {
     )
       return [];
     return props.task.agentIds
+      .filter((id) => !isChatPane(id))
       .map((id) => store.agents[id])
       .filter(
         (agent) => agent && !agent.capabilities?.canCreate && isSupportedDelegationAgent(agent.def),
@@ -127,8 +131,7 @@ export function DelegationPanel(props: {
       !!props.task.agentSessionIds?.[agentId] &&
       canResumeSessionId(agent.def.command) &&
       !hasUserMcpConfiguration(agent.def.args) &&
-      !hasUserMcpConfiguration(agent.def.resume_args ?? []) &&
-      !(props.task.mainAgentView === 'chat' && props.task.agentIds[0] === agentId)
+      !hasUserMcpConfiguration(agent.def.resume_args ?? [])
     );
   };
   async function restartForTools(agentId: string) {

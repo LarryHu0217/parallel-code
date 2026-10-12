@@ -16,11 +16,12 @@ export interface RemoteChatSource {
 export const CHAT_FRAME_INTERVAL_MS = 200;
 
 /**
- * The conversation as a phone receives it.
+ * The conversation as a phone receives it, without the slash-command list that
+ * only the desktop composer completes from.
  * shortcut: images are dropped rather than sent — base64 attachments would ride
  * along in every frame; serve them by URL if phones should show them.
  */
-function phoneFrame(state: AgentChatState): AgentChatState {
+function phoneFrame({ commands: _commands, ...state }: AgentChatState): AgentChatState {
   if (!state.items.some((item) => item.images?.length)) return state;
   return { ...state, items: state.items.map(({ images: _images, ...item }) => item) };
 }

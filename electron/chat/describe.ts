@@ -90,6 +90,35 @@ export function visibleUserText(text: string): string {
     .trim();
 }
 
+// How Chat ends stderr for a command that did not succeed; see shell-command.ts.
+const SHELL_STATUS = /\n?(?:Exit code (\d+|unknown)|(Stopped by the user\.))$/;
+
+/**
+ * A `!` command the user ran, as the CLI records it: the terminal writes the
+ * command and its output as two user turns, Chat writes both in one. Undefined
+ * for any other turn.
+ */
+export function shellTurn(
+  text: string,
+):
+  | { command?: string; output: string; exitCode?: number; failed?: boolean; stopped?: boolean }
+  | undefined {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith('<bash-input>') && !trimmed.startsWith('<bash-stdout>')) return undefined;
+  const stderr = tag(text, 'bash-stderr');
+  const status = SHELL_STATUS.exec(stderr);
+  const output = [tag(text, 'bash-stdout'), stderr.replace(SHELL_STATUS, '')]
+    .filter(Boolean)
+    .join('\n');
+  return {
+    ...(trimmed.startsWith('<bash-input>') ? { command: tag(text, 'bash-input') } : {}),
+    output,
+    ...(status?.[1] ? { failed: true } : {}),
+    ...(status?.[1] && status[1] !== 'unknown' ? { exitCode: Number(status[1]) } : {}),
+    ...(status?.[2] ? { stopped: true } : {}),
+  };
+}
+
 /** What a slash command printed, which the CLI records as a user turn. */
 export function localCommandOutput(text: string): string {
   return [tag(text, 'local-command-stdout'), tag(text, 'local-command-stderr')]

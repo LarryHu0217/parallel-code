@@ -8,6 +8,7 @@ import type { RemoteAgent } from '../../electron/remote/protocol';
 
 const terminalMocks = vi.hoisted(() => ({
   scrollLines: vi.fn(),
+  scrollToBottom: vi.fn(),
   refresh: vi.fn(),
   options: { fontSize: 14 },
   scrollback: undefined as ((data: string, cols: number, rows: number) => void) | undefined,
@@ -57,7 +58,9 @@ vi.mock('@xterm/xterm', () => ({
     scrollLines(lines: number) {
       terminalMocks.scrollLines(lines);
     }
-    scrollToBottom() {}
+    scrollToBottom() {
+      terminalMocks.scrollToBottom();
+    }
   },
 }));
 const wsMocks = vi.hoisted(() => ({ canControl: true }));
@@ -809,6 +812,21 @@ describe('phone terminal viewport', () => {
     terminalMocks.scrollback?.('', 100, 60);
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
     expect(scroller.scrollTop).toBe(120);
+  });
+
+  it('brings a scrolled reader back to the latest rows once a reply is sent', async () => {
+    vi.mocked(sendInput).mockResolvedValue(undefined);
+    localStorage.setItem('parallel-mobile:output-view', 'terminal');
+    mount();
+    const { scroller } = viewport();
+    scroller.scrollTop = 120;
+    scroller.dispatchEvent(new Event('scroll'));
+    terminalMocks.scrollToBottom.mockClear();
+    type('Looks good');
+    click('Send');
+    await vi.waitFor(() => expect(scroller.scrollTop).toBe(900));
+    expect(terminalMocks.scrollToBottom).toHaveBeenCalled();
+    expect(host.textContent).not.toContain('Latest output');
   });
 });
 

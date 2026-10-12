@@ -160,6 +160,7 @@ const ALLOWED_CHANNELS = new Set([
   'get_pr_failed_checks',
   'get_pr_review_feedback',
   'merge_pull_request',
+  'mark_pull_request_ready',
   'get_eslint_quality_findings',
   'run_task_verification',
   'cancel_task_verification',

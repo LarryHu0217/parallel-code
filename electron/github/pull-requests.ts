@@ -100,6 +100,12 @@ export async function mergePullRequest(
   }
 }
 
+/** Takes a draft PR out of draft (`gh pr ready`); GitHub refuses drafts a merge. */
+export async function markPullRequestReady(prUrl: string): Promise<void> {
+  requirePrRef(prUrl);
+  await runGh(['pr', 'ready', prUrl]);
+}
+
 /** Failed checks of the PR head, with job log tails for GitHub Actions jobs. */
 export async function getFailedChecks(prUrl: string): Promise<PrFailedCheck[]> {
   const ref = requirePrRef(prUrl);

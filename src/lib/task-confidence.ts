@@ -39,8 +39,18 @@ export function isConfidenceStale(
   return brief.generatedAt > confidence.publishedAt && brief.fingerprint !== confidence.fingerprint;
 }
 
+// An agent rating its own work from memory scores high, so the default asks for
+// an audit by a fresh sub-agent where the agent supports one, and for scores
+// grounded in the diff and test runs either way.
 export const DEFAULT_CONFIDENCE_PROMPT =
-  'Rate your confidence in the current changes on this task without changing any code. ' +
-  'Then publish the rating with the confidence_publish tool of the parallel-code MCP server: ' +
-  'one or more named scores from 0 to 100, each with a one-line reason, plus findings for gaps, ' +
-  'out-of-scope changes and risks. If that tool is not available, say so and give the rating here instead.';
+  'Rate the current changes on this task without changing any code. ' +
+  'Judge the diff against what I asked for, not against your own account of the work. ' +
+  'The diff is everything on this branch since it left the base branch, committed or not. ' +
+  'If you can start a sub-agent, have one that cannot see this conversation do the audit: ' +
+  'quote it every request I made verbatim, later corrections included, and have it read the diff and run the tests covering the changed files. ' +
+  'Otherwise re-read my requests, read the full diff and run those tests yourself. Do not update snapshots. ' +
+  'Score Correct, Complete and Minimal from 0 to 100, each with a one-line reason naming what keeps it from being higher; ' +
+  'count only what was verified. Add findings for gaps, changes I did not ask for, and risks. ' +
+  'Publish the rating with the confidence_publish tool of the parallel-code MCP server, ' +
+  'with source "sub-agent audit" or "self-check" for whichever ran. ' +
+  'If that tool is not available, say so and give the rating here instead.';

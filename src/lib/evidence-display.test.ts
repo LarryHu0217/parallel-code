@@ -52,6 +52,13 @@ const flag = {
   file: 'vitest.config.ts',
   detail: 'x',
 };
+const weakened = {
+  id: 'test-disabled:1',
+  category: 'test-weakened' as const,
+  rule: 'test-disabled',
+  file: 'a.test.ts',
+  detail: 'Test was disabled.',
+};
 const failed = check({ status: 'failed', exitCode: 1 });
 const skip = { checkId: 'e2e', name: 'E2E', kind: 'e2e' as const, reason: 'on-demand' as const };
 
@@ -66,8 +73,16 @@ describe('evidenceSummary', () => {
     [
       'an open decision',
       pkg({ scan: { ...pkg().scan, flags: [flag] } }),
-      '1 decision needed',
-      '1 to decide',
+      '1 change to confirm',
+      '1 to confirm',
+    ],
+    [
+      'a weakened test beside an open decision',
+      pkg({
+        scan: { ...pkg().scan, flags: [flag, weakened, { ...weakened, id: 'test-removed:2' }] },
+      }),
+      '2 tests weakened',
+      '2 tests weakened',
     ],
     ['a skipped check', pkg({ skipped: [skip] }), '1 check not run', '1 not run'],
     ['everything passed', pkg(), 'All configured checks passed', 'passed'],

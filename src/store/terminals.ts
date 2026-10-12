@@ -81,7 +81,7 @@ export async function closeTerminal(terminalId: string): Promise<void> {
         if (s.activeTaskId === terminalId) {
           s.activeTaskId = s.taskOrder.find(matchesTaskProjectFilter) ?? null;
           const firstTask = s.activeTaskId ? s.tasks[s.activeTaskId] : null;
-          s.activeAgentId = firstTask?.agentIds[0] ?? null;
+          s.activeAgentId = firstTask ? effectiveAgentId(firstTask) : null;
         }
       }),
     );

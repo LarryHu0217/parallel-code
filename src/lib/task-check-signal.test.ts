@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { EvidenceConfidenceLevel } from '../../electron/shared/evidence-confidence';
+import type {
+  EvidenceFlag,
+  EvidenceFlagCategory,
+  EvidencePackage,
+} from '../../electron/shared/evidence';
 import type { VerificationRun } from '../ipc/types';
 import { taskCheckSignal } from './task-check-signal';
 import { theme } from './theme';
@@ -28,6 +33,32 @@ function runSignal(overrides: Partial<VerificationRun>, headSha = HEAD) {
   });
 }
 
+function evidencePackage(opts: {
+  flags: EvidenceFlag[];
+  acceptedFlags?: Record<string, string>;
+}): EvidencePackage {
+  return {
+    id: 'p1',
+    createdAt: '2026-10-06T10:00:00.000Z',
+    trigger: 'agent',
+    assembling: false,
+    scan: {
+      headSha: HEAD,
+      baseSha: 'b'.repeat(40),
+      dirty: false,
+      files: [],
+      flags: opts.flags,
+      tests: [],
+      coveringTests: [],
+      sourceWithoutTests: [],
+    },
+    checks: [],
+    skipped: [],
+    acceptedFlags: opts.acceptedFlags ?? {},
+    dismissedFindings: [],
+  };
+}
+
 describe('taskCheckSignal', () => {
   it.each<[EvidenceConfidenceLevel, string, string]>([
     ['checking', 'checking…', theme.fgMuted],
@@ -53,6 +84,47 @@ describe('taskCheckSignal', () => {
     });
     expect(signal?.label).toBe('outdated');
     expect(signal?.title).toBe('Checks outdated\nNew commits.');
+  });
+
+  it('names each open flag on hover, leaving out accepted and info flags', () => {
+    const flag = (id: string, category: EvidenceFlagCategory, file: string) => ({
+      id,
+      category,
+      rule: id,
+      file,
+      detail: `${id} detail`,
+    });
+    const signal = taskCheckSignal({
+      evidence: { level: 'medium', reasons: [{ level: 'medium', text: '2 change(s) need it.' }] },
+      evidencePackage: evidencePackage({
+        flags: [
+          flag('ci', 'needs-decision', 'ci.yml'),
+          flag('seen', 'needs-decision', 'seen.ts'),
+          flag('note', 'info', 'note.ts'),
+        ],
+        acceptedFlags: { seen: 'intended' },
+      }),
+      verifyCommandConfigured: true,
+    });
+    expect(signal?.title).toBe('Medium confidence\n2 change(s) need it.\nci.yml: ci detail');
+  });
+
+  it('caps the flags named on hover', () => {
+    const flags = Array.from({ length: 7 }, (_, i) => ({
+      id: `snap${i}`,
+      category: 'needs-decision' as const,
+      rule: 'snapshot-updated',
+      file: `s${i}.snap`,
+      detail: 'Snapshot file was updated.',
+    }));
+    const signal = taskCheckSignal({
+      evidence: { level: 'medium', reasons: [] },
+      evidencePackage: evidencePackage({ flags }),
+      verifyCommandConfigured: true,
+    });
+    const lines = signal?.title.split('\n') ?? [];
+    expect(lines).toHaveLength(7);
+    expect(lines.at(-1)).toBe('…and 2 more');
   });
 
   it('falls back to the verify run without evidence', () => {

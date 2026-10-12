@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { describeToolCall, localCommandOutput, visibleUserText } from './describe.js';
+import { describeToolCall, localCommandOutput, shellTurn, visibleUserText } from './describe.js';
 
 describe('describeToolCall', () => {
   it('names the call by the argument a person would read', () => {
@@ -86,5 +86,23 @@ describe('localCommandOutput', () => {
     );
     expect(localCommandOutput('<local-command-stdout></local-command-stdout>')).toBe('');
     expect(localCommandOutput('Fix the tests')).toBe('');
+  });
+});
+
+describe('shellTurn', () => {
+  it('reads a ! command and its output, together or as the terminal splits them', () => {
+    expect(
+      shellTurn(
+        '<bash-input>ls</bash-input>\n<bash-stdout>a</bash-stdout><bash-stderr>b</bash-stderr>',
+      ),
+    ).toEqual({ command: 'ls', output: 'a\nb' });
+    expect(shellTurn('<bash-input>ls</bash-input>')).toEqual({ command: 'ls', output: '' });
+    expect(shellTurn('<bash-stdout>a</bash-stdout><bash-stderr></bash-stderr>')).toEqual({
+      output: 'a',
+    });
+  });
+
+  it('leaves a message that only mentions the tags to the user', () => {
+    expect(shellTurn('Why does <bash-input> show up?')).toBeUndefined();
   });
 });

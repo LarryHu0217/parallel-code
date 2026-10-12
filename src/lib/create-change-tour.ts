@@ -5,6 +5,7 @@ import { askCodeEnvFile } from '../../electron/shared/ask-code-models';
 import { CHANGE_TOUR_TIMEOUT_MS } from '../../electron/shared/change-tour-limits';
 import { store } from '../store/store';
 import { errMessage, info as logInfo, warn as logWarn } from './log';
+import { PROVIDER_ERROR_CHARS, providerFailureMessage } from './provider-error';
 import {
   buildChangeTourPrompts,
   changeFollowUpContext,
@@ -230,13 +231,19 @@ export function createChangeTour() {
             setError('The tour response was too long. Try again.');
           }
         } else if (message.type === 'error') {
-          providerError = (providerError + (message.text ?? '')).slice(0, 4000);
+          providerError = (providerError + (message.text ?? '')).slice(0, PROVIDER_ERROR_CHARS);
           setError(providerError);
         } else if (message.type === 'done') {
           active = false;
           try {
             if (message.exitCode !== 0)
-              throw new Error(providerError || 'The tour provider failed. Try again.');
+              throw new Error(
+                providerFailureMessage(
+                  providerError,
+                  response,
+                  'The tour provider failed. Try again.',
+                ),
+              );
             collected.push(...parseChangeTour(response, files, prompts.length === 1));
             outcome = 'completed';
             cleanup();

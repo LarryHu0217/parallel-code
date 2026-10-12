@@ -86,6 +86,42 @@ it('offers Finish as a labelled action that reflects push progress', () => {
   expect(finish?.dataset.state).toBe('pushed');
 });
 
+const evidence: NonNullable<Task['evidence']> = {
+  id: 'p1',
+  createdAt: '2026-10-06T10:00:00.000Z',
+  trigger: 'agent',
+  assembling: false,
+  scan: {
+    headSha: 'a'.repeat(40),
+    baseSha: 'b'.repeat(40),
+    dirty: false,
+    files: [],
+    flags: [],
+    tests: [],
+    coveringTests: [],
+    sourceWithoutTests: [],
+  },
+  checks: [],
+  skipped: [],
+  acceptedFlags: {},
+  dismissedFindings: [],
+};
+
+it('opens Finish from the check summary so open flags can be reviewed', () => {
+  setStore('tasks', 'one', 'evidence', evidence);
+  const summary = container.querySelector<HTMLButtonElement>('button.task-check-signal');
+  expect(summary?.textContent).toMatch(/^ · \S/);
+  summary?.click();
+  expect(onFinish).toHaveBeenCalledOnce();
+});
+
+it('keeps the check summary as plain text once the task cannot be finished', () => {
+  setStore('tasks', 'one', { evidence, landingState: 'landed_pending_review' });
+  const status = container.querySelector('.task-title-status');
+  expect(status?.textContent).toMatch(/ · \S/);
+  expect(container.querySelector('button.task-check-signal')).toBeNull();
+});
+
 it('exposes canvas and focus as named toggles', () => {
   const canvas = button('Open canvas');
   expect(canvas?.getAttribute('aria-pressed')).toBe('false');

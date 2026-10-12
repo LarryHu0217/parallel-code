@@ -81,8 +81,7 @@ function flagReasons(pkg: EvidencePackage): EvidenceReason[] {
   const reasons: EvidenceReason[] = [];
   if (weakened > 0)
     reasons.push({ level: 'low', text: `${weakened} test change(s) look like weakened tests.` });
-  if (decisions > 0)
-    reasons.push({ level: 'medium', text: `${decisions} change(s) need your decision.` });
+  if (decisions > 0) reasons.push({ level: 'medium', text: `${decisions} change(s) to confirm.` });
   return reasons;
 }
 

@@ -31,6 +31,7 @@ vi.mock('./taskStatus', () => ({
 import { store, setStore } from './core';
 import type { Task } from './types';
 import {
+  briefTargetAgentName,
   changeBriefDecision,
   keepBriefDecision,
   publishTaskConfidence,
@@ -278,6 +279,16 @@ describe('decisions and ratings', () => {
     setStore('confidencePrompt', 'Run my /confidence skill');
     await requestConfidenceRating('t1');
     expect(mockSendPrompt).toHaveBeenLastCalledWith('t1', 'agent-1', 'Run my /confidence skill');
+  });
+
+  it('names the agent that ratings and corrections go to only when there are several', () => {
+    expect(briefTargetAgentName(task())).toBeUndefined();
+    const agent = (name: string) => ({ def: { name } });
+    setStore('agents', { 'agent-1': agent('Claude Code'), 'agent-2': agent('Codex') } as never);
+    setStore('tasks', 't1', { agentIds: ['agent-1', 'agent-2'], selectedAgentId: 'agent-2' });
+    expect(briefTargetAgentName(task())).toBe('Codex');
+    setStore('agents', 'agent-2', agent('Claude Code') as never);
+    expect(briefTargetAgentName(task())).toBe('Claude Code · 2');
   });
 
   it('stores a published rating with the fingerprint of the code it rated', async () => {

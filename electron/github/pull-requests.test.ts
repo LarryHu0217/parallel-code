@@ -23,6 +23,7 @@ import {
   getFailedChecks,
   getPullRequestDetails,
   getReviewFeedback,
+  markPullRequestReady,
   mergePullRequest,
   parseFailedChecks,
   parseMergeMethods,
@@ -47,6 +48,20 @@ function stubGh(handler: (args: string[]) => string): string[][] {
 
 beforeEach(() => {
   mockExec.mockReset();
+});
+
+describe('markPullRequestReady', () => {
+  it('takes the PR out of draft', async () => {
+    const calls = stubGh(() => '');
+    await markPullRequestReady('https://github.com/o/r/pull/7');
+    expect(calls).toEqual([['pr', 'ready', 'https://github.com/o/r/pull/7']]);
+  });
+
+  it('rejects non-PR URLs before calling gh', async () => {
+    const calls = stubGh(() => '');
+    await expect(markPullRequestReady('https://github.com/o/r/issues/7')).rejects.toThrow();
+    expect(calls).toHaveLength(0);
+  });
 });
 
 describe('mergePullRequest', () => {

@@ -864,6 +864,10 @@ textarea.mobile-input {
 .mobile-chat .chat-ui .chat-message-actions {
   opacity: 1;
 }
+/* No hover on touch: a hidden code-block copy button would still take taps. */
+.mobile-chat .chat-ui .chat-code > .chat-copy {
+  opacity: 1;
+}
 .mobile-chat .chat-ui .chat-copy,
 .mobile-chat .chat-ui .chat-more,
 .mobile-chat .chat-ui .chat-composer :is(.chat-send, .chat-stop) {
@@ -889,6 +893,14 @@ textarea.mobile-input {
 .mobile-chat .chat-ui .chat-picker select {
   padding-left: 24px;
 }
-.mobile-chat .chat-ui :is(.chat-toolbar button, .chat-interrupt, .chat-review, .chat-queue button) {
+.mobile-chat
+  .chat-ui
+  :is(
+    .chat-toolbar button,
+    .chat-interrupt,
+    .chat-review,
+    .chat-queue button,
+    .chat-options button
+  ) {
   font-size: 13px;
 }

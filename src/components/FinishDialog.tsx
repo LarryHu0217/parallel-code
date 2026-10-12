@@ -48,7 +48,7 @@ const pushButtonStyle = {
   background: theme.bgInput,
   border: `1px solid ${theme.border}`,
   'border-radius': 'var(--radius-md)',
-  color: theme.fg,
+  color: theme.fgMuted,
   'font-size': '14px',
 };
 

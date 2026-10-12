@@ -1,5 +1,5 @@
 import { For, Show, createMemo, createSignal, onCleanup, type JSX } from 'solid-js';
-import { Portal } from 'solid-js/web';
+import { Dynamic, Portal } from 'solid-js/web';
 import { theme } from '../lib/theme';
 import { sf } from '../lib/fontScale';
 import { createAnchorEffect, placeBelow } from '../lib/floating';
@@ -9,6 +9,7 @@ import { isConfidenceStale } from '../lib/task-confidence';
 import type { BriefItem } from '../lib/task-brief';
 import type { ConfidenceFinding } from '../../electron/shared/task-confidence';
 import {
+  briefTargetAgentName,
   changeBriefDecision,
   keepBriefDecision,
   refreshTaskBrief,
@@ -19,8 +20,9 @@ import {
 import { showNotification } from '../store/notification';
 import { store } from '../store/core';
 import type { Task } from '../store/types';
+import { AlertIcon, CheckIcon, DiffIcon, PlusIcon, ShieldIcon } from './icons';
 
-/** Scores below this are the one thing on the card that earns a colour. */
+/** Scores below this are the one score colour on the card; sections colour only their icons. */
 const LOW_SCORE = 60;
 const CARD_WIDTH = 480;
 const MONO = "'JetBrains Mono', monospace";
@@ -40,6 +42,20 @@ function scoreColor(score: number, stale: boolean): string {
   if (stale) return theme.fgSubtle;
   return score < LOW_SCORE ? theme.warning : theme.fg;
 }
+
+type SectionIcon = (props: { size?: number; style?: JSX.CSSProperties }) => JSX.Element;
+
+/**
+ * An icon and colour per section, so each list is recognisable at a glance. The
+ * colour stays on the icon and rule; the heading text stays neutral, since most
+ * sections are routine.
+ */
+const SECTIONS = {
+  changed: { label: 'Changed', icon: DiffIcon, color: theme.success },
+  extra: { label: 'Extra', icon: PlusIcon, color: theme.info },
+  open: { label: 'Open', icon: AlertIcon, color: theme.warning },
+  decided: { label: 'Decided', icon: CheckIcon, color: theme.review },
+} satisfies Record<string, { label: string; icon: SectionIcon; color: string }>;
 
 const sectionLabel: JSX.CSSProperties = {
   'font-size': sf(10),
@@ -91,7 +107,7 @@ interface TaskBriefBarProps {
 }
 
 /**
- * The task brief in the task header: one compact line (headline and any
+ * The task brief above the agent output: a card of up to two lines (headline and any
  * confidence scores) that opens the full brief in a card below it.
  */
 export function TaskBriefBar(props: TaskBriefBarProps) {
@@ -116,12 +132,14 @@ export function TaskBriefBar(props: TaskBriefBarProps) {
   const onPointerDown = (event: PointerEvent) => {
     const target = event.target as Node | null;
     if (target && (card?.contains(target) || anchor?.contains(target))) return;
-    setOpen(false);
+    // close(), not setOpen(false): a document listener left behind would swallow
+    // Escape everywhere, terminals included, and pull focus back to the bar.
+    close();
   };
   const onKeyDown = (event: KeyboardEvent) => {
     if (event.key !== 'Escape') return;
     event.stopPropagation();
-    setOpen(false);
+    close();
     anchor?.focus();
   };
   const toggle = () => {
@@ -149,7 +167,7 @@ export function TaskBriefBar(props: TaskBriefBarProps) {
 
   const headline = () => {
     const brief = props.task.brief?.brief;
-    if (!store.taskBriefs) return 'Confidence rating';
+    if (!store.taskBriefs) return props.task.confidence ? 'Confidence rating' : 'Rate confidence…';
     if (brief) return brief.headline || brief.goal;
     if (props.task.briefStatus?.state === 'generating') return 'Writing the brief…';
     return 'The brief appears after the agent finishes a turn';
@@ -178,16 +196,18 @@ export function TaskBriefBar(props: TaskBriefBarProps) {
           display: 'flex',
           'align-items': 'center',
           gap: '8px',
-          width: '100%',
-          height: '24px',
+          // A card inset from the panel edges. It stays unfilled, since a brief is
+          // routine; the fill on hover and while open lives in styles.css.
+          width: 'calc(100% - 16px)',
+          'flex-shrink': '0',
           'min-width': '0',
-          padding: '0 12px',
-          margin: '0',
-          border: 'none',
-          'border-bottom': `1px solid ${theme.border}`,
-          background: 'transparent',
+          padding: '7px 12px',
+          margin: '6px 8px',
+          border: `1px solid ${theme.border}`,
+          'border-radius': 'var(--radius-md)',
           color: props.task.brief ? theme.fg : theme.fgMuted,
-          'font-size': sf(11),
+          'font-size': sf(12),
+          'line-height': '1.4',
           'font-family': 'inherit',
           'text-align': 'left',
           cursor: 'pointer',
@@ -195,8 +215,18 @@ export function TaskBriefBar(props: TaskBriefBarProps) {
           'white-space': 'nowrap',
         }}
       >
+        {/* Two lines fit most headlines; the full brief is one click away. */}
         <span
-          style={{ flex: '1', 'min-width': '0', overflow: 'hidden', 'text-overflow': 'ellipsis' }}
+          style={{
+            flex: '1',
+            'min-width': '0',
+            overflow: 'hidden',
+            'white-space': 'normal',
+            'overflow-wrap': 'anywhere',
+            display: '-webkit-box',
+            '-webkit-line-clamp': '2',
+            '-webkit-box-orient': 'vertical',
+          }}
         >
           {headline()}
         </span>
@@ -277,19 +307,30 @@ function ItemList(props: { items: CardItem[]; onFileClick?: (file: string) => vo
         padding: '0',
         display: 'flex',
         'flex-direction': 'column',
-        gap: '8px',
+        gap: '5px',
       }}
     >
       <For each={props.items}>
         {(item) => (
-          <li style={{ display: 'flex', 'flex-direction': 'column', gap: '4px' }}>
+          <li
+            class="brief-item"
+            style={{
+              display: 'flex',
+              'flex-wrap': 'wrap',
+              'align-items': 'center',
+              gap: '3px 8px',
+            }}
+          >
             <span style={{ 'font-size': sf(12), 'line-height': '1.45' }}>{item.text}</span>
             <Show when={item.file || item.fromRating}>
-              <span style={{ display: 'flex', gap: '8px', 'align-items': 'center' }}>
+              <span
+                style={{ display: 'flex', gap: '6px', 'align-items': 'center', 'min-width': '0' }}
+              >
                 <Show when={item.file}>
                   {(file) => (
                     <button
                       type="button"
+                      class="brief-item-file"
                       title="Show in changed files"
                       onClick={() => props.onFileClick?.(file())}
                       style={{
@@ -308,7 +349,11 @@ function ItemList(props: { items: CardItem[]; onFileClick?: (file: string) => vo
                   )}
                 </Show>
                 <Show when={item.fromRating}>
-                  <span style={{ 'font-size': sf(10), color: theme.fgMuted }}>from the rating</span>
+                  <ShieldIcon
+                    size={11}
+                    title="From the confidence rating"
+                    style={{ color: theme.fgMuted, 'flex-shrink': '0' }}
+                  />
                 </Show>
               </span>
             </Show>
@@ -319,18 +364,46 @@ function ItemList(props: { items: CardItem[]; onFileClick?: (file: string) => vo
   );
 }
 
-function Section(props: { label: string; children: JSX.Element }) {
+function Section(props: {
+  kind: keyof typeof SECTIONS;
+  count: number;
+  /** Overrides the section colour, e.g. to quieten decisions already handled. */
+  color?: string;
+  children: JSX.Element;
+}) {
+  const meta = () => SECTIONS[props.kind];
+  const color = () => props.color ?? meta().color;
   return (
-    <div
-      style={{
-        display: 'grid',
-        'grid-template-columns': '64px minmax(0, 1fr)',
-        'column-gap': '12px',
-      }}
-    >
-      <div style={sectionLabel}>{props.label}</div>
-      <div style={{ 'min-width': '0' }}>{props.children}</div>
-    </div>
+    <section style={{ display: 'flex', 'flex-direction': 'column', gap: '6px' }}>
+      <h3
+        aria-label={`${meta().label} (${props.count})`}
+        style={{
+          ...sectionLabel,
+          margin: '0',
+          display: 'flex',
+          'align-items': 'center',
+          gap: '6px',
+          'font-weight': '600',
+        }}
+      >
+        <Dynamic component={meta().icon} size={12} style={{ color: color(), 'flex-shrink': '0' }} />
+        {meta().label}
+        <span style={{ 'font-family': MONO, color: theme.fgSubtle, 'font-weight': '400' }}>
+          {props.count}
+        </span>
+      </h3>
+      {/* A rule in the section colour groups the items under their heading. */}
+      <div
+        style={{
+          'min-width': '0',
+          'margin-left': '5px',
+          'padding-left': '12px',
+          'border-left': `2px solid color-mix(in srgb, ${color()} 35%, transparent)`,
+        }}
+      >
+        {props.children}
+      </div>
+    </section>
   );
 }
 
@@ -431,7 +504,7 @@ function DecisionRow(props: {
             disabled={sending() || !draft().trim()}
             onClick={() => void send()}
           >
-            {sending() ? 'Sending…' : 'Send to agent'}
+            {sending() ? 'Sending…' : `Send to ${briefTargetAgentName(props.task) ?? 'agent'}`}
           </button>
           <button type="button" style={quietButton} onClick={() => setEditing(false)}>
             Cancel
@@ -479,6 +552,9 @@ function TaskBriefCard(props: {
   const findings = () => props.task.confidence?.findings ?? [];
   const open = () => [...(brief()?.open ?? []), ...findingItems(findings(), ['gap', 'risk'])];
   const extra = () => [...(brief()?.extra ?? []), ...findingItems(findings(), ['extra'])];
+  // Decisions the user has kept or changed no longer need their attention.
+  const pendingDecisions = () =>
+    brief()?.decided.some((item) => !props.task.brief?.decisions[item.text]) ?? false;
 
   const rate = async () => {
     if (rating()) return;
@@ -512,7 +588,7 @@ function TaskBriefCard(props: {
                 ? `The brief could not be written: ${props.task.briefStatus.message}`
                 : store.taskBriefs
                   ? 'The brief is written by the naming model after each agent turn.'
-                  : 'Task briefs are off in Settings; ratings still show here.'}
+                  : 'Turn on Write task briefs in Settings for a summary after each turn.'}
             </span>
           }
         >
@@ -533,7 +609,18 @@ function TaskBriefCard(props: {
               }}
             >
               <span style={{ display: 'flex', gap: '8px', 'align-items': 'baseline' }}>
-                <span style={sectionLabel}>Confidence</span>
+                <span
+                  style={{
+                    ...sectionLabel,
+                    display: 'inline-flex',
+                    'align-items': 'center',
+                    gap: '6px',
+                  }}
+                >
+                  {/* The same shield marks findings from this rating in the lists below. */}
+                  <ShieldIcon size={12} style={{ 'flex-shrink': '0' }} />
+                  Confidence
+                </span>
                 <span
                   style={{
                     'font-size': sf(10),
@@ -606,26 +693,30 @@ function TaskBriefCard(props: {
               padding: '12px 16px',
               display: 'flex',
               'flex-direction': 'column',
-              gap: '12px',
+              gap: '14px',
             }}
           >
             <Show when={b().changed.length}>
-              <Section label="Changed">
+              <Section kind="changed" count={b().changed.length}>
                 <ItemList items={b().changed} onFileClick={props.onFileClick} />
               </Section>
             </Show>
             <Show when={extra().length}>
-              <Section label="Extra">
+              <Section kind="extra" count={extra().length}>
                 <ItemList items={extra()} onFileClick={props.onFileClick} />
               </Section>
             </Show>
             <Show when={open().length}>
-              <Section label="Open">
+              <Section kind="open" count={open().length}>
                 <ItemList items={open()} onFileClick={props.onFileClick} />
               </Section>
             </Show>
             <Show when={b().decided.length}>
-              <Section label="Decided">
+              <Section
+                kind="decided"
+                count={b().decided.length}
+                color={pendingDecisions() ? undefined : theme.fgMuted}
+              >
                 <ul
                   style={{
                     'list-style': 'none',
@@ -719,6 +810,7 @@ function TaskBriefCard(props: {
         </Show>
         <button type="button" style={linkButton} disabled={rating()} onClick={() => void rate()}>
           {props.task.confidence ? 'Re-rate confidence' : 'Rate confidence'}
+          <Show when={briefTargetAgentName(props.task)}>{(name) => ` · ${name()}`}</Show>
         </button>
         <Show when={props.onWalkThrough}>
           <button

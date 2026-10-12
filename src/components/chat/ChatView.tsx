@@ -9,7 +9,7 @@ import { Composer, type ChatHistoryEntry } from './Composer';
 import { createComposer, type ComposerMemory } from './composer-state';
 import { enableCopyOnSelect } from './copy-on-select';
 import { FILE_LINK_PREFIX } from './chat-markdown';
-import type { RespondToRequest } from './RequestCard';
+import { focusRequestCard, type RespondToRequest } from './RequestCard';
 import { Transcript } from './Transcript';
 import { TranscriptSearch } from './TranscriptSearch';
 import { DiffIcon } from '../icons';
@@ -17,6 +17,9 @@ import './chat.css';
 
 export interface ChatActions {
   focus: () => void;
+  /** Gives the keyboard to the first pending request; false when there is none, or when
+   *  the composer holds unsent text, since Enter there means "send my message". */
+  focusRequest: () => boolean;
   send: () => Promise<void>;
 }
 
@@ -33,6 +36,8 @@ export interface ChatProps {
   onReloadModels: () => Promise<void>;
   onDraft: (text: string) => void;
   onSend: (text: string, images: ChatImage[]) => Promise<void>;
+  /** Runs a `!` draft as a shell command; omitted where the agent cannot record one. */
+  onShell?: (command: string) => Promise<void>;
   onStop: () => Promise<void>;
   onRespond: RespondToRequest;
   onActions: (actions: ChatActions) => void;
@@ -97,7 +102,34 @@ function Conversation(props: { chat: ChatProps; threadId: string }) {
   const focus = () => textarea?.focus();
   // Whoever sends a message wants to see it land and the answer arrive.
   createEffect(on(composer.pendingMessage, (sent) => sent && toLatest?.()));
-  onMount(() => chat.onActions({ focus, send: () => composer.send() }));
+  // A message queued mid-turn is a send too; the queue only grows by the user's hand.
+  createEffect(
+    on(
+      () => composer.queue().length,
+      (length, previous) => previous !== undefined && length > previous && toLatest?.(),
+    ),
+  );
+  // Reloaded commands are never running, so only one the user starts scrolls the log.
+  createEffect(
+    on(
+      () =>
+        chat.state.items.some(
+          (item) => item.kind === 'shell' && item.activity?.status === 'running',
+        ),
+      (running) => running && toLatest?.(),
+    ),
+  );
+  onMount(() =>
+    chat.onActions({
+      focus,
+      // The field hides a shell draft's `!`, so an empty field there is still a draft.
+      focusRequest: () =>
+        !textarea?.value.trim() &&
+        !composer.shellMode() &&
+        focusRequestCard(root?.querySelector('.chat-request')),
+      send: () => composer.send(),
+    }),
+  );
   function jump(id: string) {
     const element = Array.from(root?.querySelectorAll<HTMLElement>('[data-chat-id]') ?? []).find(
       (element) => element.dataset.chatId === id,

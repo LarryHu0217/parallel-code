@@ -95,6 +95,14 @@ it('offers tools restart after enabling MCP for a session without tools', () => 
   expect(button('Restart and resume Claude')).toBeUndefined();
 });
 
+it('shows no tools notice for the chat pane, which never receives delegation tools', () => {
+  setStore('tasks', 'parent', 'agentSessionIds', { agent: 'conversation' });
+  setStore('tasks', 'parent', 'mainAgentView', 'chat');
+  setStore('agents', 'agent', 'capabilities', undefined);
+  dispose = render(() => <DelegationPanel task={store.tasks.parent} />, host);
+  expect(host.querySelector('[aria-label="Task collaboration"]')).toBeNull();
+});
+
 it.each(['delegationParent', 'coordinatorMode'] as const)(
   'keeps the child limit available for an idle %s parent',
   (parentFlag) => {

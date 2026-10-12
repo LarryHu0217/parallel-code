@@ -25,3 +25,17 @@ it('announces what the agent is doing without re-announcing the ticking clock', 
   expect(status?.querySelector('time')).toBeNull();
   expect(container.querySelector('time')?.textContent).toBe('1:05');
 });
+
+it('spins only while the agent works, not while it waits for input', () => {
+  const container = document.createElement('div');
+  document.body.append(container);
+  const state = { status: 'working' as const, items: [], requests: [] as never[] };
+  dispose = render(() => <Progress state={state} />, container);
+  expect(container.querySelector('.inline-spinner')).not.toBeNull();
+  dispose();
+
+  const waiting = { ...state, requests: [{ id: 'r1' }] as never[] };
+  dispose = render(() => <Progress state={waiting} />, container);
+  expect(container.querySelector('[role="status"]')?.textContent).toBe('Waiting for your input');
+  expect(container.querySelector('.inline-spinner')).toBeNull();
+});

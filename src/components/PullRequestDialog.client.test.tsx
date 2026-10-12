@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { PullRequestDialog } from './PullRequestDialog';
 import {
   getPullRequestDetails,
+  markPullRequestReadyForTask,
   mergePullRequestForTask,
   stageFailedChecksPrompt,
 } from '../store/github';
@@ -12,6 +13,7 @@ import type { Task } from '../store/types';
 
 vi.mock('../store/github', () => ({
   getPullRequestDetails: vi.fn(),
+  markPullRequestReadyForTask: vi.fn(async () => undefined),
   mergePullRequestForTask: vi.fn(async () => true),
   stageFailedChecksPrompt: vi.fn(async () => false),
   stageReviewFeedbackPrompt: vi.fn(async () => false),
@@ -113,6 +115,30 @@ it('does not merge when the confirmation is cancelled', async () => {
 it('explains when branch protection blocks the merge', async () => {
   await renderDialog({ ...openPr, mergeStateStatus: 'BLOCKED' });
   expect(document.body.textContent).toContain('required reviews or checks');
+  expect(document.body.textContent).not.toContain('Merge on GitHub');
+});
+
+it('marks a draft PR ready, then offers the merge', async () => {
+  await renderDialog({ ...openPr, isDraft: true });
+  expect(document.body.textContent).toContain('Draft pull requests cannot be merged');
+  vi.mocked(getPullRequestDetails).mockResolvedValue(openPr);
+  button('Mark ready for review').click();
+  await vi.waitFor(() => expect(button('Merge on GitHub…')).toBeTruthy());
+  expect(markPullRequestReadyForTask).toHaveBeenCalledWith('task-1', prUrl);
+});
+
+it('offers no mark-ready for a closed draft PR', async () => {
+  await renderDialog({ ...openPr, isDraft: true, state: 'CLOSED' });
+  expect(document.body.textContent).toContain('The pull request is closed.');
+  expect(document.body.textContent).not.toContain('Mark ready for review');
+});
+
+it('shows why marking ready failed and keeps the draft blocker', async () => {
+  vi.mocked(markPullRequestReadyForTask).mockRejectedValueOnce(new Error('gh: no permission'));
+  await renderDialog({ ...openPr, isDraft: true });
+  button('Mark ready for review').click();
+  await vi.waitFor(() => expect(document.body.textContent).toContain('gh: no permission'));
+  expect(button('Mark ready for review').disabled).toBe(false);
   expect(document.body.textContent).not.toContain('Merge on GitHub');
 });
 

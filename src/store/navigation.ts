@@ -2,6 +2,7 @@ import { matchesTaskProjectFilter } from './task-project-filter';
 import { batch } from 'solid-js';
 import { documentAgentTaskId, isGitHubAgentTaskId } from '../documents/task-id';
 import { store, setStore } from './core';
+import { info as logInfo } from '../lib/log';
 import {
   getTaskFocusedPanel,
   scheduleTaskFocus,
@@ -46,6 +47,13 @@ export function setActiveTask(id: string): void {
   const isDocument =
     store.activeDocumentProjectId && id === documentAgentTaskId(store.activeDocumentProjectId);
   if (!task && !terminal && !isDocument) return;
+  // Activating a CI-snoozed task returns it; the stack says which path did it.
+  if (task?.snoozedUntilCi && store.activeTaskId !== id) {
+    logInfo('background-tasks', 'activating snoozed task', {
+      taskId: id,
+      stack: new Error().stack,
+    });
+  }
   if (!isDocument && !matchesTaskProjectFilter(id)) setStore('taskProjectFilter', null);
   setStore('githubIssuesProjectId', null);
   setStore('newTaskPanelFocused', false);

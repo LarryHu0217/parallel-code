@@ -237,6 +237,16 @@ export function scrollTaskIntoView(taskId: string, behavior: ScrollBehavior = 's
       return;
     const el = document.querySelector<HTMLElement>(`[data-task-id="${CSS.escape(target.taskId)}"]`);
     if (!el) return;
+    // A canvas sits to the right of the chat. Pinning a wide task's left edge
+    // would hide the very panel the user just opened or focused.
+    const canvas =
+      store.focusedPanel[target.taskId] === 'canvas'
+        ? el.querySelector<HTMLElement>('.task-canvas-panel')
+        : null;
+    if (canvas) {
+      canvas.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: target.behavior });
+      return;
+    }
     scrollTaskElementIntoView(findHorizontalScroller(el), el, target.behavior);
   });
 }

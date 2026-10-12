@@ -636,6 +636,14 @@ export function registerAllHandlers(win: BrowserWindow): void {
       if (!chat.setPermissionMode) throw new Error('This agent cannot change its permission mode.');
       return chat.setPermissionMode(args.permissionMode);
     }
+    // Desktop only: phones reach chats through their own action list, which omits it.
+    if (args.action === 'shell') {
+      assertString(args.command, 'command');
+      if (!args.command.trim() || args.command.length > 100_000)
+        throw new Error('Enter a command of at most 100,000 characters.');
+      if (!chat.runShell) throw new Error('This agent cannot run shell commands from Chat.');
+      return chat.runShell(args.command);
+    }
     return runChatAction(chat, args);
   });
   // --- Remote access state ---

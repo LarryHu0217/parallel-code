@@ -32,8 +32,11 @@ const question = (): ChatRequest =>
     ],
   });
 const focused = () => document.activeElement?.textContent;
+// An option's first text is its label; its description follows.
 const button = (label: string) =>
-  [...container.querySelectorAll('button')].find((node) => node.textContent === label);
+  [...container.querySelectorAll('button')].find(
+    (node) => node.textContent === label || node.firstChild?.textContent === label,
+  );
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 async function act(action: () => unknown) {
   await action();
@@ -76,6 +79,32 @@ afterEach(() => {
   dispose();
   host.remove();
 });
+
+const twoQuestions = (): ChatRequest =>
+  approval({
+    kind: 'question',
+    text: 'Claude needs your input',
+    questions: [
+      {
+        id: 'scope',
+        question: 'Which scope?',
+        isSecret: false,
+        options: [
+          { label: 'Narrow', description: '' },
+          { label: 'Wide', description: '' },
+        ],
+      },
+      {
+        id: 'tests',
+        question: 'Add tests?',
+        isSecret: false,
+        options: [
+          { label: 'Yes', description: '' },
+          { label: 'No', description: '' },
+        ],
+      },
+    ],
+  });
 
 describe('approval card keyboard handling', () => {
   it('leaves focus in an external input, including an empty dialog input', async () => {
@@ -202,8 +231,198 @@ describe('approval card keyboard handling', () => {
 
   it('starts a question on its first answer control instead of a default choice', async () => {
     await show(question());
-    expect(focused()).toBe('Narrow');
+    expect(document.activeElement).toBe(button('Narrow'));
     expect(button('Submit answers')?.disabled).toBe(true);
+  });
+});
+
+describe('choosing with arrow keys and Enter', () => {
+  /** Dispatches like a keyboard does; returns whether the browser default still runs. */
+  const press = async (key: string, init: KeyboardEventInit = {}) => {
+    const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...init });
+    document.activeElement?.dispatchEvent(event);
+    await settle();
+    return !event.defaultPrevented;
+  };
+
+  it('walks the approval choices with arrow keys, wrapping at the ends', async () => {
+    await show(approval());
+    await press('ArrowRight');
+    expect(focused()).toBe('Decline');
+    await press('ArrowDown');
+    expect(focused()).toBe('Allow once');
+    await press('ArrowUp');
+    expect(focused()).toBe('Decline');
+  });
+
+  it('answers a single question with arrows and one Enter', async () => {
+    await show(question());
+    expect(await press('Enter')).toBe(false);
+    expect(respond).toHaveBeenCalledWith(question(), 'accept', { scope: 'Narrow' });
+  });
+
+  it('moves to the next open question, then sends once every question is answered', async () => {
+    const request = twoQuestions();
+    await show(request);
+    await press('ArrowDown');
+    expect(focused()).toBe('Wide');
+    await press('Enter');
+    expect(respond).not.toHaveBeenCalled();
+    expect(focused()).toBe('Yes');
+    await press('ArrowRight');
+    await press('Enter');
+    expect(respond).toHaveBeenCalledWith(request, 'accept', { scope: 'Wide', tests: 'No' });
+  });
+
+  it('moves on to a question that only takes typed text', async () => {
+    const request = twoQuestions();
+    request.questions = [
+      ...(request.questions?.slice(0, 1) ?? []),
+      { id: 'why', question: 'Why?', isSecret: false, options: [] },
+    ];
+    await show(request);
+    await press('Enter');
+    expect(respond).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(container.querySelectorAll('input')[1]);
+  });
+
+  it('moves from a single choice to an open multi-select instead of sending', async () => {
+    const request = twoQuestions();
+    request.questions = request.questions?.map((q, index) => ({ ...q, multiSelect: index === 1 }));
+    await show(request);
+    await press('Enter');
+    expect(respond).not.toHaveBeenCalled();
+    expect(focused()).toBe('Yes');
+  });
+
+  it('leaves Enter native on a multi-select so it toggles instead of sending', async () => {
+    const request = twoQuestions();
+    request.questions = request.questions?.map((q) => ({ ...q, multiSelect: true }));
+    await show(request);
+    expect(await press('Enter')).toBe(true);
+    expect(respond).not.toHaveBeenCalled();
+    expect(container.querySelector('.chat-request-hint')?.textContent).toBe(
+      'Arrow keys move, Enter toggles',
+    );
+  });
+
+  it('leaves modified arrows to the app, where Alt+Arrow switches panes', async () => {
+    await show(approval());
+    expect(await press('ArrowRight', { altKey: true })).toBe(true);
+    expect(focused()).toBe('Allow once');
+  });
+
+  it('does not let a held Enter rush through every question', async () => {
+    await show(twoQuestions());
+    await press('Enter');
+    expect(focused()).toBe('Yes');
+    // Auto-repeat must neither pick nor fall through to a native click.
+    expect(await press('Enter', { repeat: true })).toBe(false);
+    expect(respond).not.toHaveBeenCalled();
+    expect(button('Yes')?.getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('keeps arrow keys for the caret in a typed answer', async () => {
+    await show(question());
+    container.querySelector('input')?.focus();
+    expect(await press('ArrowLeft')).toBe(true);
+    expect(document.activeElement).toBe(container.querySelector('input'));
+  });
+});
+
+describe('choosing with the mouse', () => {
+  const field = (index = 0) => container.querySelectorAll('input')[index];
+  async function type(text: string, index = 0) {
+    const input = field(index);
+    input.value = text;
+    await act(() => input.dispatchEvent(new Event('input', { bubbles: true })));
+  }
+
+  it('marks a choice on click and leaves sending to Submit', async () => {
+    const request = twoQuestions();
+    await show(request);
+    await act(() => button('Wide')?.click());
+    await act(() => button('No')?.click());
+    // A stray click or tap must never send; the user confirms with Submit.
+    expect(respond).not.toHaveBeenCalled();
+    expect(button('Wide')?.getAttribute('aria-pressed')).toBe('true');
+    expect(field().value).toBe('');
+    await act(() => button('Submit answers')?.click());
+    expect(respond).toHaveBeenCalledWith(request, 'accept', { scope: 'Wide', tests: 'No' });
+  });
+
+  it('lets a later click change a choice before sending', async () => {
+    const request = question();
+    request.questions = request.questions?.map((q) => ({
+      ...q,
+      options: [...q.options, { label: 'Wide', description: '' }],
+    }));
+    await show(request);
+    await act(() => button('Narrow')?.click());
+    await act(() => button('Wide')?.click());
+    expect(button('Narrow')?.getAttribute('aria-pressed')).toBe('false');
+    expect(respond).not.toHaveBeenCalled();
+    await act(() => button('Submit answers')?.click());
+    expect(respond).toHaveBeenCalledWith(request, 'accept', { scope: 'Wide' });
+  });
+
+  it('lets a typed answer replace a single choice instead of adding to it', async () => {
+    const request = twoQuestions();
+    await show(request);
+    await act(() => button('Wide')?.click());
+    await type('Only the parser');
+    expect(button('Wide')?.getAttribute('aria-pressed')).toBe('false');
+    await act(() => button('No')?.click());
+    await act(() => button('Submit answers')?.click());
+    expect(respond).toHaveBeenCalledWith(request, 'accept', {
+      scope: 'Only the parser',
+      tests: 'No',
+    });
+  });
+
+  it('lets a clicked option replace a typed single answer', async () => {
+    const request = twoQuestions();
+    await show(request);
+    await type('Only the parser');
+    await act(() => button('Narrow')?.click());
+    expect(field().value).toBe('');
+    await act(() => button('Yes')?.click());
+    await act(() => button('Submit answers')?.click());
+    expect(respond).toHaveBeenCalledWith(request, 'accept', { scope: 'Narrow', tests: 'Yes' });
+  });
+
+  it('keeps a typed extra next to the ticked options of a multi-select', async () => {
+    const request = twoQuestions();
+    request.questions = request.questions?.map((q) => ({ ...q, multiSelect: true }));
+    await show(request);
+    await type('Docs too');
+    await act(() => button('Narrow')?.click());
+    await act(() => button('Wide')?.click());
+    await act(() => button('Narrow')?.click());
+    expect(field().value).toBe('Docs too');
+    await act(() => button('Yes')?.click());
+    expect(respond).not.toHaveBeenCalled();
+    await act(() => button('Submit answers')?.click());
+    expect(respond).toHaveBeenCalledWith(request, 'accept', {
+      scope: 'Wide, Docs too',
+      tests: 'Yes',
+    });
+  });
+
+  it('sends a typed secret exactly as entered', async () => {
+    const request = approval({
+      kind: 'question',
+      questions: [{ id: 'token', question: 'Token?', isSecret: true, options: [] }],
+    });
+    await show(request);
+    await type('  pass phrase ');
+    await act(() => button('Submit answers')?.click());
+    expect(respond).toHaveBeenCalledWith(request, 'accept', { token: '  pass phrase ' });
+  });
+
+  it('shows what each option means on the card, not only in a tooltip', async () => {
+    await show(question());
+    expect(button('Narrow')?.textContent).toContain('Only this file');
   });
 });
 

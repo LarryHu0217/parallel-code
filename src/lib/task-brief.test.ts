@@ -47,6 +47,18 @@ describe('buildTaskBriefPrompt', () => {
     expect(prompt).toContain('diff --git a/src/auth.ts');
   });
 
+  it('asks for items short enough to scan', () => {
+    const prompt = buildTaskBriefPrompt({
+      taskName: 'Fix login',
+      prompts: [],
+      agentMessage: 'Done.',
+      rawDiff: DIFF,
+    });
+    expect(prompt).toContain('short phrase of at most 12 words');
+    // Shortening an old decision would drop the user's keep/sent mark on it.
+    expect(prompt).toContain('even when it is longer than the item limit');
+  });
+
   it('keeps the newest prompts and closes every fence when they are too long', () => {
     const prompt = buildTaskBriefPrompt({
       taskName: 't',

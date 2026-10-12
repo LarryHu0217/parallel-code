@@ -163,7 +163,7 @@ describe('EvidencePanel', () => {
       EvidencePanel({ task: task(pkg({ scan: { ...pkg().scan, flags: [flag] } })), headSha: HEAD }),
     );
     expect(html).toContain('Low confidence');
-    expect(html).toContain('1 decision needed');
+    expect(html).toContain('1 test weakened');
     expect(html).toContain('src/a.test.ts:4');
     expect(html).toContain('Accept…');
   });

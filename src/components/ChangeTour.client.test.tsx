@@ -376,6 +376,15 @@ describe('guided tour', () => {
     expect(host.querySelector('[role="alert"]')?.textContent).toBe('Provider unavailable');
   });
 
+  // The Claude CLI prints API errors and usage limits to stdout in text mode.
+  it('shows what the provider printed when it fails without stderr', () => {
+    const { host } = mount();
+    host.querySelector('button')?.click();
+    channels[0].onmessage?.({ type: 'chunk', text: 'Invalid API key\n' });
+    channels[0].onmessage?.({ type: 'done', exitCode: 1 });
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe('Invalid API key');
+  });
+
   it('processes a large diff sequentially and combines all parts into one tour', () => {
     const { host, navigate } = mount(largeDiff);
     host.querySelector('button')?.click();

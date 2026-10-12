@@ -14,6 +14,11 @@ export interface AgentChat {
   respond(id: string | number, decision: ChatDecision, answers?: Record<string, string>): void;
   loadModels(): Promise<void>;
   selectModel(model: string, reasoningEffort?: string): void | Promise<void>;
+  /**
+   * Run a `!` command in the worktree and add it and its output to the
+   * conversation for the agent to answer. Only agents that can record one offer this.
+   */
+  runShell?(command: string): Promise<void>;
   /** Only agents whose CLI can change mode mid-session offer this. */
   setPermissionMode?(mode: ChatPermissionMode): Promise<void>;
   /** `immediate` is for app shutdown: no process may outlive Electron waiting on a timer. */

@@ -208,6 +208,54 @@ it('returns focus to the surviving composer after a streamed request disappears'
   expect(document.activeElement).toBe(composer());
 });
 
+it('lets the app hand the keyboard to a pending question', async () => {
+  const sidebar = document.createElement('button');
+  document.body.append(sidebar);
+  const actions = () => vi.mocked(props.onActions).mock.calls[0]?.[0];
+  try {
+    expect(actions()?.focusRequest()).toBe(false);
+    // The question arrives while the user is elsewhere, so it waits for them.
+    sidebar.focus();
+    await update({
+      state: {
+        ...props.state,
+        status: 'working',
+        requests: [
+          {
+            id: 'question',
+            kind: 'question',
+            text: 'Claude needs your input',
+            since: 1,
+            questions: [
+              {
+                id: 'scope',
+                question: 'Which scope?',
+                isSecret: false,
+                options: [{ label: 'Narrow', description: '' }],
+              },
+            ],
+          },
+        ],
+      },
+    });
+    expect(document.activeElement).toBe(sidebar);
+    // Unsent text keeps the composer: Enter there means "send my message".
+    expect(composer().value).toBe('Keep my draft');
+    expect(actions()?.focusRequest()).toBe(false);
+    expect(document.activeElement).toBe(sidebar);
+    // A bare `!` leaves the field empty, but it is still the user's shell draft.
+    await update({ draft: '!', onShell: vi.fn(async () => {}) });
+    expect(composer().value).toBe('');
+    expect(actions()?.focusRequest()).toBe(false);
+    // Coming back to the chat otherwise answers it from the keyboard.
+    await update({ draft: '' });
+    expect(actions()?.focusRequest()).toBe(true);
+    expect(document.activeElement?.firstChild?.textContent).toBe('Narrow');
+  } finally {
+    sidebar.remove();
+  }
+});
+
 it('queues during execution, then sends once after the agent becomes ready', async () => {
   await update({ state: { ...props.state, status: 'working' } });
   await act(() => button('Queue message').click());
@@ -218,6 +266,38 @@ it('queues during execution, then sends once after the agent becomes ready', asy
   expect(send).toHaveBeenCalledTimes(1);
   expect(send).toHaveBeenCalledWith('Keep my draft', []);
   expect(container.querySelector('.chat-queue')).toBeNull();
+});
+
+/** A mid-turn reader scrolled 100px into a log where the bottom is 700px down. */
+async function scrolledBackMidTurn() {
+  // happy-dom has no layout: fake a 300px viewport over 1000px of log.
+  const log = container.querySelector<HTMLElement>('.chat-scroll');
+  if (!log) throw new Error('Chat log is missing');
+  let top = 0;
+  Object.defineProperty(log, 'scrollHeight', { get: () => 1000 });
+  Object.defineProperty(log, 'clientHeight', { get: () => 300 });
+  Object.defineProperty(log, 'scrollTop', {
+    get: () => top,
+    set: (value: number) => (top = Math.max(0, Math.min(value, 700))),
+  });
+  await update({ state: { ...props.state, status: 'working' } });
+  top = 100;
+  log.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, bubbles: true }));
+  return () => top;
+}
+
+it('brings a scrolled reader back to the latest message when they queue one', async () => {
+  const top = await scrolledBackMidTurn();
+  await act(() => button('Queue message').click());
+  expect(container.querySelector('.chat-queue')?.textContent).toContain('Keep my draft');
+  expect(top()).toBe(700);
+});
+
+it('brings a scrolled reader back to the latest message when they interrupt and send', async () => {
+  const top = await scrolledBackMidTurn();
+  await act(() => button('Interrupt and send now').click());
+  expect(props.onStop).toHaveBeenCalledTimes(1);
+  expect(top()).toBe(700);
 });
 
 it('retains a failed queued message and only retries on request', async () => {
@@ -232,6 +312,26 @@ it('retains a failed queued message and only retries on request', async () => {
   expect(send).toHaveBeenCalledTimes(2);
   expect(container.querySelector('.chat-queue')).toBeNull();
 });
+
+it.each(['a stopped turn', 'a failed send'] as const)(
+  'sends a message queued after %s once the agent is ready',
+  async (earlier) => {
+    if (earlier === 'a stopped turn') {
+      await update({ draft: '', state: { ...props.state, status: 'working' } });
+      await act(() => button('Stop response').click());
+    } else {
+      send.mockRejectedValueOnce(new Error('Disconnected'));
+      await act(() => button('Send message').click());
+      send.mockClear();
+    }
+    await update({ draft: 'Later follow-up', state: { ...props.state, status: 'working' } });
+    await act(() => button('Queue message').click());
+    expect(container.querySelector('.chat-queue')?.textContent).not.toContain('Queue paused');
+    await update({ state: { ...props.state, status: 'ready' } });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledWith('Later follow-up', []);
+  },
+);
 
 it('interrupts first and waits for confirmed idle before sending a follow-up', async () => {
   await update({ state: { ...props.state, status: 'working' } });
@@ -444,6 +544,23 @@ it('hides unsupported reasoning and restores it when a capable model is selected
   expect(container.querySelector('[aria-label="Reasoning effort"]')).toBeNull();
 });
 
+it('names the reported effort instead of offering Default when the catalog has none', async () => {
+  const models = [
+    {
+      model: 'claude',
+      displayName: 'Claude',
+      supportedReasoningEfforts: [
+        { reasoningEffort: 'medium', description: '' },
+        { reasoningEffort: 'high', description: '' },
+      ],
+    },
+  ];
+  await update({ state: { ...props.state, model: 'claude', models, reasoningEffort: 'medium' } });
+  const effort = container.querySelector<HTMLSelectElement>('[aria-label="Reasoning effort"]');
+  expect(effort?.value).toBe('medium');
+  expect([...(effort?.options ?? [])].map((option) => option.text)).toEqual(['Medium', 'High']);
+});
+
 it('retains queued follow-ups across reconnects and requires an explicit retry', async () => {
   await update({ state: { ...props.state, status: 'working' } });
   await act(() => button('Queue message').click());
@@ -483,6 +600,96 @@ it('keeps a typed @ when the file search closes without a choice', async () => {
   expect(container.querySelector('.chat-file-picker')).toBeNull();
   expect(props.draft).toBe('Keep my drafta@ @');
   expect(composer().selectionStart).toBe('Keep my drafta@ @'.length);
+});
+
+const commands = [
+  { name: 'review-pr', description: 'Review a pull request', argumentHint: '' },
+  { name: 'review', description: 'Review the diff', argumentHint: '<pr>' },
+  { name: 'compact', description: 'Summarize the conversation', argumentHint: '' },
+  { name: 'pr-comments', description: 'Show PR comments', argumentHint: '' },
+  { name: 'plugin:docx', description: 'Edit Word files', argumentHint: '' },
+];
+/** Presses a key in the composer; true when nothing handled it. */
+const press = (key: string, init: KeyboardEventInit = {}) =>
+  composer().dispatchEvent(
+    new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...init }),
+  );
+const suggestions = () =>
+  Array.from(container.querySelectorAll('[role="option"]'), (option) => ({
+    text: option.textContent,
+    selected: option.getAttribute('aria-selected') === 'true',
+  }));
+
+it('completes slash commands and skills like a terminal', async () => {
+  await update({ draft: '', state: { ...props.state, commands } });
+  expect(composer().placeholder).toContain('/ for commands');
+  expect(composer().getAttribute('aria-expanded')).toBe('false');
+  await type('/r');
+  expect(composer().getAttribute('aria-expanded')).toBe('true');
+  // Names that only contain the query, such as pr-comments, are left out.
+  expect(suggestions()).toEqual([
+    { text: '/review-prReview a pull request', selected: true },
+    { text: '/review <pr>Review the diff', selected: false },
+  ]);
+  await act(() => press('ArrowUp'));
+  expect(suggestions().map((option) => option.selected)).toEqual([false, true]);
+  await act(() => press('ArrowDown'));
+  expect(suggestions().map((option) => option.selected)).toEqual([true, false]);
+  await act(() => press('Tab'));
+  expect(props.draft).toBe('/review-pr ');
+  expect(suggestions()).toEqual([]);
+  expect(send).not.toHaveBeenCalled();
+
+  await update({ draft: '' });
+  await type('/comp');
+  await act(() => enter());
+  expect(props.draft).toBe('/compact ');
+  expect(send).not.toHaveBeenCalled();
+  await act(() => enter());
+  expect(send).toHaveBeenCalledWith('/compact', []);
+
+  // A plugin skill matches by its own name as well as by the plugin's.
+  await update({ draft: '' });
+  await type('/docx');
+  expect(suggestions()).toEqual([{ text: '/plugin:docxEdit Word files', selected: true }]);
+  const option = container.querySelector<HTMLElement>('[role="option"]');
+  await act(() => option?.click());
+  expect(props.draft).toBe('/plugin:docx ');
+});
+
+it('sends a fully typed command and leaves a dismissed or unmatched slash alone', async () => {
+  await update({ draft: '', state: { ...props.state, commands } });
+  await type('/review');
+  // The exact name goes first, even though the agent lists review-pr before it.
+  expect(suggestions()[0]).toEqual({ text: '/review <pr>Review the diff', selected: true });
+  await act(() => enter());
+  expect(send).toHaveBeenLastCalledWith('/review', []);
+  // A name typed in other case is corrected rather than sent as the agent might not know it.
+  await update({ draft: '' });
+  await type('/Compact');
+  await act(() => enter());
+  expect(props.draft).toBe('/compact ');
+  expect(send).toHaveBeenLastCalledWith('/review', []);
+
+  await update({ draft: '' });
+  await type('/re');
+  expect(press('Tab', { shiftKey: true })).toBe(true);
+  expect(press('Tab', { ctrlKey: true })).toBe(true);
+  expect(props.draft).toBe('/re');
+  await act(() => press('Escape'));
+  expect(suggestions()).toEqual([]);
+  await type('v');
+  expect(suggestions()).toHaveLength(2);
+  await act(() => press('Escape'));
+  await act(() => enter());
+  expect(send).toHaveBeenLastCalledWith('/rev', []);
+
+  await update({ draft: '' });
+  await type('/src/app.ts');
+  expect(suggestions()).toEqual([]);
+  await update({ draft: '' });
+  await type('/re and /re');
+  expect(suggestions()).toEqual([]);
 });
 
 it('puts the caret where the @ was when a file is picked mid-draft', async () => {
@@ -870,6 +1077,28 @@ it('copies a message from its icon button and confirms it', async () => {
   expect(container.textContent).not.toContain('Use as new prompt');
 });
 
+it('copies a code block from its own button', async () => {
+  const writeText = vi.fn(async () => undefined);
+  Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+  await update({
+    state: {
+      ...props.state,
+      items: [
+        ...props.state.items,
+        { id: 'a', kind: 'assistant', text: 'Run:\n\n```sh\nnpm run lint\nnpm test\n```\n' },
+      ],
+    },
+  });
+  await act(() => button('Copy code').click());
+  expect(writeText).toHaveBeenCalledWith('npm run lint\nnpm test');
+  // The answer counts as streaming again once the agent works on, before new text.
+  await update({ state: { ...props.state, status: 'working' } });
+  expect(container.querySelectorAll('.chat-code')).toHaveLength(0);
+  await update({ state: { ...props.state, status: 'ready' } });
+  expect(container.querySelectorAll('.chat-code')).toHaveLength(1);
+  expect(container.querySelectorAll('.chat-code [aria-label="Copy code"]')).toHaveLength(1);
+});
+
 it('keeps declined and interrupted outcomes visible in a collapsed activity summary', async () => {
   await update({
     state: {
@@ -957,4 +1186,177 @@ it('includes uncategorized tool work alongside file and command summaries', asyn
   expect(container.querySelector('.chat-activity-label')?.textContent).toBe(
     '1 file inspected · 1 other operation',
   );
+});
+
+it('runs a ! draft as a shell command and keeps attachments for the next message', async () => {
+  const shell = vi.fn(async () => {});
+  await update({ draft: '', onShell: shell });
+  expect(composer().placeholder).toContain('! for a shell command');
+  await drop([screenshot()]);
+  await type('!git status');
+  expect(composer().closest('.chat-composer')?.classList.contains('chat-composer-shell')).toBe(
+    true,
+  );
+  // Entering shell mode must not add a row: the composer never jumps.
+  expect(container.querySelector('.chat-composer-status')).toBeNull();
+  expect(button('Run command').title).toContain('Claude answers its output');
+  await act(() => button('Run command').click());
+  expect(shell).toHaveBeenCalledWith('git status');
+  expect(send).not.toHaveBeenCalled();
+  expect(composer().value).toBe('');
+  // A command appears in the log once it starts; no sending copy stands in for it.
+  expect(container.querySelector('.chat-user-sending')).toBeNull();
+  expect(container.querySelector('img')).not.toBeNull();
+});
+
+it('shows the ! as a prompt beside the command, and Backspace before it leaves shell mode', async () => {
+  await update({ draft: '', onShell: vi.fn(async () => {}) });
+  await type('!');
+  const prompt = () => container.querySelector('.chat-shell-prompt');
+  expect(prompt()?.textContent).toBe('!');
+  expect(composer().value).toBe('');
+  await type('ls');
+  expect(composer().value).toBe('ls');
+  expect(props.draft).toBe('!ls');
+  composer().setSelectionRange(0, 0);
+  expect(press('Backspace')).toBe(false);
+  await settle();
+  expect(props.draft).toBe('ls');
+  expect(prompt()).toBeNull();
+  expect(composer().value).toBe('ls');
+});
+
+it('keeps the caret on the command when a ! is typed before it', async () => {
+  await update({ draft: 'ls -la', onShell: vi.fn(async () => {}) });
+  const input = composer();
+  input.value = '!ls -la';
+  input.setSelectionRange(1, 1);
+  await act(() => input.dispatchEvent(new InputEvent('input', { data: '!', bubbles: true })));
+  expect(props.draft).toBe('!ls -la');
+  expect(input.value).toBe('ls -la');
+  expect([input.selectionStart, input.selectionEnd]).toEqual([0, 0]);
+});
+
+it('shows only the command for a ! draft with leading space or a second bang', async () => {
+  await update({ draft: '  !ls', onShell: vi.fn(async () => {}) });
+  expect(composer().value).toBe('ls');
+  await update({ draft: '!!x' });
+  expect(composer().value).toBe('!x');
+  composer().setSelectionRange(0, 0);
+  press('Backspace');
+  await settle();
+  // One bang per Backspace, as in the terminal; `!x` is still a command.
+  expect(props.draft).toBe('!x');
+  expect(composer().value).toBe('x');
+});
+
+it('leaves shell mode on Backspace only with the caret at the start and no composition', async () => {
+  await update({ draft: '!ls', onShell: vi.fn(async () => {}) });
+  composer().setSelectionRange(0, 2);
+  expect(press('Backspace')).toBe(true);
+  composer().setSelectionRange(0, 0);
+  expect(press('Backspace', { isComposing: true })).toBe(true);
+  await settle();
+  expect(props.draft).toBe('!ls');
+});
+
+it('queues a ! command while the agent works and runs it once it is ready', async () => {
+  const shell = vi.fn(async () => {});
+  await update({
+    draft: '!npm test',
+    onShell: shell,
+    state: { ...props.state, status: 'working' },
+  });
+  await act(() => button('Queue command').click());
+  expect(container.querySelector('[aria-label="Queued messages"]')?.textContent).toContain(
+    '!npm test',
+  );
+  expect(shell).not.toHaveBeenCalled();
+  await update({ state: { ...props.state, status: 'ready' } });
+  expect(shell).toHaveBeenCalledWith('npm test');
+});
+
+it('sends a ! message to the agent when the chat cannot run commands', async () => {
+  await update({ draft: '!important' });
+  expect(composer().closest('.chat-composer')?.classList.contains('chat-composer-shell')).toBe(
+    false,
+  );
+  await act(() => enter());
+  expect(send).toHaveBeenCalledWith('!important', []);
+});
+
+it('shows a command the user ran with its output, apart from agent activity', async () => {
+  await update({
+    state: {
+      ...props.state,
+      items: [
+        ...props.state.items,
+        {
+          id: 's',
+          kind: 'shell',
+          text: 'boom',
+          activity: {
+            type: 'command',
+            label: 'make',
+            command: 'make',
+            status: 'failed',
+            exitCode: 2,
+          },
+        },
+      ],
+    },
+  });
+  const turn = container.querySelector('.chat-shell-turn');
+  expect(turn?.querySelector('.chat-speaker')?.textContent).toBe('You · Shell · Failed · exit 2');
+  expect(turn?.querySelector('pre')?.textContent).toBe('$ make\nboom');
+  expect(container.querySelector('.chat-tool')).toBeNull();
+});
+
+it('names Stop for the command while one runs', async () => {
+  await update({
+    state: {
+      ...props.state,
+      status: 'working',
+      items: [
+        {
+          id: 's',
+          kind: 'shell',
+          text: '',
+          activity: { type: 'command', label: 'sleep 9', command: 'sleep 9', status: 'running' },
+        },
+      ],
+    },
+  });
+  expect(button('Stop command')).toBeDefined();
+});
+
+it('offers no Run for a ! with no command after it', async () => {
+  await update({ draft: '!', onShell: vi.fn(async () => {}) });
+  expect(button('Run command').disabled).toBe(true);
+  await update({ draft: '!ls' });
+  expect(button('Run command').disabled).toBe(false);
+});
+
+it('brings a command the user starts into view', async () => {
+  await update({ draft: '', onShell: vi.fn(async () => {}) });
+  const log = container.querySelector<HTMLElement>('.chat-scroll');
+  if (!log) throw new Error('Missing log');
+  Object.defineProperty(log, 'scrollHeight', { configurable: true, value: 900 });
+  log.scrollTop = 0;
+  await update({
+    state: {
+      ...props.state,
+      status: 'working',
+      items: [
+        ...props.state.items,
+        {
+          id: 's',
+          kind: 'shell',
+          text: '',
+          activity: { type: 'command', label: 'ls', command: 'ls', status: 'running' },
+        },
+      ],
+    },
+  });
+  expect(log.scrollTop).toBe(900);
 });

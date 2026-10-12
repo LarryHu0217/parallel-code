@@ -200,7 +200,7 @@ export const CONFIDENCE_TOOLS: ToolDef[] = [
       'Use it when the user asks you to rate your confidence, or as the last step of a rating or review skill. Do not change code while rating. ' +
       `Send ${confidenceCaps.minScores} to ${confidenceCaps.maxScores} scores; name them as your rating defines them (one "Confidence" score, or dimensions such as "Correct", "Complete", "Minimal"). ` +
       `A score is {label (at most ${confidenceCaps.label} characters), score (0-100), why (one line, at most ${confidenceCaps.why} characters: what keeps it from being higher)}. ` +
-      `Optional findings, at most ${confidenceCaps.maxFindings}: {kind: "gap" (missing or unverified), "extra" (change the task did not ask for) or "risk", text (at most ${confidenceCaps.findingText} characters), file? (repository-relative)}. ` +
+      `Optional findings, at most ${confidenceCaps.maxFindings}: {kind: "gap" (missing or unverified), "extra" (change the task did not ask for) or "risk", text (a short phrase that leads with the key fact, at most ${confidenceCaps.findingText} characters), file? (repository-relative)}. ` +
       `Optional "source" names who rated, such as a skill name, at most ${confidenceCaps.source} characters.`,
     inputSchema: {
       type: 'object',

@@ -10,6 +10,7 @@ import { closeAgentInTask } from '../store/agents';
 import { resumeAgentSession } from '../store/sessions';
 import { sendPrompt } from '../store/tasks';
 import { triggerAction } from '../store/focus';
+import { setTaskFocusedPanel } from '../store/focused-panel';
 
 const mocks = vi.hoisted(() => ({
   invoke: vi.fn<(channel: unknown, args?: unknown) => Promise<unknown>>(async () => undefined),
@@ -730,4 +731,52 @@ it('does not open a second opinion for an unavailable source', () => {
   mount();
   triggerAction('task:second-opinion');
   expect(document.querySelector('[aria-label="Instructions"]')).toBeNull();
+});
+
+it('hands a pending question the keyboard however focus reaches the chat', async () => {
+  const question = {
+    id: 1,
+    kind: 'question' as const,
+    text: 'Claude needs your input',
+    since: 1,
+    questions: [
+      {
+        id: 'scope',
+        question: 'Which scope?',
+        isSecret: false,
+        options: [{ label: 'Narrow', description: '' }],
+      },
+    ],
+  };
+  const optionFocused = () => document.activeElement?.firstChild?.textContent === 'Narrow';
+  const outside = document.createElement('button');
+  document.body.append(outside);
+  try {
+    setStore('tasks', 'task', { mainAgentView: 'chat', promptDraft: '' });
+    setStore('agents', 'agent', 'chatState', { status: 'working', items: [], requests: [] });
+    setStore({ activeTaskId: 'task', sidebarFocused: false, placeholderFocused: false });
+    // Alt+Down reaches the prompt row, which chat mode hides: its key focuses the composer.
+    setStore('focusedPanel', 'task', 'prompt');
+    mount();
+    await vi.waitFor(() => expect(host.querySelector('textarea')).not.toBeNull());
+    host.querySelector('textarea')?.focus();
+    setStore('agents', 'agent', 'chatState', 'requests', [question]);
+    await vi.waitFor(() => expect(optionFocused()).toBe(true));
+
+    // Arriving from elsewhere, e.g. Alt+Left from another task, runs the panel's focus on
+    // either cell. Unsent text keeps the composer, so a stray Space never approves.
+    const composer = () => host.querySelector('textarea');
+    for (const panel of ['ai-terminal:agent', 'prompt']) {
+      setStore('tasks', 'task', 'promptDraft', 'Half written');
+      outside.focus();
+      setTaskFocusedPanel('task', panel);
+      await vi.waitFor(() => expect(document.activeElement).toBe(composer()));
+      setStore('tasks', 'task', 'promptDraft', '');
+      outside.focus();
+      setTaskFocusedPanel('task', panel);
+      await vi.waitFor(() => expect(optionFocused()).toBe(true));
+    }
+  } finally {
+    outside.remove();
+  }
 });

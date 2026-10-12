@@ -1,4 +1,5 @@
 import { Show, For, createSignal, createEffect, onMount, onCleanup, untrack } from 'solid-js';
+import type { JSX } from 'solid-js';
 import { isAgentSupportedInMode } from '../../electron/shared/agent-support';
 import type { TranscriptMarks } from '../investigation/transcript';
 
@@ -77,6 +78,8 @@ interface TaskAITerminalProps {
    *  took the link. Otherwise the file opens in the Markdown viewer. */
   onFileLink?: (filePath: string) => boolean;
   onReview?: (path?: string) => void;
+  /** Task brief bar, shown between the agent header and its output, where people look first. */
+  brief?: JSX.Element;
 }
 
 export function TaskAITerminal(props: TaskAITerminalProps) {
@@ -543,6 +546,7 @@ export function TaskAITerminal(props: TaskAITerminalProps) {
             </div>
           </div>
         </InfoBar>
+        {props.brief}
         <Show when={handoff()} keyed>
           {(request) => (
             <AgentHandoffComposer
@@ -915,7 +919,9 @@ function AgentTerminalPane(props: {
                 agentId={props.agentId}
                 active={
                   props.visible &&
-                  isPanelFocusedOrDefault(props.task.id, aiTerminalPanelId(props.agentId))
+                  (isPanelFocusedOrDefault(props.task.id, aiTerminalPanelId(props.agentId)) ||
+                    // Chat mode hides the prompt panel, so its focus key lands in this composer.
+                    isPanelFocused(props.task.id, 'prompt'))
                 }
                 onReady={(focus) => {
                   chatFocus = focus;

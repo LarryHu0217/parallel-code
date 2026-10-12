@@ -1,6 +1,7 @@
 export interface ChatItem {
   id: string;
-  kind: 'user' | 'assistant' | 'tool';
+  /** 'shell' is a command the user ran with `!`; it carries a command activity. */
+  kind: 'user' | 'assistant' | 'tool' | 'shell';
   text: string;
   images?: ChatImage[];
   activity?: {
@@ -78,11 +79,20 @@ export interface ChatModel {
   supportedReasoningEfforts: { reasoningEffort: string; description: string }[];
 }
 
+/** A slash command or skill the agent accepts as a message starting with `/name`. */
+export interface ChatCommand {
+  name: string;
+  description: string;
+  argumentHint: string;
+}
+
 export interface AgentChatState {
   model?: string;
   reasoningEffort?: string;
   models?: ChatModel[];
   modelsError?: string;
+  /** What the composer offers after a leading `/`; absent when the agent lists none. */
+  commands?: ChatCommand[];
   threadId?: string;
   status: 'starting' | 'ready' | 'working' | 'closed';
   items: ChatItem[];

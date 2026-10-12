@@ -182,6 +182,18 @@ export function PrMergeRoute(props: { pr: FinishPr; disabled: boolean }) {
         <Show when={props.pr.pr()}>
           {(details) => (
             <>
+              <Show when={details().isDraft}>
+                <p style={mutedText}>
+                  <button
+                    type="button"
+                    style={linkButtonStyle}
+                    disabled={disabled()}
+                    onClick={() => void props.pr.markReady()}
+                  >
+                    {props.pr.busy() === 'ready' ? 'Marking ready…' : 'Mark ready for review'}
+                  </button>
+                </p>
+              </Show>
               <label
                 style={{
                   display: 'flex',

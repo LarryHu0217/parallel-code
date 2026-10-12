@@ -1,4 +1,5 @@
 import { matchesTaskProjectFilter } from './task-project-filter';
+import { info as logInfo } from '../lib/log';
 import { batch, createEffect, createRoot, createSignal, onCleanup, untrack } from 'solid-js';
 import { store, setStore } from './core';
 import { AGENT_HOOK_STALE_MS, getAgentHookStatus, type AgentHookStatus } from './agentHookStatus';
@@ -261,6 +262,29 @@ export function bringTaskToFront(taskId: string): void {
   });
 }
 
+/** Why a backgrounded task must come back, or undefined while it keeps waiting. */
+function returnReason(
+  taskId: string,
+  baseline: BackgroundTask,
+  newActivity: boolean,
+  ciDone: boolean,
+): string | undefined {
+  const task = store.tasks[taskId];
+  if (!task) return 'removed';
+  if (task.closingStatus) return 'closing';
+  const placed = task.collapsed
+    ? baseline.snoozedUntil !== undefined && store.collapsedTaskOrder.includes(taskId)
+    : store.taskOrder.includes(taskId);
+  if (!placed) return 'moved';
+  if (baseline.snoozedUntil !== undefined && task.snoozedUntil === undefined) return 'unsnoozed';
+  if (baseline.untilCi === true && !task.snoozedUntilCi) return 'unsnoozed';
+  if (taskBlock(taskId).includes(store.activeTaskId ?? '')) return 'activated';
+  if (newActivity) return 'activity';
+  if (!ciDone) return undefined;
+  // Checks only vanish once the PR closes or the task loses its PR link.
+  return getPrChecks(taskId) ? 'ci finished' : 'checks gone';
+}
+
 /** Independent of OS notification preferences and window focus. Auto-return
  * changes order only; it never takes focus from the task the user is working on. */
 export function startBackgroundTaskWatcher(): () => void {
@@ -315,7 +339,6 @@ export function startBackgroundTaskWatcher(): () => void {
     });
     createEffect(() => {
       for (const [taskId, baseline] of backgroundTasks()) {
-        const task = store.tasks[taskId];
         const current =
           baseline.snoozedUntil === undefined && !baseline.untilCi
             ? activitySnapshot(taskId)
@@ -329,19 +352,18 @@ export function startBackgroundTaskWatcher(): () => void {
           (checks
             ? checks.merged === true || checks.overall === 'success' || checks.overall === 'failure'
             : baseline.ciSeen === true);
-        if (
-          !task ||
-          task.closingStatus ||
-          (task.collapsed
-            ? baseline.snoozedUntil === undefined || !store.collapsedTaskOrder.includes(taskId)
-            : !store.taskOrder.includes(taskId)) ||
-          (baseline.snoozedUntil !== undefined && task.snoozedUntil === undefined) ||
-          (baseline.untilCi === true && !task.snoozedUntilCi) ||
-          taskBlock(taskId).includes(store.activeTaskId ?? '') ||
-          change === 'new' ||
-          ciDone
-        ) {
-          untrack(() => bringTaskToFront(taskId));
+        const reason = returnReason(taskId, baseline, change === 'new', ciDone);
+        if (reason) {
+          untrack(() => {
+            // Says which condition woke the task when a return looks spurious.
+            logInfo('background-tasks', 'returning task', {
+              taskId,
+              reason,
+              activeTaskId: store.activeTaskId,
+              checks: checks && { overall: checks.overall, merged: checks.merged },
+            });
+            bringTaskToFront(taskId);
+          });
         } else if (change === 'rebaseline' && current) {
           untrack(() => setBackgroundTasks((previous) => new Map(previous).set(taskId, current)));
         } else if (checks && !baseline.ciSeen) {

@@ -210,7 +210,22 @@ export function PullRequestDialog(props: PullRequestDialogProps) {
             <Show
               when={!blocker()}
               fallback={
-                <span style={{ 'font-size': '13px', color: theme.fgMuted }}>{blocker()}</span>
+                <div style={{ display: 'flex', gap: '8px', 'align-items': 'center' }}>
+                  <span style={{ flex: '1', 'font-size': '13px', color: theme.fgMuted }}>
+                    {blocker()}
+                  </span>
+                  <Show when={d().isDraft && d().state === 'OPEN'}>
+                    <button
+                      type="button"
+                      class="btn-secondary"
+                      disabled={!!busy()}
+                      onClick={() => void actions.markReady()}
+                      style={dialogButtonStyle(false, !!busy())}
+                    >
+                      {busy() === 'ready' ? 'Marking ready…' : 'Mark ready for review'}
+                    </button>
+                  </Show>
+                </div>
               }
             >
               <Show

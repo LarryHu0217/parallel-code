@@ -6,6 +6,7 @@ import {
 } from '../../electron/shared/evidence';
 import { Channel, invoke } from './ipc';
 import { warn as logWarn } from './log';
+import { PROVIDER_ERROR_CHARS, providerFailureMessage } from './provider-error';
 
 interface AskMessage {
   type: 'chunk' | 'error' | 'done';
@@ -15,7 +16,6 @@ interface AskMessage {
 
 /** A review is a short summary and a handful of findings. */
 const MAX_RESPONSE_CHARS = 60_000;
-const MAX_ERROR_CHARS = 4_000;
 
 export interface EvidenceModelRequest {
   result: Promise<string>;
@@ -72,10 +72,13 @@ export function startEvidenceModelRequest(options: {
       response += message.text ?? '';
       if (response.length > MAX_RESPONSE_CHARS) stop(new Error('The response was too long.'));
     } else if (message.type === 'error') {
-      providerError = (providerError + (message.text ?? '')).slice(0, MAX_ERROR_CHARS);
+      providerError = (providerError + (message.text ?? '')).slice(0, PROVIDER_ERROR_CHARS);
     } else if (message.type === 'done' && end()) {
       if (message.exitCode === 0) settle.resolve(response);
-      else settle.reject(new Error(providerError || 'The model provider failed.'));
+      else
+        settle.reject(
+          new Error(providerFailureMessage(providerError, response, 'The model provider failed.')),
+        );
     }
   };
 

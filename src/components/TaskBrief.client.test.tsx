@@ -2,7 +2,8 @@ import { render } from 'solid-js/web';
 import { createStore, type SetStoreFunction } from 'solid-js/store';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockChange, mockKeep, mockRate, mockRefreshCode } = vi.hoisted(() => ({
+const { mockChange, mockKeep, mockRate, mockRefreshCode, mockTargetName } = vi.hoisted(() => ({
+  mockTargetName: vi.fn<() => string | undefined>(),
   mockRefreshCode: vi.fn(),
   mockChange: vi.fn(),
   mockKeep: vi.fn(),
@@ -10,6 +11,7 @@ const { mockChange, mockKeep, mockRate, mockRefreshCode } = vi.hoisted(() => ({
 }));
 
 vi.mock('../store/task-brief', () => ({
+  briefTargetAgentName: mockTargetName,
   changeBriefDecision: mockChange,
   keepBriefDecision: mockKeep,
   reopenBriefDecision: vi.fn(),
@@ -24,7 +26,10 @@ import { TaskBriefBar, TaskBriefLine } from './TaskBrief';
 
 let dispose: (() => void) | undefined;
 let lastSetState: SetStoreFunction<Task> | undefined;
-beforeEach(() => setStore('taskBriefs', true));
+beforeEach(() => {
+  setStore('taskBriefs', true);
+  mockTargetName.mockReturnValue(undefined);
+});
 afterEach(() => {
   dispose?.();
   document.body.replaceChildren();
@@ -104,7 +109,11 @@ describe('TaskBriefBar', () => {
     expect(text).toContain('Stop webhook timeouts.');
     expect(text).toContain('Route queues the event.');
     expect(text).toContain('Added Redis to production compose.');
-    expect(text).toContain('from the rating');
+    expect(card()?.querySelector('title')?.textContent).toBe('From the confidence rating');
+    const headings = Array.from(card()?.querySelectorAll('h3') ?? []).map((h) =>
+      h.getAttribute('aria-label'),
+    );
+    expect(headings).toEqual(['Changed (1)', 'Extra (1)', 'Open (1)', 'Decided (1)']);
     expect(text).toContain('code changed since');
     button('src/webhooks.ts')?.click();
     expect(onFileClick).toHaveBeenCalledWith('src/webhooks.ts');
@@ -127,6 +136,18 @@ describe('TaskBriefBar', () => {
     await vi.waitFor(() =>
       expect(mockChange).toHaveBeenCalledWith('task', 'Used BullMQ.', 'Use pg-boss instead.'),
     );
+  });
+
+  it('quietens the Decided icon once every decision is handled', () => {
+    const { bar } = mount(baseTask());
+    bar.click();
+    const decidedIcon = () =>
+      card()?.querySelector('h3[aria-label^="Decided"] svg')?.getAttribute('style') ?? '';
+    expect(decidedIcon()).toContain('var(--review)');
+    lastSetState?.('brief', 'decisions', { 'Used BullMQ.': 'kept' });
+    expect(decidedIcon()).toContain('var(--fg-muted)');
+    lastSetState?.('brief', 'decisions', { 'Used BullMQ.': 'sent' });
+    expect(decidedIcon()).toContain('var(--fg-muted)');
   });
 
   it('keeps a half-typed correction when the brief is rewritten', () => {
@@ -171,7 +192,7 @@ describe('TaskBriefBar', () => {
     expect(bar.textContent).toContain('Confidence rating');
     bar.click();
     expect(mockRefreshCode).toHaveBeenCalledWith('task');
-    expect(card()?.textContent).toContain('Task briefs are off');
+    expect(card()?.textContent).toContain('Write task briefs');
   });
 
   it('marks a rating out of date from a newer code check', () => {
@@ -190,6 +211,39 @@ describe('TaskBriefBar', () => {
     expect(mockRate).toHaveBeenCalledWith('task');
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
     expect(card()).toBeNull();
+  });
+
+  it('leaves Escape to the focused element once closed by a click outside', () => {
+    const { bar } = mount(baseTask());
+    const terminal = document.createElement('textarea');
+    document.body.append(terminal);
+    bar.click();
+    terminal.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    expect(card()).toBeNull();
+
+    terminal.focus();
+    const reached = vi.fn();
+    terminal.addEventListener('keydown', reached);
+    terminal.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(reached).toHaveBeenCalled();
+    expect(document.activeElement).toBe(terminal);
+    terminal.remove();
+  });
+
+  it('names the agent a rating goes to when the task has several', () => {
+    mockTargetName.mockReturnValue('Codex');
+    const { bar } = mount(baseTask({ confidence: undefined }));
+    bar.click();
+    expect(button('Rate confidence · Codex')).toBeDefined();
+  });
+
+  it('offers a rating and points to briefs when briefs are off and nothing is rated', () => {
+    setStore('taskBriefs', false);
+    const { bar } = mount(baseTask({ brief: undefined, confidence: undefined }));
+    expect(bar.textContent).toContain('Rate confidence…');
+    bar.click();
+    expect(card()?.textContent).toContain('Write task briefs');
+    expect(button('Rate confidence')).toBeDefined();
   });
 
   it('explains the empty state before the first brief', () => {

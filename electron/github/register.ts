@@ -21,6 +21,7 @@ import {
   getFailedChecks,
   getPullRequestDetails,
   getReviewFeedback,
+  markPullRequestReady,
   mergePullRequest,
 } from './pull-requests.js';
 
@@ -134,6 +135,10 @@ export function registerGitHubHandlers(): void {
   ipcMain.handle(IPC.GetPrFailedChecks, (_e, args: IpcArgs) => getFailedChecks(prUrlArg(args)));
 
   ipcMain.handle(IPC.GetPrReviewFeedback, (_e, args: IpcArgs) => getReviewFeedback(prUrlArg(args)));
+
+  ipcMain.handle(IPC.MarkPullRequestReady, (_e, args: IpcArgs) =>
+    markPullRequestReady(prUrlArg(args)),
+  );
 
   ipcMain.handle(IPC.MergePullRequest, (_e, args: IpcArgs) => {
     const prUrl = prUrlArg(args);

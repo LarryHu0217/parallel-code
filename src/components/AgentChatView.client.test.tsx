@@ -15,6 +15,8 @@ const mocks = vi.hoisted(() => ({
   openFileInEditor: vi.fn(async () => {}),
   revealItemInDir: vi.fn(async () => {}),
   openCanvasDocument: vi.fn(),
+  setTaskFocusedPanel: vi.fn(),
+  registerFocusFn: vi.fn<(key: string, fn: () => void) => void>(),
   channel: undefined as
     | { onmessage: ((state: AgentChatState) => void) | null; dispose: () => void }
     | undefined,
@@ -44,7 +46,11 @@ vi.mock('../store/tasks', () => ({
     setStore('tasks', taskId, 'promptDraft', value),
 }));
 vi.mock('../store/focus', () => ({ registerAction: vi.fn(), unregisterAction: vi.fn() }));
-vi.mock('../store/focused-panel', () => ({ registerFocusFn: vi.fn(), unregisterFocusFn: vi.fn() }));
+vi.mock('../store/focused-panel', () => ({
+  registerFocusFn: mocks.registerFocusFn,
+  unregisterFocusFn: vi.fn(),
+  setTaskFocusedPanel: mocks.setTaskFocusedPanel,
+}));
 // Stands in for the chat itself: it keeps the live props and shows the transcript
 // and a Decline button, which is all these tests look at.
 vi.mock('./chat/ChatView', async () => {
@@ -223,6 +229,29 @@ describe('Codex chat view', () => {
     ]);
   });
 
+  it('focuses a linked document after the enclosing pane handles the click', async () => {
+    setStore('activeTaskId', null);
+    dispose = render(() => <AgentChatView task={task()} agentId="agent-1" active />, container);
+    const chat = await tick();
+    chat.onOpenFile?.('/worktree/project-plan.md');
+    expect(mocks.setTaskFocusedPanel).not.toHaveBeenCalled();
+    // The pointer selects this task as the original link click bubbles up.
+    setStore('activeTaskId', 'task-1');
+    await Promise.resolve();
+    expect(mocks.openCanvasDocument).toHaveBeenCalledWith('task-1', 'project-plan.md');
+    expect(mocks.setTaskFocusedPanel).toHaveBeenCalledWith('task-1', 'canvas');
+  });
+
+  it('does not move focus after leaving the linked document task', async () => {
+    setStore('activeTaskId', 'task-1');
+    dispose = render(() => <AgentChatView task={task()} agentId="agent-1" active />, container);
+    const chat = await tick();
+    chat.onOpenFile?.('project-plan.md');
+    setStore('activeTaskId', 'other-task');
+    await Promise.resolve();
+    expect(mocks.setTaskFocusedPanel).not.toHaveBeenCalled();
+  });
+
   it('references dropped files inside the worktree relatively and others absolutely', async () => {
     const paths = new Map<File, string>();
     Object.defineProperty(window, 'electron', {
@@ -316,6 +345,35 @@ describe('Codex chat view', () => {
     );
     expect(task().claudeChatSessionId).toBe('claude-new');
     expect(task().codexChatThreadId).toBe('saved-thread');
+  });
+
+  it('remembers a Claude conversation that so far holds only ! commands', async () => {
+    setStore('agents', 'agent-1', 'def', 'id', 'claude-code');
+    setStore('agents', 'agent-1', 'def', 'command', 'claude');
+    dispose = render(() => <AgentChatView task={task()} agentId="agent-1" active />, container);
+    await tick();
+    mocks.channel?.onmessage?.(
+      state({
+        threadId: 'claude-shell',
+        items: [
+          {
+            id: 's',
+            kind: 'shell',
+            text: 'On branch main',
+            activity: {
+              type: 'command',
+              label: 'git status',
+              command: 'git status',
+              status: 'completed',
+            },
+          },
+        ],
+      }),
+    );
+    expect(task().claudeChatSessionId).toBe('claude-shell');
+    expect(task().chatSessions).toContainEqual(
+      expect.objectContaining({ threadId: 'claude-shell', title: '!git status' }),
+    );
   });
 
   it('starts a fresh conversation and forgets the session it replaced', async () => {
@@ -545,7 +603,7 @@ describe('Codex chat view', () => {
     const chat = await tick();
     expect(chat.hideToolbar).toBe(true);
     const focusComposer = vi.fn();
-    chat.onActions({ focus: focusComposer, send: async () => {} });
+    chat.onActions({ focus: focusComposer, focusRequest: () => false, send: async () => {} });
     mocks.channel?.onmessage?.(state({ items: [{ id: 'a', kind: 'assistant', text: 'Copy me' }] }));
     // A click anywhere in the pane re-focuses it, which must not move a focused control
     container.querySelector<HTMLButtonElement>('.mock-chat button')?.focus();
@@ -560,6 +618,49 @@ describe('Codex chat view', () => {
     expect(focusComposer).not.toHaveBeenCalled();
     window.getSelection()?.removeAllRanges();
     focusPane?.();
+    expect(focusComposer).toHaveBeenCalledTimes(1);
+  });
+
+  it('enters the pane on a pending request, even over a selection', async () => {
+    let focusPane: (() => void) | undefined;
+    dispose = render(
+      () => (
+        <AgentChatView task={task()} agentId="agent-1" active onReady={(fn) => (focusPane = fn)} />
+      ),
+      container,
+    );
+    const chat = await tick();
+    const focusComposer = vi.fn();
+    const focusRequest = vi.fn(() => true);
+    chat.onActions({ focus: focusComposer, focusRequest, send: async () => {} });
+    mocks.channel?.onmessage?.(state({ items: [{ id: 'a', kind: 'assistant', text: 'Copy me' }] }));
+    const text = container.querySelector('.mock-chat p');
+    if (!text) throw new Error('Missing transcript');
+    window.getSelection()?.selectAllChildren(text);
+    try {
+      focusPane?.();
+      expect(focusRequest).toHaveBeenCalledTimes(1);
+      expect(focusComposer).not.toHaveBeenCalled();
+    } finally {
+      window.getSelection()?.removeAllRanges();
+    }
+  });
+
+  it('lets the hidden prompt panel answer a pending request before the composer', async () => {
+    dispose = render(() => <AgentChatView task={task()} agentId="agent-1" active />, container);
+    const chat = await tick();
+    const focusComposer = vi.fn();
+    const focusRequest = vi.fn(() => true);
+    chat.onActions({ focus: focusComposer, focusRequest, send: async () => {} });
+    const focusPrompt = mocks.registerFocusFn.mock.calls.find(
+      ([key]) => key === 'task-1:prompt',
+    )?.[1];
+    // Alt+Down reaches the prompt row, which in chat mode is this pane.
+    focusPrompt?.();
+    expect(focusRequest).toHaveBeenCalledTimes(1);
+    expect(focusComposer).not.toHaveBeenCalled();
+    focusRequest.mockReturnValue(false);
+    focusPrompt?.();
     expect(focusComposer).toHaveBeenCalledTimes(1);
   });
 

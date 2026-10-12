@@ -8,6 +8,7 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk';
 import type {
   AgentChatState,
+  ChatCommand,
   ChatDecision,
   ChatItem,
   ChatImage,
@@ -19,8 +20,10 @@ import {
   describePermissionUpdates,
   describeToolCall,
   localCommandOutput,
+  shellTurn,
   visibleUserText,
 } from './describe.js';
+import { runShellCommand, type ShellRun } from './shell-command.js';
 import { appliedDiffs, proposedDiffs } from './claude-diffs.js';
 import { chatSettingSources, launchPermissionMode, settingsDefaultMode } from './settings-mode.js';
 import type { AgentChat, ChatStartOptions } from './types.js';
@@ -34,6 +37,22 @@ const record = (value: unknown): Record<string, unknown> =>
     ? (value as Record<string, unknown>)
     : {};
 const string = (value: unknown): string => (typeof value === 'string' ? value : '');
+
+/** The CLI's slash commands and skills, as listed at startup and after each change. */
+function chatCommands(value: unknown): ChatCommand[] {
+  return (Array.isArray(value) ? value : []).flatMap((entry) => {
+    const command = record(entry);
+    const name = string(command.name);
+    if (!name) return [];
+    return [
+      {
+        name,
+        description: string(command.description),
+        argumentHint: string(command.argumentHint),
+      },
+    ];
+  });
+}
 const contentText = (value: unknown): string =>
   typeof value === 'string'
     ? value
@@ -61,6 +80,9 @@ export class ClaudeChat implements AgentChat {
     reject: (error: Error) => void;
   };
   private observers = new Set<(state: AgentChatState) => void>();
+  private shell?: ShellRun;
+  /** `!` commands whose jobs may still run; they end with the chat, as a terminal's do. */
+  private shellJobs = new Set<ShellRun>();
   private permissions = new Map<
     string,
     {
@@ -75,6 +97,10 @@ export class ClaudeChat implements AgentChat {
   // arrives in the same turn, and replays repeat a message within its own turn.
   private seenToolResults = new Set<string>();
   private toolDecisions = new Map<string, 'declined' | 'interrupted'>();
+  /** Streamed text items that their complete block has not reached yet. */
+  private streamed = new Set<string>();
+  /** The item each complete text block landed on, so a repeat lands there too. */
+  private shownText = new Map<string, string>();
   private publishTimer?: ReturnType<typeof setTimeout>;
   /** Launch output only: before the first prompt it cannot contain tool arguments. */
   private launchDiagnostics: string[] = [];
@@ -175,10 +201,12 @@ export class ClaudeChat implements AgentChat {
       },
     });
     this.reading = this.read();
-    await this.query.initializationResult();
+    const initialized = await this.query.initializationResult();
+    this.state.commands = chatCommands(record(initialized).commands);
     if (this.isClosed())
       throw new Error(this.state.error ?? 'Claude disconnected while connecting.');
     await this.loadModels();
+    await this.readAppliedModel();
     if (this.isClosed())
       throw new Error(this.state.error ?? 'Claude disconnected while connecting.');
     this.noteUnadoptedSettingsMode(settingsMode);
@@ -227,9 +255,16 @@ export class ClaudeChat implements AgentChat {
     try {
       if (!this.query) throw new Error('Claude is not connected.');
       const models = await this.query.supportedModels();
+      const id = (model: (typeof models)[number]) => model.resolvedModel ?? model.value;
       this.state.models = models
+        // The "default" row aliases a model the catalog also lists by name; show that name.
+        .filter(
+          (model) =>
+            model.value !== 'default' ||
+            !models.some((other) => other !== model && id(other) === id(model)),
+        )
         .map((model) => ({
-          model: model.resolvedModel ?? model.value,
+          model: id(model),
           // A picker on the composer names the model; the CLI's advice would crowd it.
           displayName: model.displayName.replace(/\s*\(recommended\)$/i, ''),
           supportedReasoningEfforts: (model.supportedEffortLevels ?? []).map((reasoningEffort) => ({
@@ -272,6 +307,7 @@ export class ClaudeChat implements AgentChat {
       if (!this.isClosed()) {
         this.state.model = model;
         this.state.reasoningEffort = effort;
+        await this.readAppliedModel();
       }
     } finally {
       if (!this.isClosed()) {
@@ -280,6 +316,25 @@ export class ClaudeChat implements AgentChat {
       }
       this.publish();
     }
+  }
+
+  /**
+   * Adopts the model and effort the CLI will actually send. Without an explicit
+   * choice it applies its own defaults, which the picker names instead of calling
+   * them "Default". `getSettings` is missing from the SDK's types.
+   */
+  private async readAppliedModel(): Promise<void> {
+    const query = this.query as (Query & { getSettings?: () => Promise<unknown> }) | undefined;
+    let applied: Record<string, unknown>;
+    try {
+      applied = record(record(await query?.getSettings?.()).applied);
+    } catch {
+      return; // Older CLIs: the init message still names the model on the first turn.
+    }
+    if (this.isClosed()) return;
+    this.state.model = string(applied.model) || this.state.model;
+    // null means no effort is sent, e.g. for a model without effort levels.
+    if ('effort' in applied) this.state.reasoningEffort = string(applied.effort) || undefined;
   }
 
   async setPermissionMode(mode: ChatPermissionMode): Promise<void> {
@@ -328,7 +383,86 @@ export class ClaudeChat implements AgentChat {
     return accepted;
   }
 
+  /**
+   * Run a `!` command and hand it over the way the terminal's shell mode does: as a
+   * transcript entry that starts a turn, so Claude answers its output.
+   * Returns once the command starts; the chat stays busy until that turn ends,
+   * so anything sent meanwhile queues instead of overtaking it.
+   */
+  async runShell(command: string): Promise<void> {
+    if (this.state.status !== 'ready' || !this.query)
+      throw new Error('Wait for Claude to finish or reconnect.');
+    this.state.status = 'working';
+    this.state.startedAt = Date.now();
+    this.state.interrupted = false;
+    this.state.error = undefined;
+    const id = randomUUID();
+    const shown = (text: string, activity?: Partial<NonNullable<ChatItem['activity']>>) =>
+      this.upsert({
+        id,
+        kind: 'shell',
+        text,
+        activity: { type: 'command', label: command, command, status: 'running', ...activity },
+      });
+    shown('');
+    this.publish();
+    const run = runShellCommand({
+      command,
+      cwd: this.opts.cwd,
+      env: this.opts.env,
+      onOutput: () => {
+        shown(stripAnsi(run.output()));
+        if (!this.publishTimer) this.publishTimer = setTimeout(() => this.publish(), 50);
+      },
+    });
+    this.shell = run;
+    this.shellJobs.add(run);
+    void run.closed.then(() => this.shellJobs.delete(run));
+    void this.recordShell(id, run, shown);
+  }
+
+  /** Waits for a `!` command to end, then hands it to the CLI for the transcript. */
+  private async recordShell(
+    id: ReturnType<typeof randomUUID>,
+    run: ShellRun,
+    shown: (text: string, activity?: Partial<NonNullable<ChatItem['activity']>>) => void,
+  ): Promise<void> {
+    let exitCode: number | undefined;
+    try {
+      exitCode = await run.done;
+    } catch (error) {
+      if (this.isClosed()) return;
+      shown(error instanceof Error ? error.message : String(error), { status: 'failed' });
+      this.state.status = 'ready';
+      this.publish();
+      return;
+    } finally {
+      this.shell = undefined;
+    }
+    if (this.isClosed()) return;
+    shown(stripAnsi(run.output()), {
+      status: run.killed ? 'interrupted' : exitCode === 0 ? 'completed' : 'failed',
+      ...(exitCode !== undefined ? { exitCode } : {}),
+    });
+    this.input = {
+      type: 'user',
+      uuid: id,
+      session_id: this.state.threadId,
+      // A stopped command is one the user gave up on; it waits for the next message.
+      shouldQuery: !run.killed,
+      // Colours mean nothing to the model; FORCE_COLOR and the like can still add them.
+      message: { role: 'user', content: stripAnsi(run.transcript(exitCode)) },
+      parent_tool_use_id: null,
+    };
+    this.publish();
+    this.wake?.();
+  }
+
   async interrupt(): Promise<void> {
+    if (this.shell) {
+      this.shell.kill();
+      return;
+    }
     if (this.state.status !== 'working' || !this.query) return;
     // A queued prompt may not have reached the CLI yet. Closing is the only certain
     // cancellation before its receipt; keep the draft and allow a clean reconnect.
@@ -466,6 +600,7 @@ export class ClaudeChat implements AgentChat {
     this.pendingSend = undefined;
     this.input = undefined;
     this.wake?.();
+    for (const job of this.shellJobs) job.kill();
     this.clearPermissions();
     this.settleActivities();
     this.publish();
@@ -489,6 +624,30 @@ export class ClaudeChat implements AgentChat {
     const index = this.state.items.findIndex((existing) => existing.id === item.id);
     if (index < 0) this.state.items.push(item);
     else this.state.items[index] = item;
+  }
+
+  /** A `!` command from the transcript, unless it is one this chat ran and shows already. */
+  private showShell(id: string, shell: NonNullable<ReturnType<typeof shellTurn>>): void {
+    const text = stripAnsi(shell.output);
+    if (shell.command === undefined) {
+      // The terminal records the output as a turn of its own, right after the command.
+      const last = this.state.items[this.state.items.length - 1];
+      if (last?.kind === 'shell' && !last.text) this.upsert({ ...last, text });
+      return;
+    }
+    if (this.state.items.some((item) => item.id === id)) return;
+    this.upsert({
+      id,
+      kind: 'shell',
+      text,
+      activity: {
+        type: 'command',
+        label: shell.command,
+        command: shell.command,
+        status: shell.stopped ? 'interrupted' : shell.failed ? 'failed' : 'completed',
+        ...(shell.exitCode ? { exitCode: shell.exitCode } : {}),
+      },
+    });
   }
 
   private canUseTool: CanUseTool = async (tool, input, options) => {
@@ -567,6 +726,27 @@ export class ClaudeChat implements AgentChat {
     });
   };
 
+  /** A reply's complete text block, on the item streamed for it if there is one. */
+  private showText(reply: string, key: string, text: string): void {
+    let id = this.shownText.get(key);
+    if (!id) {
+      // The CLI sends each block of a reply as its own message, so a block's index in
+      // it is not the index it streamed at, and it sends nothing for a blank block.
+      // The streamed copy is the one whose text this block completes.
+      id =
+        this.state.items.find(
+          (item) =>
+            this.streamed.has(item.id) &&
+            item.id.startsWith(`${reply}:`) &&
+            !!item.text.trim() &&
+            text.startsWith(item.text),
+        )?.id ?? key;
+      this.streamed.delete(id);
+      this.shownText.set(key, id);
+    }
+    this.upsert({ id, kind: 'assistant', text });
+  }
+
   /** `live` is false while replaying history, which the caller publishes once. */
   private receive(value: unknown, live = true): void {
     const message = record(value);
@@ -579,6 +759,9 @@ export class ClaudeChat implements AgentChat {
       // changed it, which makes the note on how the launch mode was chosen stale.
       if (reported && reported !== this.launchedMode) this.state.permissionNote = undefined;
       this.state.permissionMode = reported || this.state.permissionMode;
+    } else if (message.type === 'system' && message.subtype === 'commands_changed') {
+      // Skills found mid-session, e.g. in a subdirectory the agent moved into.
+      this.state.commands = chatCommands(message.commands);
     } else if (message.type === 'stream_event') {
       this.acceptSend();
       const event = record(message.event);
@@ -589,6 +772,7 @@ export class ClaudeChat implements AgentChat {
         record(event.delta).type === 'text_delta'
       ) {
         const id = `${this.streamId}:${event.index}`;
+        this.streamed.add(id);
         const item = this.state.items.find((item) => item.id === id);
         this.upsert({
           id,
@@ -606,7 +790,12 @@ export class ClaudeChat implements AgentChat {
       const content = Array.isArray(body.content)
         ? body.content
         : [{ type: 'text', text: string(body.content) }];
-      if (message.type === 'user' && !message.isSynthetic) {
+      const shell =
+        message.type === 'user' && !message.isSynthetic
+          ? shellTurn(contentText(content))
+          : undefined;
+      if (shell) this.showShell(id, shell);
+      else if (message.type === 'user' && !message.isSynthetic) {
         // A message this app already rendered stands as the user wrote it: the CLI
         // injects reminders and notifications into the turn it replays back, but a
         // user who types those tags themselves must still see their own words.
@@ -640,7 +829,7 @@ export class ClaudeChat implements AgentChat {
       content.forEach((value, index) => {
         const block = record(value);
         if (message.type === 'assistant' && block.type === 'text')
-          this.upsert({ id: `${id}:${index}`, kind: 'assistant', text: string(block.text) });
+          this.showText(id, `${id}:${string(message.uuid)}:${index}`, string(block.text));
         if (block.type === 'tool_use') {
           const tool = string(block.name),
             input = record(block.input);
@@ -767,6 +956,8 @@ export class ClaudeChat implements AgentChat {
       this.clearPermissions();
       this.settleActivities();
       this.seenToolResults.clear();
+      this.streamed.clear();
+      this.shownText.clear();
       this.toolDecisions.clear();
       void this.refreshContextUsage();
     } else return;

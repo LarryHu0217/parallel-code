@@ -23,7 +23,7 @@
   line-height: 1.7;
   color: var(--fg);
 }
-.chat-markdown.plan-markdown > :is(p, ul, ol, pre, blockquote, .md-table-scroll) {
+.chat-markdown.plan-markdown > :is(p, ul, ol, pre, .chat-code, blockquote, .md-table-scroll) {
   margin-block: 14px;
 }
 .chat-markdown.plan-markdown :is(h1, h2, h3, h4, h5, h6) {
@@ -158,6 +158,26 @@
 }
 .chat-ui .chat-copy[data-copied='true']:enabled {
   color: var(--success);
+}
+/* The block scrolls sideways, so its copy button sits on a wrapper that does not. */
+.chat-code {
+  position: relative;
+}
+.chat-markdown.plan-markdown .chat-code > pre {
+  margin: 0;
+}
+.chat-ui .chat-code > .chat-copy {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  border: 1px solid var(--chat-border);
+  background: var(--bg-input);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.chat-code:is(:hover, :focus-within) > .chat-copy,
+.chat-ui .chat-code > .chat-copy[data-copied='true'] {
+  opacity: 1;
 }
 
 .chat-ui textarea {
@@ -357,9 +377,9 @@
   margin-left: auto;
 }
 
+/* Never a scroll box: a decision that hides its choices below a fold gets missed.
+   The transcript above gives up the room instead. */
 .chat-requests {
-  max-height: min(240px, 40cqh);
-  overflow: auto;
   background: var(--chat-surface);
   border: 1px solid var(--chat-border);
   border-radius: var(--radius-md);
@@ -401,6 +421,8 @@
   color: var(--fg-muted);
   font-size: 11px;
 }
+/* The one scroll inside a card, kept on purpose: raw arguments can hold a whole file
+   (a Write call), and the user unfolds them only when they want to read them. */
 .chat-request-details pre {
   font-size: 11px;
   max-height: 160px;
@@ -423,26 +445,36 @@
 .chat-request input::placeholder {
   color: var(--fg-muted);
 }
+/* Compact so the card fits without scrolling; the phone UI restores 44px targets. */
 .chat-options {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  margin: 12px 0 0;
+  gap: 6px;
+  margin: 8px 0 0;
 }
 .chat-options button {
   background: var(--chat-surface-strong);
   color: var(--fg);
   border: 1px solid var(--chat-border);
   border-radius: var(--radius-sm);
-  padding: 5px 10px;
+  padding: 3px 8px;
   cursor: pointer;
   font: inherit;
+  font-size: 12px;
+  text-align: left;
 }
 .chat-options button:enabled:hover {
   border-color: var(--chat-accent);
 }
+/* A border alone was easy to miss; the chosen answer has to read at a glance. */
 .chat-options button[aria-pressed='true'] {
   border-color: var(--chat-accent);
+  background: color-mix(in srgb, var(--chat-accent) 18%, var(--chat-surface-strong));
+}
+.chat-option-description {
+  display: block;
+  color: var(--fg-muted);
+  font-size: 11px;
 }
 .chat-options button.chat-request-default {
   background: var(--chat-accent);
@@ -450,15 +482,17 @@
   color: var(--accent-text);
 }
 /* Only true while the card holds the keyboard — hidden otherwise, because Enter
-   then belongs to whatever does have focus (usually the composer). */
+   then belongs to whatever does have focus (usually the composer). Hidden with
+   visibility, not display, so the line keeps its space and focus never shifts
+   the card. */
 .chat-request-hint {
-  display: none;
+  visibility: hidden;
   margin: 8px 0 0;
   color: var(--fg-muted);
   font-size: 11px;
 }
 .chat-request:focus-within .chat-request-hint {
-  display: block;
+  visibility: visible;
 }
 .chat-ui button:disabled {
   opacity: 0.5;
@@ -508,6 +542,13 @@
   background: transparent;
   resize: none;
   font: 13px/22px var(--font-ui);
+}
+/* `field-sizing: content` sizes an empty field to its placeholder, so a wrapped
+   hint made the box shrink on the first keystroke. One line keeps it steady. */
+.chat-composer textarea::placeholder {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .chat-composer :is(.chat-send, .chat-stop) {
   display: grid;
@@ -889,12 +930,18 @@
 }
 .chat-progress {
   display: flex;
+  align-items: center;
   gap: 10px;
   padding: 3px 4px 7px;
   color: var(--fg-subtle);
   font-size: 11px;
 }
-.chat-progress span {
+.chat-progress .inline-spinner {
+  width: 10px;
+  height: 10px;
+  margin-right: -4px;
+}
+.chat-progress [role='status'] {
   min-width: 0;
   flex: 1;
   overflow: hidden;
@@ -1043,6 +1090,43 @@
 .chat-file-picker button[aria-pressed='true'] {
   color: var(--chat-accent);
 }
+.chat-command-list {
+  max-height: 20cqh;
+  overflow: auto;
+  margin: 0 0 8px;
+  padding: 4px;
+  list-style: none;
+  background: var(--chat-surface);
+  border: 1px solid var(--chat-border);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+}
+.chat-command-list li {
+  display: flex;
+  gap: 12px;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.chat-command-list li[aria-selected='true'] {
+  background: var(--bg-hover);
+}
+/* Hover stays lighter than the keyboard highlight, so only one row reads as chosen. */
+.chat-command-list li:hover small {
+  color: var(--fg);
+}
+.chat-command-list span {
+  flex: none;
+  color: var(--fg);
+  font-family: var(--font-mono);
+}
+.chat-command-list small {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fg-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .chat-queue {
   padding: 6px 8px;
   margin-bottom: 8px;
@@ -1069,6 +1153,11 @@
   max-height: 65cqh;
   overflow-y: auto;
 }
+/* A pending decision outranks the transcript, so it takes the room it needs; the
+   dock scrolls only when the requests outgrow the whole panel. */
+.chat-composer-dock:has(.chat-requests) {
+  max-height: none;
+}
 @container (max-width: 440px) {
   .chat-transcript {
     padding: 20px 16px 8px;
@@ -1079,15 +1168,9 @@
   .chat-toolbar {
     padding-inline: 8px;
   }
-  /* Keep labels readable when the action buttons need most of the bottom row. */
+  /* Wrap instead of truncating labels, but only when the row really runs out of room. */
   .chat-composer-settings {
     flex-wrap: wrap;
-  }
-  .chat-model-settings {
-    flex-basis: 100%;
-  }
-  .chat-model-selectors select {
-    max-width: none;
   }
 }
 
@@ -1127,4 +1210,39 @@
   box-shadow: 0 2px 8px #0003;
   cursor: pointer;
   font-size: 12px;
+}
+
+/* A `!` draft runs as typed, so the box turns into a terminal: its background,
+   and monospace, since spacing and quoting matter in a command. A mode, not an
+   alert, so no accent colour. */
+.chat-composer.chat-composer-shell {
+  background: var(--task-panel-bg, var(--bg-elevated));
+}
+.chat-composer-shell textarea {
+  padding-left: 0;
+  font-family: var(--font-mono);
+}
+/* The prompt sits on the first line, a space before the command. Red, as the
+   terminal agents mark their `!` prompt; the user asked to match them. */
+.chat-shell-prompt {
+  align-self: flex-start;
+  padding-left: 8px;
+  color: var(--error);
+  font: 600 13px/22px var(--font-mono);
+}
+/* The user's own command, so it lines up with their messages, but reads as
+   output: monospace and as wide as the log. */
+.chat-shell-turn .chat-command {
+  margin: 4px 0 0;
+  padding: 10px 12px;
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border-radius: var(--radius-sm);
+  background: var(--chat-surface);
+  font: 12px/1.5 var(--font-mono);
+}
+.chat-shell-turn[data-status='failed'] .chat-speaker {
+  color: var(--error);
 }

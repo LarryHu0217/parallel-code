@@ -1,4 +1,4 @@
-import type { EvidencePackage } from '../../electron/shared/evidence';
+import type { EvidenceFlag, EvidencePackage } from '../../electron/shared/evidence';
 import type {
   EvidenceConfidence,
   EvidenceConfidenceLevel,
@@ -20,6 +20,13 @@ export interface EvidenceSummary {
   short: string;
 }
 
+/** Flags that still need the user: not informational and not yet accepted. */
+export function openEvidenceFlags(pkg: EvidencePackage): EvidenceFlag[] {
+  return pkg.scan.flags.filter(
+    (flag) => flag.category !== 'info' && !(flag.id in pkg.acceptedFlags),
+  );
+}
+
 function count(n: number, noun: string): string {
   return `${n} ${noun}${n === 1 ? '' : 's'}`;
 }
@@ -39,11 +46,18 @@ export function evidenceSummary(
     ['failed', 'timed_out', 'error'].includes(run.status),
   ).length;
   if (failed) return { headline: `${count(failed, 'check')} failed`, short: `${failed} failed` };
-  const decisions = pkg.scan.flags.filter(
-    (flag) => flag.category !== 'info' && !(flag.id in pkg.acceptedFlags),
-  ).length;
-  if (decisions)
-    return { headline: `${count(decisions, 'decision')} needed`, short: `${decisions} to decide` };
+  const open = openEvidenceFlags(pkg);
+  // A weakened test undermines the passing checks, so it outranks a routine confirmation.
+  const weakened = open.filter((flag) => flag.category === 'test-weakened').length;
+  if (weakened) {
+    const text = `${count(weakened, 'test')} weakened`;
+    return { headline: text, short: text };
+  }
+  if (open.length)
+    return {
+      headline: `${count(open.length, 'change')} to confirm`,
+      short: `${open.length} to confirm`,
+    };
   const notRun = pkg.skipped.length + pkg.checks.filter((run) => run.status === 'cancelled').length;
   if (notRun) return { headline: `${count(notRun, 'check')} not run`, short: `${notRun} not run` };
   if (confidence.level !== 'high') return { headline: 'Needs review', short: 'needs review' };

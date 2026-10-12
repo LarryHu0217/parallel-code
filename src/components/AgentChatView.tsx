@@ -16,7 +16,7 @@ import {
   clearInitialPrompt,
 } from '../store/tasks';
 import { registerAction, unregisterAction } from '../store/focus';
-import { registerFocusFn, unregisterFocusFn } from '../store/focused-panel';
+import { registerFocusFn, unregisterFocusFn, setTaskFocusedPanel } from '../store/focused-panel';
 import type { Task } from '../store/types';
 import { isLandedTaskState } from '../store/landing';
 import { openFileInEditor, revealItemInDir } from '../lib/shell';
@@ -51,7 +51,8 @@ export function AgentChatView(props: {
   channel.onmessage = (next) => {
     if (disposed || !store.agents[props.agentId]) return;
     batch(() => {
-      const firstPrompt = next.items.find((item) => item.kind === 'user');
+      // A `!` command starts a conversation as surely as a message does.
+      const firstPrompt = next.items.find((item) => item.kind === 'user' || item.kind === 'shell');
       if (
         next.threadId &&
         firstPrompt &&
@@ -64,7 +65,11 @@ export function AgentChatView(props: {
           {
             threadId: next.threadId,
             provider: provider() ?? 'codex',
-            title: firstPrompt.text.slice(0, 100) || 'Image conversation',
+            title:
+              (firstPrompt.kind === 'shell'
+                ? `!${firstPrompt.activity?.command ?? ''}`
+                : firstPrompt.text
+              ).slice(0, 100) || 'Image conversation',
             updatedAt: Date.now(),
           },
         ]);
@@ -74,7 +79,7 @@ export function AgentChatView(props: {
       if (
         next.threadId &&
         next.threadId !== props.task[sessionKey()] &&
-        (provider() === 'codex' || next.items.some((item) => item.kind === 'user'))
+        (provider() === 'codex' || firstPrompt)
       ) {
         setStore('tasks', props.task.id, sessionKey(), next.threadId);
         void saveState();
@@ -161,6 +166,9 @@ export function AgentChatView(props: {
       throw error;
     }
   }
+  async function runShell(command: string) {
+    await invoke(IPC.AgentChat, { action: 'shell', agentId: props.agentId, command });
+  }
   const relativePath = (path: string) =>
     path.startsWith(`${props.task.worktreePath}/`)
       ? path.slice(props.task.worktreePath.length + 1)
@@ -194,8 +202,15 @@ export function AgentChatView(props: {
         isMarkdownPath(relative) &&
         !relative.startsWith('/') &&
         !relative.split('/').includes('..')
-      )
-        openCanvasDocument(props.task.id, relative);
+      ) {
+        const taskId = props.task.id;
+        openCanvasDocument(taskId, relative);
+        // The enclosing agent pane selects itself as this click bubbles. Reveal
+        // the destination afterwards, so a wide task cannot hide it off-screen.
+        queueMicrotask(() => {
+          if (!disposed && store.activeTaskId === taskId) setTaskFocusedPanel(taskId, 'canvas');
+        });
+      }
       // Outside the worktree (a dropped download, say) the editor channel refuses the
       // path, and opening it with its default app would run whatever an agent cites.
       else if (relative.startsWith('/'))
@@ -236,7 +251,11 @@ export function AgentChatView(props: {
     props.onReady?.(focusUnlessBusy);
     const focusKey = `${props.task.id}:prompt`;
     const actionKey = `${props.task.id}:send-prompt`;
-    const focus = () => actions?.focus();
+    // Chat mode hides the prompt row, so reaching it lands on this pane, where a pending
+    // request answers first unless the composer holds unsent text.
+    const focus = () => {
+      if (!actions?.focusRequest()) actions?.focus();
+    };
     const send = () => actions?.send();
     registerFocusFn(focusKey, focus);
     registerAction(actionKey, send);
@@ -260,13 +279,17 @@ export function AgentChatView(props: {
         title: session.title,
         open: () => void connect(true, session.threadId),
       }));
-  /** Any click in the pane re-focuses it, which lands on the composer. Leave focus
-   *  where the user put it inside the chat (the search, a button) and leave a
-   *  text selection alone, since moving focus would drop it before it is copied. */
+  /** Any click in the pane re-focuses it, which lands on a pending request, the way a
+   *  terminal shows the agent's prompt, or else on the composer, which also wins while it
+   *  holds an unsent draft. Leave focus where the user put it inside the chat (the search,
+   *  a button) and leave a text selection alone, since focusing the composer would drop
+   *  it before it is copied. */
   function focusUnlessBusy() {
     const focused = document.activeElement;
     const selection = window.getSelection();
     if (focused && focused !== document.body && root?.contains(focused)) return;
+    // The agent is blocked on the answer, and copy-on-select copied the selection on mouseup.
+    if (actions?.focusRequest()) return;
     if (selection && !selection.isCollapsed && root?.contains(selection.anchorNode)) return;
     actions?.focus();
   }
@@ -294,6 +317,7 @@ export function AgentChatView(props: {
               permissionMode={current().permissionMode ?? props.task.chatPermissionMode}
               permissionsDisabled={props.task.skipPermissions}
               onPermissionMode={provider() === 'claude' ? selectPermissionMode : undefined}
+              onShell={provider() === 'claude' ? runShell : undefined}
               agentName={agentName()}
               state={current()}
               memoryScope={props.task}

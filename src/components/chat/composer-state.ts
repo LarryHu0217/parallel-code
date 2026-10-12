@@ -33,6 +33,8 @@ export interface ComposerInput {
   disabled: boolean;
   onDraft: (text: string) => void;
   onSend: (text: string, images: ChatImage[]) => Promise<void>;
+  /** Runs a `!` command; without it, a message starting with `!` goes to the agent. */
+  onShell?: (command: string) => Promise<void>;
   onStop: () => Promise<void>;
   /** Path to reference for a dropped file, or undefined when it has none on disk. */
   dropPathFor?: (file: File) => string | undefined;
@@ -40,6 +42,12 @@ export interface ComposerInput {
 
 const MAX_MESSAGE = 100_000;
 const TOO_LONG = 'Enter a message of at most 100,000 characters.';
+
+/** The command in a `!` draft, as the terminal reads it: the rest of the text after the bang. */
+export function shellCommand(text: string): string | undefined {
+  const trimmed = text.trim();
+  return trimmed.startsWith('!') ? trimmed.slice(1).trim() : undefined;
+}
 
 /**
  * The composer's state machine: attachments, the follow-up queue, and the
@@ -81,7 +89,9 @@ export function createComposer(
       if (from.shown) setPending(from.shown);
     });
     try {
-      await props.onSend(text, attached);
+      const command = props.onShell && shellCommand(text);
+      if (command) await props.onShell?.(command);
+      else await props.onSend(text, attached);
       if (!disposed)
         batch(() => {
           if (queuedId) dequeue(queuedId);
@@ -135,17 +145,28 @@ export function createComposer(
 
   const userCount = () => props.state.items.filter((item) => item.kind === 'user').length;
 
+  /** What a draft sends: a shell command leaves the attachments for the next message. */
+  function outgoing(text: string) {
+    const shell = props.onShell && shellCommand(text) !== undefined;
+    const attached = shell ? [] : images();
+    const referenced = shell ? [] : files();
+    const message = shell ? text.trim() : composedText(text, referenced);
+    return { shell, attached, referenced, message };
+  }
+
   async function send(text = props.draft) {
-    const attached = images();
-    const referenced = files();
     if (readingImages() || sending() || stopping() || props.disabled) return;
-    if (!text.trim() && !attached.length && !referenced.length) return;
-    const message = composedText(text, referenced);
+    const { shell, attached, referenced, message } = outgoing(text);
+    if (shell ? !shellCommand(text) : !text.trim() && !attached.length && !referenced.length)
+      return;
     if (message.length > MAX_MESSAGE) {
       setError(TOO_LONG);
       return;
     }
     if (props.state.status === 'working') {
+      // A pause holds the messages queued before it; a Stop or failed send from an
+      // earlier turn must not hold back a queue the user starts afresh.
+      if (!queue().length) setQueuePaused(false);
       setQueue((entries) => [
         ...entries,
         { id: crypto.randomUUID(), text: message, images: attached },
@@ -157,7 +178,8 @@ export function createComposer(
     // The agent confirms a message only once it starts answering, which can take
     // seconds; the composer empties now and the message shows as sending meanwhile.
     clearSent(text, attached, referenced);
-    const shown = { text: message, images: attached, after: userCount() };
+    // A command shows up in the log as soon as it starts; nothing to stand in for it.
+    const shown = shell ? undefined : { text: message, images: attached, after: userCount() };
     if (await transmit(message, attached, { shown })) return;
     batch(() => {
       setPending(undefined);
@@ -212,9 +234,7 @@ export function createComposer(
   async function stop(interruptAndSend = false) {
     if (stopping()) return;
     const draft = props.draft;
-    const attached = images();
-    const referenced = files();
-    const message = composedText(draft, referenced);
+    const { attached, referenced, message } = outgoing(draft);
     if (interruptAndSend && message.length > MAX_MESSAGE) {
       setError(TOO_LONG);
       return;
@@ -291,6 +311,10 @@ export function createComposer(
   }
 
   return {
+    /** Shell commands can run here at all. */
+    canRunShell: () => !!props.onShell,
+    /** The draft is a `!` command, so sending runs it instead of messaging the agent. */
+    shellMode: () => !!props.onShell && shellCommand(props.draft) !== undefined,
     images,
     files,
     setFiles,

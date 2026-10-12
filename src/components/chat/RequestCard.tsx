@@ -1,6 +1,10 @@
 import { For, Show, createEffect, createSignal, on } from 'solid-js';
 import { getDeepActiveElement } from '../../lib/dom-focus';
-import type { ChatDecision, ChatRequest } from '../../../electron/shared/agent-chat-types';
+import type {
+  ChatDecision,
+  ChatQuestion,
+  ChatRequest,
+} from '../../../electron/shared/agent-chat-types';
 import { CheckIcon, CloseIcon, SendIcon } from '../icons';
 
 export type RespondToRequest = (
@@ -22,6 +26,27 @@ const holdsUnsentText = (node: Element | null): boolean => {
 
 const modalOpen = () => !!document.querySelector('[aria-modal="true"]');
 
+// Modified keys belong to the app, e.g. Alt+Arrow switches panes.
+const modified = (event: KeyboardEvent) =>
+  event.altKey || event.ctrlKey || event.metaKey || event.shiftKey;
+
+const NEXT_KEYS = new Set(['ArrowDown', 'ArrowRight']);
+const PREVIOUS_KEYS = new Set(['ArrowUp', 'ArrowLeft']);
+
+/**
+ * Gives the keyboard to a request card's default choice so Enter alone answers it.
+ * Questions have nothing safe to preselect, so they start on their first control.
+ * Returns whether the card now holds focus.
+ */
+export function focusRequestCard(card: Element | null | undefined): boolean {
+  if (!card) return false;
+  (
+    card.querySelector<HTMLElement>('.chat-request-default') ??
+    card.querySelector<HTMLElement>('button, input')
+  )?.focus();
+  return card.contains(getDeepActiveElement());
+}
+
 /**
  * One pending approval or question from the agent, answerable from the keyboard:
  * the card opens on its default choice so Enter alone resolves it.
@@ -34,18 +59,17 @@ export function RequestCard(props: {
   autoFocus: boolean;
   onResolved: () => void;
 }) {
-  const [answers, setAnswers] = createSignal<Record<string, string>>({});
-  const [selectedOptions, setSelectedOptions] = createSignal<Record<string, string[]>>({});
+  // Options and typed text are kept apart, so a click never writes into the text field.
+  const [selected, setSelected] = createSignal<Record<string, string[]>>({});
+  const [typed, setTyped] = createSignal<Record<string, string>>({});
   const [pending, setPending] = createSignal(false);
   const [error, setError] = createSignal('');
   let card: HTMLElement | undefined;
-  let preselected: HTMLButtonElement | undefined;
   const allowIsDefault = () => props.request.kind === 'approval' && !props.request.defaultToNo;
   // Only an approval can be remembered; an answer to a question is not a permission.
   const canRemember = () =>
     props.request.kind === 'approval' && props.request.canAlwaysAllow === true;
   // Open the card on the choice the user most likely wants so Enter alone answers it.
-  // Questions have nothing safe to preselect, so they start on their first control.
   createEffect(
     on(
       () => props.autoFocus,
@@ -58,7 +82,7 @@ export function RequestCard(props: {
         // Never pull the caret out of a half-written message — Enter there means "send
         // my message" — and never re-grab focus this card already holds.
         if (card?.contains(active) || holdsUnsentText(active)) return;
-        (preselected ?? card?.querySelector<HTMLElement>('button, input'))?.focus();
+        focusRequestCard(card);
       },
     ),
   );
@@ -85,17 +109,57 @@ export function RequestCard(props: {
       setPending(false);
     }
   }
-  const pick = (id: string, label: string, multiSelect?: boolean) => {
-    if (!multiSelect) {
-      setAnswers({ ...answers(), [id]: label });
-      return;
-    }
-    const previous = selectedOptions()[id] ?? [];
-    const next = previous.includes(label)
-      ? previous.filter((entry) => entry !== label)
-      : [...previous, label];
-    setSelectedOptions({ ...selectedOptions(), [id]: next });
-    setAnswers({ ...answers(), [id]: next.join(', ') });
+  /** A single choice is an option or typed text, never both; a multi-select adds any
+   *  typed text to the options it ticks. Typed text goes out as entered: a secret's
+   *  spaces may be part of it. */
+  const answerTo = (q: ChatQuestion) =>
+    [...(selected()[q.id] ?? []), typed()[q.id] ?? ''].filter((part) => part.trim()).join(', ');
+  const answers = () =>
+    Object.fromEntries((props.request.questions ?? []).map((q) => [q.id, answerTo(q)]));
+  const isPicked = (q: ChatQuestion, label: string) => (selected()[q.id] ?? []).includes(label);
+  const pick = (q: ChatQuestion, label: string) => {
+    const previous = selected()[q.id] ?? [];
+    const next = !q.multiSelect
+      ? [label]
+      : previous.includes(label)
+        ? previous.filter((entry) => entry !== label)
+        : [...previous, label];
+    setSelected({ ...selected(), [q.id]: next });
+    if (!q.multiSelect) setTyped({ ...typed(), [q.id]: '' });
+  };
+  const type = (q: ChatQuestion, text: string) => {
+    setTyped({ ...typed(), [q.id]: text });
+    if (!q.multiSelect) setSelected({ ...selected(), [q.id]: [] });
+  };
+  const hint = () => {
+    const choices = props.request.questions?.filter((q) => q.options.length) ?? [];
+    if (choices.some((q) => !q.multiSelect)) return 'Arrow keys move, Enter chooses';
+    if (choices.length) return 'Arrow keys move, Enter toggles';
+    if (props.request.kind === 'question') return '';
+    return allowIsDefault() ? 'Enter allows once' : 'Enter declines';
+  };
+  /** Arrow keys walk the card's choices like a menu; text inputs keep them for the caret. */
+  const moveFocus = (event: KeyboardEvent) => {
+    const step = NEXT_KEYS.has(event.key) ? 1 : PREVIOUS_KEYS.has(event.key) ? -1 : 0;
+    if (!step || modified(event) || !(event.target instanceof HTMLButtonElement) || !card) return;
+    const choices = [
+      ...card.querySelectorAll<HTMLButtonElement>('.chat-options button:not(:disabled)'),
+    ];
+    const at = choices.indexOf(event.target);
+    if (at < 0) return;
+    event.preventDefault();
+    choices[(at + step + choices.length) % choices.length]?.focus();
+  };
+  /** Enter on a single choice answers its question, then moves on to the next open
+   *  question, or sends the answers once none is left — one keystroke per question. */
+  const choose = (q: ChatQuestion, label: string) => {
+    pick(q, label);
+    const open = (props.request.questions ?? []).findIndex((other) => !answerTo(other));
+    if (open < 0) return void submit('accept');
+    card
+      ?.querySelectorAll('.chat-request-question')
+      [open]?.querySelector<HTMLElement>('button, input')
+      ?.focus();
   };
   return (
     <section
@@ -103,6 +167,7 @@ export function RequestCard(props: {
       data-default={props.request.defaultToNo ? 'decline' : 'allow'}
       aria-label={`${props.agentName} request`}
       ref={card}
+      onKeyDown={moveFocus}
     >
       <strong>
         {props.request.kind === 'question'
@@ -128,40 +193,46 @@ export function RequestCard(props: {
               <For each={q.options}>
                 {(option) => (
                   <button
-                    title={option.description}
                     disabled={pending()}
-                    aria-pressed={
-                      q.multiSelect
-                        ? (selectedOptions()[q.id]?.includes(option.label) ?? false)
-                        : answers()[q.id] === option.label
-                    }
-                    onClick={() => pick(q.id, option.label, q.multiSelect)}
+                    aria-pressed={isPicked(q, option.label)}
+                    // A click only marks the choice, so a stray click or tap never sends.
+                    onClick={() => pick(q, option.label)}
+                    // A multi-select keeps native Enter: it toggles and waits for more.
+                    onKeyDown={(event) => {
+                      if (q.multiSelect || event.key !== 'Enter' || modified(event)) return;
+                      event.preventDefault();
+                      // A held Enter would otherwise answer every question with its first option.
+                      if (!event.repeat) choose(q, option.label);
+                    }}
                   >
                     {option.label}
+                    <Show when={option.description}>
+                      <span class="chat-option-description">{option.description}</span>
+                    </Show>
                   </button>
                 )}
               </For>
             </div>
             <input
               aria-label={q.question}
-              placeholder={q.options.length ? 'Or type your own answer' : 'Your answer'}
+              placeholder={
+                !q.options.length
+                  ? 'Your answer'
+                  : q.multiSelect
+                    ? 'Add your own answer'
+                    : 'Or type your own answer'
+              }
               type={q.isSecret ? 'password' : 'text'}
-              value={answers()[q.id] ?? ''}
-              onInput={(event) => {
-                setAnswers({ ...answers(), [q.id]: event.currentTarget.value });
-                setSelectedOptions({ ...selectedOptions(), [q.id]: [] });
-              }}
+              value={typed()[q.id] ?? ''}
+              onInput={(event) => type(q, event.currentTarget.value)}
             />
           </div>
         )}
       </For>
       <div class="chat-options">
         <button
-          ref={(element) => {
-            if (allowIsDefault()) preselected = element;
-          }}
           class={allowIsDefault() ? 'chat-request-default btn-with-icon' : 'btn-with-icon'}
-          disabled={pending() || props.request.questions?.some((q) => !answers()[q.id]?.trim())}
+          disabled={pending() || props.request.questions?.some((q) => !answerTo(q))}
           onClick={() => void submit('accept')}
         >
           <Show when={props.request.kind === 'question'} fallback={<CheckIcon size={14} />}>
@@ -182,9 +253,6 @@ export function RequestCard(props: {
         </Show>
         <Show when={props.request.kind === 'approval'}>
           <button
-            ref={(element) => {
-              if (props.request.defaultToNo) preselected = element;
-            }}
             class={
               props.request.defaultToNo ? 'chat-request-default btn-with-icon' : 'btn-with-icon'
             }
@@ -200,8 +268,8 @@ export function RequestCard(props: {
         {/* Said out loud, not hidden in a tooltip: remembering can outlive the session. */}
         <p class="chat-request-note">Always allow will {props.request.alwaysAllowNote}.</p>
       </Show>
-      <Show when={props.request.kind === 'approval'}>
-        <p class="chat-request-hint">{allowIsDefault() ? 'Enter allows once' : 'Enter declines'}</p>
+      <Show when={hint()}>
+        <p class="chat-request-hint">{hint()}</p>
       </Show>
       <Show when={error()}>
         <p role="alert">{error()}</p>

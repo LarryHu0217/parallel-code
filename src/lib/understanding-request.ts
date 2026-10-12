@@ -11,6 +11,7 @@ import { UNDERSTANDING_TIMEOUT_MS } from '../../electron/shared/understanding-li
 import { store } from '../store/store';
 import { Channel, invoke } from './ipc';
 import { errMessage, info as logInfo, warn as logWarn } from './log';
+import { PROVIDER_ERROR_CHARS, providerFailureMessage } from './provider-error';
 
 interface TourMessage {
   type: 'chunk' | 'error' | 'done';
@@ -20,7 +21,6 @@ interface TourMessage {
 
 /** A tour is a handful of small cards; anything larger is a runaway response. */
 const MAX_RESPONSE_CHARS = 60_000;
-const MAX_ERROR_CHARS = 4_000;
 /** Let the backend's own timeout report first, and cover lost IPC events. */
 const CLIENT_DEADLINE_MS = UNDERSTANDING_TIMEOUT_MS + 5000;
 
@@ -121,14 +121,18 @@ export function startUnderstandingRequest(options: {
       return;
     }
     if (message.type === 'error') {
-      providerError = (providerError + (message.text ?? '')).slice(0, MAX_ERROR_CHARS);
+      providerError = (providerError + (message.text ?? '')).slice(0, PROVIDER_ERROR_CHARS);
       options.onProviderError(providerError);
       return;
     }
     if (message.exitCode !== 0)
       finish('failed', {
         status: 'failed',
-        message: providerError || 'The tour provider failed. Try again.',
+        message: providerFailureMessage(
+          providerError,
+          response,
+          'The tour provider failed. Try again.',
+        ),
       });
     else finish('completed', { status: 'done', text: response });
   };

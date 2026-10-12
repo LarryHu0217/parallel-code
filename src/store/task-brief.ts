@@ -314,6 +314,22 @@ function mainAgentId(task: Task): string | undefined {
     : task.agentIds[0];
 }
 
+/**
+ * Names the agent that ratings and decision corrections go to. The card spans
+ * every agent pane, so with several it would otherwise be unclear which one is
+ * asked; with one agent there is nothing to tell apart.
+ */
+export function briefTargetAgentName(task: Task): string | undefined {
+  const agentId = task.agentIds.length > 1 ? mainAgentId(task) : undefined;
+  if (!agentId) return undefined;
+  // Same fallback as the agent tabs, so the label matches what they show.
+  const nameOf = (id: string) =>
+    store.agents[id]?.def.name ?? `Agent ${task.agentIds.indexOf(id) + 1}`;
+  const name = nameOf(agentId);
+  const shared = task.agentIds.filter((id) => nameOf(id) === name).length > 1;
+  return shared ? `${name} · ${task.agentIds.indexOf(agentId) + 1}` : name;
+}
+
 /** Sends the user's correction of a decision to the task's agent, then marks it. */
 export async function changeBriefDecision(
   taskId: string,

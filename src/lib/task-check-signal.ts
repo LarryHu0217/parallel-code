@@ -2,7 +2,7 @@ import type { SubtaskVerification } from '../../electron/shared/completion-repor
 import type { EvidenceConfidence } from '../../electron/shared/evidence-confidence';
 import type { VerificationRun } from '../ipc/types';
 import type { EvidencePackage } from '../../electron/shared/evidence';
-import { EVIDENCE_LEVEL, evidenceSummary } from './evidence-display';
+import { EVIDENCE_LEVEL, evidenceSummary, openEvidenceFlags } from './evidence-display';
 import { theme } from './theme';
 import {
   summarizeVerificationRun,
@@ -25,6 +25,9 @@ export interface CheckSignalInput {
   verifyCommandConfigured: boolean;
   headSha?: string | null;
 }
+
+// A native tooltip; the Finish dialog lists every flag.
+const MAX_TITLE_FLAGS = 5;
 
 // Kinds without an entry stay silent: a configured-but-never-run command on
 // every task would be noise, and cancelled runs carry no signal.
@@ -60,7 +63,13 @@ function reportedSignal(verification?: SubtaskVerification): CheckSignal | undef
 export function taskCheckSignal(input: CheckSignalInput): CheckSignal | undefined {
   if (input.evidence) {
     const { level, reasons } = input.evidence;
-    const title = [EVIDENCE_LEVEL[level].label, ...reasons.map((reason) => reason.text)];
+    const flags = input.evidencePackage ? openEvidenceFlags(input.evidencePackage) : [];
+    const title = [
+      EVIDENCE_LEVEL[level].label,
+      ...reasons.map((reason) => reason.text),
+      ...flags.slice(0, MAX_TITLE_FLAGS).map((flag) => `${flag.file}: ${flag.detail}`),
+    ];
+    if (flags.length > MAX_TITLE_FLAGS) title.push(`…and ${flags.length - MAX_TITLE_FLAGS} more`);
     return {
       // The short form: the title bar has room for a word or two, not a sentence.
       label: evidenceSummary(input.evidence, input.evidencePackage).short,

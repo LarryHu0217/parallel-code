@@ -231,6 +231,20 @@ body.font-smoothing {
   display: none;
 }
 
+/* Reads as the status text it extends; the underline on hover shows it opens Finish. */
+.task-check-signal {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  white-space: pre;
+  cursor: pointer;
+}
+
+.task-check-signal:hover {
+  text-decoration: underline;
+}
+
 .task-title-bar .task-title-actions .icon-btn {
   padding: 4px !important;
   border-radius: var(--radius-xs);
@@ -2248,6 +2262,37 @@ textarea::placeholder {
   --task-row-indent: 36px;
 }
 
+/* The brief card is routine, so it is filled only when hovered or open. */
+.task-brief-bar {
+  background: transparent;
+}
+.task-brief-bar:hover,
+.task-brief-bar[aria-expanded='true'] {
+  background: var(--bg-elevated);
+}
+
+/* File chips repeat what the changed-files list shows and crowd the text, so
+   they float over the row's right edge on hover or keyboard focus. Taken out of
+   flow so revealing them never reflows the card; transparent rather than
+   display:none so they stay focusable. */
+.brief-item {
+  position: relative;
+}
+.brief-item .brief-item-file {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 1;
+  background: var(--bg-elevated) !important; /* beats the chip's inline transparent */
+  opacity: 0;
+  pointer-events: none;
+}
+.brief-item:is(:hover, :focus-within) .brief-item-file {
+  opacity: 1;
+  pointer-events: auto;
+}
+
 /* Task names wrap to two lines rather than being cut mid-word — at sidebar
    widths, similar names are otherwise indistinguishable. */
 .task-item-name {
@@ -2581,12 +2626,19 @@ html:is(
 }
 
 /* Routine actions share a quiet boundary across presets and inline-styled dialogs. */
-.btn-primary,
 .sidebar-create-btn,
 .prompt-send-btn:not(:disabled) {
   background: transparent !important;
   border: 1px solid var(--border-subtle) !important;
   color: var(--fg-muted) !important;
+}
+
+/* Same neutral surface as the secondary buttons beside it; full-strength text
+   is what ranks the primary action above them without an accent fill. */
+.btn-primary {
+  background: var(--bg-input) !important;
+  border: 1px solid var(--border) !important;
+  color: var(--fg) !important;
 }
 
 .btn-primary:hover:not(:disabled),

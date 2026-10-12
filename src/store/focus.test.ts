@@ -390,6 +390,23 @@ describe('setPendingAction', () => {
 });
 
 describe('scrollTaskElementIntoView', () => {
+  it('reveals the focused canvas instead of aligning the whole task to its left edge', () => {
+    setTask('task-1');
+    const canvas = { scrollIntoView: vi.fn() };
+    const task = { querySelector: vi.fn(() => canvas), scrollIntoView: vi.fn() };
+    vi.stubGlobal('document', { querySelector: () => task });
+
+    setTaskFocusedPanel('task-1', 'canvas');
+
+    expect(task.querySelector).toHaveBeenCalledWith('.task-canvas-panel');
+    expect(canvas.scrollIntoView).toHaveBeenCalledWith({
+      block: 'nearest',
+      inline: 'nearest',
+      behavior: 'smooth',
+    });
+    expect(task.scrollIntoView).not.toHaveBeenCalled();
+  });
+
   function createScroller(
     overrides: Partial<HTMLElement> & { taskEls?: HTMLElement[] } = {},
   ): HTMLElement {

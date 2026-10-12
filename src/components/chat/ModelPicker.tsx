@@ -113,7 +113,8 @@ export function ModelPicker(props: {
               );
             }}
           >
-            <Show when={!selected()?.defaultReasoningEffort}>
+            {/* Only when the agent has not said which effort it will use. */}
+            <Show when={!effort()}>
               <option value="">Default</option>
             </Show>
             <Show when={unlistedEffort()}>

@@ -40,6 +40,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.key
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -556,7 +557,8 @@ private fun PhoneApp(model: PhoneViewModel) {
                 @Composable
                 fun Task(agentId: String, active: Boolean, pageLabel: String?) {
                     val agent = agents.firstOrNull { it.agentId == agentId }
-                    if (agent?.isChat == true) {
+                    // Keyed so another task never sees this one's chat for a frame; that would clobber its saved scroll.
+                    if (agent?.isChat == true) key(agentId) {
                         ChatScreen(
                             agent = agent,
                             agentId = agentId,

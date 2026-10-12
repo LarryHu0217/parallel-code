@@ -60,13 +60,17 @@ it('sends the conversation at once, then at most one frame per interval', () => 
   });
 });
 
-it('leaves image data out of phone frames without touching the desktop state', () => {
+it('leaves image data and the command list out of phone frames without touching the desktop state', () => {
   const image = { name: 'shot.png', mediaType: 'image/png' as const, data: 'AAAA' };
+  const commands = [{ name: 'compact', description: 'Summarize', argumentHint: '' }];
   chat.state.items.push({ id: '1', kind: 'user', text: 'Look', images: [image] });
+  chat.state.commands = commands;
   createChatSubscriptions(source, (message) => sent.push(message)).subscribe('a1');
   expect(sent[0]).toMatchObject({ state: { items: [{ id: '1', text: 'Look' }] } });
   expect(JSON.stringify(sent[0])).not.toContain('AAAA');
+  expect(JSON.stringify(sent[0])).not.toContain('compact');
   expect(chat.state.items[0].images).toEqual([image]);
+  expect(chat.state.commands).toBe(commands);
 });
 
 it('stops observing and drops a pending frame on unsubscribe and dispose', () => {

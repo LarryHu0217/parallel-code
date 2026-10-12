@@ -393,6 +393,8 @@ export function AgentDetail(props: AgentDetailProps) {
         if (inputText() === text) setInputText('');
         setBashMode(false);
         setSent(true);
+        // Whoever sends a message wants to see it land, even from scrolled-back history.
+        jumpToLatest();
       }
     } catch (err) {
       if (!disposed)
